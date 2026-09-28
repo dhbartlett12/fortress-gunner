@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#1a2433" />
+  <link rel="icon" href="favicon.ico" />
+  <title>Fortress Gunner — B-17 Top Turret</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="world"></canvas>
+  <canvas id="game"></canvas>
+  <div id="hud" class="ui">
+    <div id="topbar">
+      <div id="scorebox">SCORE <span id="score">0</span></div>
+      <div id="wavebox"><span id="tgtlabel">TGT</span> <span id="wave">2:00</span></div>
+      <div id="boxbox">B-17s <span id="boxcount">19/19</span></div>
+      <div id="killbox">109s <span id="bandits">44/44</span><span id="youk"> · YOU <span id="kills">0</span></span></div>
+    </div>
+    <div id="missionbar">
+      <span>ENG <span id="engstatus">4/4</span></span>
+      <span id="baystatus"></span>
+      <span id="missionclock" class="hidden">2:00</span>
+    </div>
+    <div id="healthwrap">
+      <div id="healthlabel">FORTRESS</div>
+      <div id="healthbar"><div id="healthfill"></div></div>
+    </div>
+    <div id="heatwrap">
+      <div id="heatlabel">GUNS</div>
+      <div id="heatbar"><div id="heatfill"></div></div>
+    </div>
+    <div id="callout"></div>
+  </div>
+  <button id="endMissionBtn" type="button" class="hidden">END MISSION</button>
+  <div id="lockHint" class="hidden">CLICK TO PLAY<small>mouse aims · hold left button to fire · Esc releases · [ ] sensitivity</small></div>
+  <div id="title" class="overlay">
+    <div class="panel">
+      <div class="eyebrow">8TH AIR FORCE · 1943</div>
+      <h1>FORTRESS<br>GUNNER</h1>
+      <p class="sub">B-17G Flying Fortress · Sperry Upper Turret</p>
+      <p class="blurb">Top turret, combat box of 19. Defend the formation to the target — bombs away wins the mission.</p>
+      <ul class="controls">
+        <li><b>FIRE</b> &nbsp; hold <em>anywhere</em> on the left half (Space)</li>
+        <li><b>AIM</b> &nbsp; drag <em>anywhere</em> on the right half to aim</li>
+        <li><b>WIN</b> &nbsp; ≥15 B-17s must drop on the rail depot</li>
+      </ul>
+      <p class="blurb debugnote">Beta: your Fortress floors at 1% HP (cannot die) but can list if an engine goes out. No interrupter — your own guns can hit your tail, wings and props. Yellow tracers = B-17 · Red = Bf 109.</p>
+      <button id="startBtn" type="button">MAN THE GUNS</button>
+    </div>
+  </div>
+  <div id="gameover" class="overlay hidden">
+    <div class="panel">
+      <div class="eyebrow" id="goEyebrow">MISSION PAUSE</div>
+      <h1 id="goTitle">RTB</h1>
+      <p class="blurb" id="goStats"></p>
+      <button id="restartBtn" type="button">FLY IT AGAIN</button>
+    </div>
+  </div>
+  <!-- Classic scripts only — no type=module / importmap (Android WebView file://) -->
+  <script src="world3d.bundle.js"></script>
+  <script>
+    (function () {
+      function showBadge(text, ok) {
+        var el = document.createElement("div");
+        el.id = "fg3d-badge";
+        el.textContent = text;
+        el.setAttribute("aria-live", "polite");
+        el.style.cssText = [
+          "position:fixed",
+          "top:10px",
+          "left:10px",
+          "z-index:99999",
+          "padding:8px 12px",
+          "font:bold 15px/1.25 monospace",
+          "letter-spacing:0.5px",
+          "border-radius:6px",
+          "pointer-events:none",
+          "box-shadow:0 2px 8px rgba(0,0,0,0.45)",
+          "background:" + (ok ? "#0a7a3a" : "#a01818"),
+          "color:#fff",
+          "border:1px solid " + (ok ? "#2ecc71" : "#ff6666")
+        ].join(";");
+        document.body.appendChild(el);
+        setTimeout(function () {
+          if (el.parentNode) el.parentNode.removeChild(el);
+        }, 5000);
+      }
+
+      try {
+        if (typeof createWorld3D !== "function") {
+          throw new Error("bundle missing createWorld3D");
+        }
+        var canvas = document.getElementById("world");
+        if (!canvas) throw new Error("no #world canvas");
+        var api = createWorld3D(canvas);
+        if (!api) throw new Error("createWorld3D returned null");
+        if (!api.ready) {
+          throw new Error(api.failReason || "WebGL init failed");
+        }
+        window.__FG_WORLD = api;
+        window.dispatchEvent(new Event("fg-world-ready"));
+        showBadge("3D:OK", true);
+        console.log("[FG] 3D:OK");
+      } catch (e) {
+        var reason = (e && e.message) ? e.message : String(e);
+        showBadge("3D:FAIL " + reason, false);
+        console.error("[FG] 3D:FAIL", e);
+      }
+    })();
+  </script>
+  <script src="audio.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

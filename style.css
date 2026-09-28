@@ -1,0 +1,267 @@
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: #0b121c; color: #e8dcc0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  touch-action: none; user-select: none;
+}
+canvas#world, canvas#game {
+  position: fixed; inset: 0;
+  display: block; width: 100%; height: 100%;
+}
+canvas#world { z-index: 0; background: #0a1520; }
+canvas#game { z-index: 1; background: transparent; pointer-events: auto; }
+
+.ui {
+  position: fixed; inset: 0; pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  z-index: 2;
+}
+#topbar {
+  position: absolute; top: 10px; left: 12px; right: 12px;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  text-shadow: 0 1px 0 #000, 0 2px 5px #000;
+  font-size: 12px; letter-spacing: 0.05em;
+  color: #fff8e0;
+}
+#scorebox, #wavebox, #killbox {
+  background: rgba(6,8,12,0.72);
+  border: 1px solid rgba(255,230,160,0.35);
+  padding: 3px 8px;
+  border-radius: 2px;
+  color: #fff8e0;
+  text-shadow: 0 1px 2px #000;
+}
+#scorebox { font-size: 14px; letter-spacing: 0.05em; opacity: 1; font-weight: 700; }
+#wavebox, #killbox { font-size: 11px; opacity: 1; font-weight: 600; }
+#score, #wave, #kills { color: #ffe9a0; font-weight: 800; }
+#healthwrap, #heatwrap {
+  position: absolute; left: 12px; width: 180px;
+}
+#healthwrap { bottom: 56px; }
+#heatwrap { bottom: 84px; }
+#healthwrap, #heatwrap {
+  background: rgba(6,8,12,0.7);
+  border: 1px solid rgba(255,230,160,0.3);
+  padding: 4px 8px 6px;
+  border-radius: 2px;
+}
+#healthlabel, #heatlabel {
+  font-size: 10px; letter-spacing: 0.2em; color: #fff0c8; margin-bottom: 3px;
+  text-shadow: 0 1px 2px #000; font-weight: 700;
+}
+#healthbar, #heatbar {
+  height: 8px; background: rgba(0,0,0,0.65);
+  border: 1px solid rgba(255,220,140,0.65); overflow: hidden;
+}
+#healthfill { height: 100%; width: 100%; background: linear-gradient(90deg,#7bc45a,#e0f07a); }
+#heatfill { height: 100%; width: 0%; background: linear-gradient(90deg,#f0b820,#e04530); }
+#heatbar { background: rgba(40,28,12,0.85); }
+#healthbar { background: rgba(12,28,12,0.85); }
+#callout {
+  position: absolute; top: 34px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; letter-spacing: 0.08em; word-spacing: 0.14em; color: #ffe08a; font-weight: 700;
+  text-shadow: 0 1px 0 #000, 0 2px 6px #000; min-height: 1.1em; text-align: center;
+  opacity: 1;
+  background: rgba(8,10,14,0.62);
+  padding: 4px 14px;
+  border: 1px solid rgba(232,200,106,0.4);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.overlay {
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at 50% 40%, rgba(12,18,28,0.28), rgba(6,10,16,0.62));
+  display: flex; align-items: center; justify-content: center;
+  z-index: 5;
+}
+.overlay.hidden { display: none; }
+.panel {
+  text-align: center; max-width: 540px; padding: 18px 22px;
+  pointer-events: auto;
+  background: rgba(10,14,20,0.55);
+  border: 1px solid rgba(233,210,150,0.25);
+}
+.eyebrow {
+  letter-spacing: 0.22em; font-size: 11px; word-spacing: 0.2em; color: #c9a44a; margin-bottom: 10px;
+}
+h1 {
+  font-size: clamp(36px, 8vw, 64px); line-height: 0.92;
+  letter-spacing: 0.08em; color: #f3e6c0;
+  text-shadow: 0 4px 0 #3a2a10, 0 8px 24px rgba(0,0,0,0.6);
+  margin-bottom: 10px;
+}
+.sub { color: #d8c48a; letter-spacing: 0.08em; font-size: 13px; margin-bottom: 10px; }
+.blurb { color: #e2d6b4; font-size: 15px; line-height: 1.5; margin-bottom: 12px; }
+.controls {
+  list-style: none; text-align: left; display: inline-block;
+  color: #e6d9b4; font-size: 14px; line-height: 1.7; margin-bottom: 20px;
+}
+.controls b { color: #ffd56a; letter-spacing: 0.08em; }
+button {
+  pointer-events: auto; cursor: pointer;
+  background: #c9a227; color: #1a1408; border: 0;
+  padding: 12px 28px; font-weight: 800; letter-spacing: 0.18em;
+  font-size: 15px; border-bottom: 4px solid #7a6110;
+}
+button:active { transform: translateY(2px); border-bottom-width: 2px; }
+@media (max-height: 420px) {
+  h1 { font-size: 34px; }
+  .blurb, .controls { font-size: 12px; margin-bottom: 10px; }
+  .panel { padding: 12px 16px; }
+}
+
+.debugnote { color: #a89868; font-size: 12px; letter-spacing: 0.04em; margin-top: -4px; margin-bottom: 14px; }
+#healthfill.critical { box-shadow: 0 0 8px #c0392b; }
+
+@media (max-height: 420px) {
+  #healthwrap { bottom: 48px; width: 150px; }
+  #heatwrap { bottom: 74px; width: 150px; }
+}
+
+#topbar { opacity: 1; }
+#callout { color: #ffe08a; font-weight: 700; letter-spacing: 0.04em; word-spacing: 0.16em; }
+
+
+/* battlefield grit bars */
+#healthbar, #heatbar {
+  height: 8px;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid rgba(255,220,140,0.7);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+}
+#healthlabel, #heatlabel {
+  font-size: 10px; letter-spacing: 0.16em; color: #fff0c8; opacity: 1; font-weight: 700;
+}
+
+
+/* Cycle 137: punchier urgent intercom */
+#callout.urgent {
+  font-size: 16px;
+  letter-spacing: 0.11em;
+  color: #fff8c0;
+  background: rgba(48, 10, 6, 0.88);
+  border: 1px solid rgba(255, 190, 70, 0.88);
+  padding: 7px 20px;
+  text-shadow: 0 0 10px rgba(255,170,50,0.75), 0 2px 4px #000;
+  animation: calloutPulse 0.38s ease-in-out 3;
+}
+@keyframes calloutPulse {
+  0%, 100% { transform: translateX(-50%) scale(1); opacity: 1; }
+  50% { transform: translateX(-50%) scale(1.08); opacity: 0.92; }
+}
+@media (max-height: 420px) {
+  #callout.urgent { font-size: 13px; padding: 5px 14px; }
+}
+
+
+/* Mission HUD 1.3.0 */
+#boxbox {
+  background: rgba(6,8,12,0.72);
+  border: 1px solid rgba(255,230,160,0.35);
+  padding: 3px 8px;
+  border-radius: 2px;
+  color: #fff8e0;
+  text-shadow: 0 1px 2px #000;
+  font-size: 11px;
+  font-weight: 600;
+}
+#boxcount { color: #ffe9a0; font-weight: 800; }
+#missionbar {
+  position: absolute; top: 36px; left: 12px;
+  display: flex; gap: 12px;
+  font-size: 10px; letter-spacing: 0.12em;
+  color: #e8dcc0;
+  text-shadow: 0 1px 2px #000;
+  background: rgba(6,8,12,0.55);
+  border: 1px solid rgba(255,230,160,0.25);
+  padding: 2px 8px;
+  border-radius: 2px;
+}
+#missionbar .hidden, #missionclock.hidden { display: none; }
+#engstatus { color: #b8e090; font-weight: 800; }
+
+
+/* ===== 1.3.1 compact edge HUD (no overlap, off the playfield) ===== */
+#topbar { top: 6px; left: 10px; right: 10px; font-size: 11px; }
+#scorebox, #wavebox, #killbox, #boxbox { padding: 2px 7px; font-size: 11px; background: rgba(6,8,12,0.55); }
+#scorebox { font-size: 12px; }
+#missionbar { top: 32px; left: 10px; font-size: 9px; padding: 1px 7px; gap: 10px; background: rgba(6,8,12,0.5); }
+#baystatus { color: #ffd060; font-weight: 800; }
+#baystatus:empty { display: none; }
+#healthwrap, #heatwrap {
+  top: auto; left: 10px; width: 118px; padding: 2px 6px 4px;
+  background: rgba(6,8,12,0.5);
+}
+#healthwrap { top: 54px; bottom: auto; }
+#heatwrap { top: 82px; bottom: auto; }
+#healthlabel, #heatlabel { font-size: 8px; letter-spacing: 0.14em; margin-bottom: 2px; line-height: 1; }
+#healthbar, #heatbar { height: 5px; }
+#callout {
+  top: 32px; font-size: 10px; padding: 2px 10px; max-width: 46%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: rgba(8,10,14,0.5);
+}
+#callout:empty { display: none; }
+#callout.urgent {
+  font-size: 11px; padding: 3px 12px; letter-spacing: 0.08em;
+  background: rgba(48,10,6,0.62); animation: none;
+}
+@media (max-height: 420px) {
+  #healthwrap { top: 50px; bottom: auto; width: 110px; }
+  #heatwrap { top: 76px; bottom: auto; width: 110px; }
+  #callout.urgent { font-size: 11px; padding: 3px 12px; }
+}
+
+/* ===== 1.3.2: jam state lives on the GUNS bar (never over the callout banner) ===== */
+#heatlabel.jam { color: #ff6a50; font-weight: 800; }
+#heatbar {
+  /* resume-threshold tick at 22% heat */
+  background-image: linear-gradient(90deg, transparent 21.6%, rgba(255,255,255,0.35) 21.6%, rgba(255,255,255,0.35) 22.4%, transparent 22.4%);
+}
+#heatfill { transition: none; }
+
+/* 1.3.3: keep HUD clear of punch-hole / rounded corners / gesture bar (viewport-fit=cover) */
+#hud.ui {
+  top: env(safe-area-inset-top, 0px);
+  left: max(env(safe-area-inset-left, 0px), 0px);
+  right: env(safe-area-inset-right, 0px);
+  bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ===== 1.3.5 scorecard: B-17s N/19 · 109s N/44 · YOU k ===== */
+#bandits { color: #ffe9a0; font-weight: 800; }
+#youk { color: #cfc6ac; font-weight: 600; }
+#youk #kills { color: #9fe070; }
+#boxcount.tick, #bandits.tick { color: #ff8a50; }
+#tgtlabel.rtb { color: #9fd0ff; }
+
+/* 1.3.6: muted, period-feel HUD (less saturated accents) */
+#score, #wave, #kills, #boxcount, #bandits { color: #e6dcc0; }
+#healthfill { background: linear-gradient(90deg,#6f8f5a,#a9b884); }
+#heatfill { background: linear-gradient(90deg,#c9a24a,#b0553e); }
+#callout { color: #e8d9b0; }
+#engstatus { color: #b4c69c; }
+#baystatus { color: #d8bd78; }
+#youk #kills { color: #b4c69c; }
+#boxcount.tick, #bandits.tick { color: #d98e6a; }
+#tgtlabel.rtb { color: #b4c8d8; }
+
+/* 1.4.0: under the canopy — end the mission when you're ready */
+#endMissionBtn {
+  position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 40; padding: 10px 20px; font-size: 14px; letter-spacing: 0.16em;
+  background: rgba(201,162,39,0.92); box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+  transition: opacity 0.6s;
+}
+#endMissionBtn.hidden { display: none; }
+
+/* 1.4.0-web: desktop "click to play" hint (shown while the pointer is not locked) */
+#lockHint {
+  position: fixed; left: 50%; top: 62%; transform: translateX(-50%); z-index: 35; pointer-events: none;
+  padding: 8px 16px 7px; border-radius: 6px; background: rgba(10,12,14,0.62); color: #f1e2b0;
+  font: 700 15px/1.25 system-ui, sans-serif; letter-spacing: 0.14em; text-align: center; text-shadow: 0 1px 2px #000;
+}
+#lockHint small { display: block; font-size: 10.5px; letter-spacing: 0.06em; font-weight: 600; opacity: 0.8; margin-top: 3px; }
+#lockHint.hidden { display: none; }
+body.desktop canvas { cursor: crosshair; }

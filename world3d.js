@@ -1,0 +1,3931 @@
+import * as THREE from "three";
+import { GLTFLoader } from "./vendor/GLTFLoader.js";
+
+const CAM = { x: 0, y: 10.2, z: 6.5 };
+
+export function createWorld3D(canvas) {
+  function failStub(reason) {
+    console.error("[World3D] FAIL:", reason);
+    try {
+      const ctx2d = canvas.getContext("2d");
+      if (ctx2d) {
+        const w = canvas.width = window.innerWidth || 800;
+        const h = canvas.height = window.innerHeight || 480;
+        ctx2d.fillStyle = "#0b121c";
+        ctx2d.fillRect(0, 0, w, h);
+        ctx2d.fillStyle = "#ffcc66";
+        ctx2d.font = "bold 22px monospace";
+        ctx2d.fillText("3D/WebGL unavailable", 24, 64);
+        ctx2d.fillStyle = "#e8eef4";
+        ctx2d.font = "16px monospace";
+        const msg = String(reason || "unknown");
+        const lines = [];
+        let line = "";
+        for (const ch of msg) {
+          line += ch;
+          if (line.length > 48) { lines.push(line); line = ""; }
+        }
+        if (line) lines.push(line);
+        lines.forEach((ln, i) => ctx2d.fillText(ln, 24, 100 + i * 22));
+        ctx2d.fillText("Showing 2D fallback — screenshot this.", 24, 140 + lines.length * 22);
+      }
+    } catch (_) {}
+    const noop = () => {};
+    return {
+      ready: false,
+      modelsReady: false,
+      failReason: String(reason || "unknown"),
+      resize: noop,
+      sync: noop,
+      render: noop,
+      applySkyTexture: noop,
+      loading: Promise.resolve(),
+      renderer: null,
+      scene: null,
+      camera: null,
+    };
+  }
+
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: false,
+      powerPreference: "high-performance",
+    });
+    const gl = renderer.getContext();
+    if (!gl) return failStub("WebGL context null");
+  } catch (e) {
+    return failStub((e && e.message) || String(e));
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.98;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(
+    50,
+    window.innerWidth / Math.max(1, window.innerHeight),
+    0.05,
+    70000
+  );
+  scene.add(camera);
+
+  // Lighting — sun + strong backlight rim so fighters don't dissolve into clouds
+  // 1.3.2: one real sun (high, starboard-forward) + sky/ground hemisphere bounce + weak sky fill.
+  // Planes get a lit top / shadowed belly instead of the old flat camera-attached floodlights.
+  const hemi = new THREE.HemisphereLight(0xc4d4e6, 0x4a4434, 0.75);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xfff1dc, 3.0);
+  sun.position.set(45, 90, 30);
+  scene.add(sun);
+  const fill = new THREE.DirectionalLight(0x8aa6cc, 0.35);
+  fill.position.set(-60, 20, -50);
+  scene.add(fill);
+  const key2 = new THREE.DirectionalLight(0xffd8a8, 0.0);
+  key2.position.set(30, 50, -20);
+  scene.fog = new THREE.Fog(0xb3bfca, 900, 12000);
+
+  // 1.3.6: procedural high-altitude sky — deep blue zenith, paler band, milky haze at the horizon,
+  // hard sun with a tight glow. Rotates with the box's heading (the sun stays put in the world).
+  const SKY_HORIZON = new THREE.Color(0xb3bfca);
+  const sunDir0 = new THREE.Vector3(45, 90, 30).normalize();
+  const skyU = { uSun: { value: sunDir0.clone() } };
+  const skyMat = new THREE.ShaderMaterial({
+    uniforms: skyU, side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+    vertexShader: "varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: `uniform vec3 uSun; varying vec3 vDir;
+      void main(){
+        vec3 d = normalize(vDir);
+        float h = d.y;
+        vec3 zen = vec3(0.012, 0.042, 0.17), mid = vec3(0.05, 0.14, 0.36), hor = vec3(0.38, 0.45, 0.54), low = vec3(0.36, 0.41, 0.47);
+        vec3 c = mix(hor, mid, smoothstep(0.0, 0.22, h));
+        c = mix(c, zen, smoothstep(0.18, 0.9, h));
+        c = mix(c, low, smoothstep(0.0, -0.08, h));
+        float sd = max(dot(d, uSun), 0.0);
+        c += vec3(1.0, 0.93, 0.8) * (pow(sd, 6.0) * 0.12 + pow(sd, 90.0) * 0.35);
+        c += vec3(1.6, 1.5, 1.35) * smoothstep(0.99955, 0.99975, sd) * 6.0;
+        gl_FragColor = vec4(c, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  const skyMesh = new THREE.Mesh(new THREE.SphereGeometry(2600, 48, 24), skyMat);
+  skyMesh.frustumCulled = false;
+  skyMesh.renderOrder = -10;
+  scene.add(skyMesh);
+
+  // Horizon gradient band — matches pale sky, hides equirect nadir/seam
+  const hzC = document.createElement("canvas");
+  hzC.width = 4; hzC.height = 128;
+  const hzX = hzC.getContext("2d");
+  const hzG = hzX.createLinearGradient(0, 0, 0, 128);
+  hzG.addColorStop(0, "rgba(196,212,222,0)");
+  hzG.addColorStop(0.50, "rgba(196,212,222,0.08)");
+  hzG.addColorStop(0.78, "rgba(200,214,222,0.28)");
+  hzG.addColorStop(1, "rgba(186,200,210,0.48)");
+  hzX.fillStyle = hzG;
+  hzX.fillRect(0, 0, 4, 128);
+  const hzTex = new THREE.CanvasTexture(hzC);
+  hzTex.colorSpace = THREE.SRGBColorSpace;
+  const haze = new THREE.Mesh(
+    new THREE.CylinderGeometry(900, 900, 280, 48, 1, true),
+    new THREE.MeshBasicMaterial({
+      map: hzTex, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false,
+    })
+  );
+  haze.position.y = -40;
+  haze.visible = false;
+  scene.add(haze);
+
+  // Turret (camera-locked) — 1.3.1: guns sit low in frame, never cover upper/center sky
+  // 1.4.0: guns rebuilt from the real top-turret photos — the twin .50s sit either side of the gunner's head, near
+  // eye height; the jackets frame the view left and right at mid height, receivers beside/behind the eye (out of view).
+  const GUN_INSET = -0.43;  // push each gun OUT to x ≈ ±0.73 (1.3.9 pulled them in by +0.085)
+  const GUN_Y = -0.08;      // bore at y ≈ −0.03 in camera space (1.3.9: −0.35, well below centre)
+  const GUN_Z = -0.05;      // whole mount 1.0u further back → receivers beside the head, only the jackets in view
+  const OVL = 1;            // 1.4.0: render layer for the turret (guns, sill, dome frame) — drawn in its own pass on top
+  const turretAnchor = new THREE.Group();
+  turretAnchor.position.set(0, -0.08, -0.02);
+  camera.add(turretAnchor);
+  // Cycle 136: darker interior base; muzzle strobe floods orange
+  const turretFill = new THREE.PointLight(0xffe8c8, 0.55, 5, 1.4);
+  turretFill.position.set(0, 0.35, 0.4);
+  camera.add(turretFill);
+  const muzzleStrobe = new THREE.PointLight(0xff8a30, 0, 3.5, 2);
+  muzzleStrobe.position.set(0, -0.2, -0.6);
+  camera.add(muzzleStrobe);
+  const turretKey = new THREE.DirectionalLight(0xfff6e8, 0.45);
+  turretKey.position.set(0.6, 1.6, 0.4);
+  camera.add(turretKey);
+  const gunSpec = new THREE.DirectionalLight(0xe8f0ff, 0.55);
+  gunSpec.position.set(-0.8, 0.9, 0.6);
+  camera.add(gunSpec);
+  // Backlight rim parented to camera — rims anything in front of the sight
+  const viewRim = new THREE.DirectionalLight(0xffe8c0, 0.3);
+  viewRim.position.set(-0.35, 0.55, 1.2);
+  camera.add(viewRim);
+  const viewRimT = new THREE.Object3D();
+  viewRimT.position.set(0, 0, -20);
+  camera.add(viewRimT);
+  viewRim.target = viewRimT;
+  const viewRim2 = new THREE.DirectionalLight(0xb8d0e8, 0.15);
+  viewRim2.position.set(0.5, -0.2, 1.0);
+  camera.add(viewRim2);
+  const viewRim2T = new THREE.Object3D();
+  viewRim2T.position.set(0, 0, -20);
+  camera.add(viewRim2T);
+  viewRim2.target = viewRim2T;
+
+  // Fighter pool
+  const fighterPool = [];
+  const prototypes = { "109": null, "190": null, "110": null };
+
+  function makeTrail() {
+    const geo = new THREE.BufferGeometry();
+    const n = 22;
+    const pos = new Float32Array(n * 3);
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setDrawRange(0, 0);
+    const mat = new THREE.LineBasicMaterial({
+      color: 0xf2f5f8,
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+      fog: true,
+    });
+    const line = new THREE.Line(geo, mat);
+    line.frustumCulled = false;
+    line.visible = false;
+    scene.add(line);
+    return { line, pos, n };
+  }
+
+  // ===== 1.3.1: opaque low-poly B-17 combat box + engine fire/smoke + farmland/clouds/target =====
+  function radialTex(inner, outer, size) {
+    const c = document.createElement("canvas");
+    c.width = c.height = size || 64;
+    const x = c.getContext("2d");
+    const h = c.width / 2;
+    const g = x.createRadialGradient(h, h, 0, h, h, h);
+    g.addColorStop(0, inner);
+    g.addColorStop(1, outer);
+    x.fillStyle = g;
+    x.fillRect(0, 0, c.width, c.height);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+  const fireTex = radialTex("rgba(255,236,170,1)", "rgba(255,90,10,0)");
+  // 1.3.3: licking flame (teardrop, hot core) for engine fires
+  const flameTex = (() => {
+    const c = document.createElement("canvas"); c.width = 64; c.height = 128;
+    const x = c.getContext("2d");
+    for (let k = 0; k < 3; k++) {
+      const g = x.createRadialGradient(32, 92 - k * 14, 2, 32, 86 - k * 14, 30 - k * 6);
+      g.addColorStop(0, k === 2 ? "rgba(255,250,220,0.95)" : "rgba(255,200,90,0.8)");
+      g.addColorStop(0.5, "rgba(255,120,20,0.55)");
+      g.addColorStop(1, "rgba(200,40,0,0)");
+      x.fillStyle = g;
+      x.beginPath(); x.ellipse(32, 80 - k * 10, 26 - k * 7, 46 - k * 8, 0, 0, Math.PI * 2); x.fill();
+    }
+    const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace; return tx;
+  })();
+  const smokeTex = (() => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const x = c.getContext("2d");
+    const g = x.createRadialGradient(32, 32, 2, 32, 32, 31);
+    g.addColorStop(0, "rgba(255,255,255,0.9)");
+    g.addColorStop(0.55, "rgba(255,255,255,0.45)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    x.fillStyle = g;
+    x.fillRect(0, 0, 64, 64);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+
+  // B-17 dims in world units (1u = 100 ft) × visual scale so the box reads on a phone.
+  const B17_VIS = 16;               // 1.3.3: 103 ft span → 16u (closer to own-ship scale)
+  const NACELLE_X = [-0.44, -0.22, 0.22, 0.44]; // fraction of half-span*2 → engine #1..#4 (port→stbd)
+  // 1.3.6: weathered, sun-faded olive drab (mottled, chalky patches, panel seams) with a little sheen
+  const weatherTex = (() => {
+    const c = document.createElement("canvas"); c.width = c.height = 256;
+    const x = c.getContext("2d");
+    x.fillStyle = "#c8c8c8"; x.fillRect(0, 0, 256, 256);
+    let sd = 5; const r = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    for (let i = 0; i < 90; i++) { const g = x.createRadialGradient(0, 0, 0, 0, 0, 1); const v = r() < 0.5 ? "235,232,215" : "150,150,140"; g.addColorStop(0, "rgba(" + v + ",0.35)"); g.addColorStop(1, "rgba(" + v + ",0)"); x.save(); x.translate(r() * 256, r() * 256); x.scale(10 + r() * 40, 6 + r() * 20); x.fillStyle = g; x.beginPath(); x.arc(0, 0, 1, 0, 6.3); x.fill(); x.restore(); }
+    x.strokeStyle = "rgba(60,60,55,0.35)"; x.lineWidth = 1;
+    for (let y = 0; y < 256; y += 32) { x.beginPath(); x.moveTo(0, y + 0.5); x.lineTo(256, y + 0.5); x.stroke(); }
+    for (let k = 0; k < 24; k++) { const xx = (r() * 256) | 0, yy = ((r() * 8) | 0) * 32; x.beginPath(); x.moveTo(xx + 0.5, yy); x.lineTo(xx + 0.5, yy + 32); x.stroke(); }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; return t;
+  })();
+  const stainTex = (() => { // sooty exhaust streak, dense at the cowl, fading aft
+    const c = document.createElement("canvas"); c.width = 32; c.height = 128;
+    const x = c.getContext("2d"); const img = x.createImageData(32, 128);
+    for (let v = 0; v < 128; v++) for (let u = 0; u < 32; u++) {
+      const w = (u - 15.5) / 15.5, t = v / 127, o = (v * 32 + u) * 4;
+      img.data[o] = 22; img.data[o + 1] = 20; img.data[o + 2] = 18;
+      img.data[o + 3] = 255 * 0.8 * Math.exp(-w * w * 3) * (1 - t) * (0.75 + 0.25 * Math.sin(u * 1.7 + v * 0.05));
+    }
+    x.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  const stainMat = new THREE.MeshBasicMaterial({ map: stainTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, fog: true });
+  const b17OD = new THREE.MeshStandardMaterial({ color: 0x4d5534, map: weatherTex, roughness: 0.52, metalness: 0.18, envMapIntensity: 0.45 });
+  const b17Dark = new THREE.MeshStandardMaterial({ color: 0x23271a, roughness: 0.7, metalness: 0.2 });
+  const b17Glass = new THREE.MeshStandardMaterial({ color: 0x33485a, roughness: 0.25, metalness: 0.3 });
+  const b17Star = new THREE.MeshBasicMaterial({ color: 0xd8d8d0 });
+
+  const b17Metal = new THREE.MeshStandardMaterial({ color: 0xa4aab0, map: weatherTex, roughness: 0.3, metalness: 0.82, envMapIntensity: 1.0 });
+  // 1.3.3: spinning-prop blur disc (translucent grey, darker blade arcs, yellow tip ring)
+  const propTex = (() => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 128;
+    const x = c.getContext("2d");
+    x.translate(64, 64);
+    const g = x.createRadialGradient(0, 0, 6, 0, 0, 62);
+    g.addColorStop(0, "rgba(40,40,40,0.35)");
+    g.addColorStop(0.5, "rgba(70,70,70,0.16)");
+    g.addColorStop(0.92, "rgba(80,80,80,0.12)");
+    g.addColorStop(1, "rgba(80,80,80,0)");
+    x.fillStyle = g;
+    x.beginPath(); x.arc(0, 0, 62, 0, Math.PI * 2); x.fill();
+    for (let k = 0; k < 3; k++) { // motion-blurred blades
+      const a0 = (k / 3) * Math.PI * 2;
+      for (let s = 0; s < 10; s++) {
+        x.fillStyle = "rgba(20,20,20," + (0.05 * (1 - s / 10)).toFixed(3) + ")";
+        x.beginPath(); x.moveTo(0, 0); x.arc(0, 0, 60, a0 - s * 0.07, a0 - s * 0.07 + 0.12); x.closePath(); x.fill();
+      }
+    }
+    x.strokeStyle = "rgba(230,190,40,0.16)"; x.lineWidth = 2;
+    x.beginPath(); x.arc(0, 0, 58, 0, Math.PI * 2); x.stroke();
+    const tx = new THREE.CanvasTexture(c);
+    tx.colorSpace = THREE.SRGBColorSpace;
+    return tx;
+  })();
+  const propDiscMat = new THREE.MeshBasicMaterial({ map: propTex, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  const propBladeMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.7, metalness: 0.3 });
+  function makeBlades(R, w) {
+    const grp = new THREE.Group();
+    const bg = new THREE.BoxGeometry(w, R * 0.93, w * 0.22);
+    bg.translate(0, R * 0.5, 0);
+    for (let k = 0; k < 3; k++) {
+      const piv = new THREE.Group();
+      piv.rotation.z = (k / 3) * Math.PI * 2;
+      const b = new THREE.Mesh(bg, propBladeMat);
+      b.rotation.y = 1.35; // feathered (edge-on to the airflow)
+      piv.add(b);
+      grp.add(piv);
+    }
+    const hub = new THREE.Mesh(new THREE.SphereGeometry(w * 0.7, 8, 6), propBladeMat);
+    grp.add(hub);
+    grp.visible = false;
+    return grp;
+  }
+  let _b17n = 0;
+  function buildB17() {
+    const S = B17_VIS;
+    const g = new THREE.Group();
+    // 1944 boxes mixed olive-drab and natural-metal ships (also reads better over farmland)
+    const k = _b17n++;
+    const b17Olive = (k === 3 || k === 10 || k === 15) ? b17Metal : b17OD;
+    // Fuselage (nose +Z)
+    const fus = new THREE.Mesh(new THREE.CylinderGeometry(0.047 * S, 0.028 * S, 0.62 * S, 10), b17Olive);
+    fus.rotation.x = Math.PI / 2;
+    fus.position.z = 0.02 * S;
+    g.add(fus);
+    const tailCone = new THREE.Mesh(new THREE.CylinderGeometry(0.028 * S, 0.012 * S, 0.12 * S, 8), b17Olive);
+    tailCone.rotation.x = Math.PI / 2;
+    tailCone.position.z = -0.35 * S;
+    g.add(tailCone);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.047 * S, 10, 8), b17Glass);
+    nose.scale.set(1, 1, 1.6);
+    nose.position.z = 0.33 * S;
+    g.add(nose);
+    // Wing — tapered (two boxes per side)
+    for (const side of [-1, 1]) {
+      const inner = new THREE.Mesh(new THREE.BoxGeometry(0.26 * S, 0.018 * S, 0.17 * S), b17Olive);
+      inner.position.set(side * 0.13 * S, -0.01 * S, 0.06 * S);
+      g.add(inner);
+      const outer = new THREE.Mesh(new THREE.BoxGeometry(0.25 * S, 0.014 * S, 0.105 * S), b17Olive);
+      outer.position.set(side * 0.38 * S, -0.004 * S, 0.045 * S);
+      g.add(outer);
+      // national insignia (upper port wing only, like the real thing — keep both for readability)
+      const star = new THREE.Mesh(new THREE.CircleGeometry(0.03 * S, 10), b17Star);
+      star.rotation.x = -Math.PI / 2;
+      star.position.set(side * 0.38 * S, 0.005 * S, 0.045 * S);
+      g.add(star);
+    }
+    // Horizontal stabilizer + single tall fin (B-17)
+    const hstab = new THREE.Mesh(new THREE.BoxGeometry(0.42 * S, 0.012 * S, 0.09 * S), b17Olive);
+    hstab.position.set(0, 0.0, -0.36 * S);
+    g.add(hstab);
+    { // swept, tapered B-17 fin (dorsal fillet → tall rounded rudder)
+      const sh = new THREE.Shape();
+      sh.moveTo(-0.43 * S, 0); sh.lineTo(-0.16 * S, 0); sh.lineTo(-0.3 * S, 0.07 * S);
+      sh.lineTo(-0.37 * S, 0.19 * S); sh.lineTo(-0.43 * S, 0.19 * S); sh.lineTo(-0.44 * S, 0.1 * S); sh.closePath();
+      const fg = new THREE.ExtrudeGeometry(sh, { depth: 0.012 * S, bevelEnabled: false });
+      fg.translate(0, 0, -0.006 * S);
+      const fin = new THREE.Mesh(fg, b17Olive);
+      fin.rotation.y = -Math.PI / 2; // shape x → world z
+      fin.position.set(0, 0.02 * S, 0);
+      g.add(fin);
+    }
+    // Turret bumps
+    const top = new THREE.Mesh(new THREE.SphereGeometry(0.022 * S, 8, 6), b17Glass);
+    top.position.set(0, 0.046 * S, 0.2 * S);
+    g.add(top);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.024 * S, 8, 6), b17Dark);
+    ball.position.set(0, -0.048 * S, -0.02 * S);
+    g.add(ball);
+    // Four nacelles with engine anchors
+    const engines = [];
+    for (let i = 0; i < 4; i++) {
+      const ex = NACELLE_X[i] * S;
+      const nac = new THREE.Mesh(new THREE.CylinderGeometry(0.024 * S, 0.02 * S, 0.15 * S, 8), b17Dark);
+      nac.rotation.x = Math.PI / 2;
+      nac.position.set(ex, -0.012 * S, 0.14 * S);
+      g.add(nac);
+      const stn = new THREE.Mesh(new THREE.PlaneGeometry(0.05 * S, 0.14 * S), stainMat);
+      stn.rotation.x = -Math.PI / 2; stn.position.set(ex, 0.0 * S + 0.012 * S, 0.02 * S); g.add(stn);
+      const anchor = new THREE.Object3D();
+      anchor.position.set(ex, 0.0, 0.1 * S);
+      g.add(anchor);
+      // 1.3.3: prop blur disc (running) / stopped feathered blades (dead engine)
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(0.056 * S, 20), propDiscMat);
+      disc.position.set(ex, -0.012 * S, 0.222 * S);
+      disc.rotation.z = Math.random() * 6;
+      g.add(disc);
+      const blades = makeBlades(0.056 * S, 0.012 * S);
+      blades.position.copy(disc.position);
+      g.add(blades);
+      const fire = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: fireTex, color: 0xffffff, transparent: true, depthWrite: false,
+        blending: THREE.AdditiveBlending, opacity: 0.9,
+      }));
+      fire.visible = false;
+      anchor.add(fire);
+      engines.push({ anchor, fire, lastEmit: 0, disc, blades });
+    }
+    g.userData.engines = engines;
+    g.visible = false;
+    scene.add(g);
+    return g;
+  }
+  const friendlyPool = [];
+  for (let i = 0; i < 18; i++) friendlyPool.push(buildB17());
+
+  // ===== 1.3.3: the player's OWN B-17 built around the top-turret camera =====
+  // Own-ship frame: origin = gunner's eye (CAM), +Z = nose, +X = port wing, 1u ≈ 4 ft
+  // (span 103 ft ≈ 26u, length 75 ft ≈ 19u). Rolls with the airframe (list / turn).
+  const ownShip = new THREE.Group();
+  ownShip.position.set(CAM.x, CAM.y, CAM.z);
+  scene.add(ownShip);
+  const ownEngines = [];
+  const ownTail = { fire: null, smokeAt: null, emit: 0 };
+  const holeTexs = [];
+  for (let v = 0; v < 4; v++) {
+    const c = document.createElement("canvas"); c.width = c.height = 64;
+    const x = c.getContext("2d");
+    x.translate(32, 32);
+    // faint soot / scorched paint halo (dark, never light)
+    const g = x.createRadialGradient(0, 0, 4, 0, 0, 30);
+    g.addColorStop(0, "rgba(22,18,14,0.55)"); g.addColorStop(0.6, "rgba(28,24,18,0.22)"); g.addColorStop(1, "rgba(0,0,0,0)");
+    x.fillStyle = g; x.beginPath(); x.arc(0, 0, 30, 0, Math.PI * 2); x.fill();
+    // torn bare-aluminium petals, curled outward (jagged star)
+    const n = 7 + v * 2, rIn = 7 + v, rOut = 14 + v * 2.5;
+    x.beginPath();
+    for (let k = 0; k <= n * 2; k++) {
+      const a = (k / (n * 2)) * Math.PI * 2 + (Math.random() - 0.5) * 0.25;
+      const r = k % 2 ? rIn * (0.9 + Math.random() * 0.3) : rOut * (0.55 + Math.random() * 0.5);
+      const px = Math.cos(a) * r, py = Math.sin(a) * r * (0.8 + v * 0.06);
+      if (k) x.lineTo(px, py); else x.moveTo(px, py);
+    }
+    x.closePath();
+    const mg = x.createLinearGradient(-14, -14, 14, 14);
+    mg.addColorStop(0, "rgb(176,174,166)"); mg.addColorStop(0.5, "rgb(122,120,112)"); mg.addColorStop(1, "rgb(78,76,70)");
+    x.fillStyle = mg; x.fill();
+    x.strokeStyle = "rgba(40,38,34,0.8)"; x.lineWidth = 1; x.stroke();
+    // the hole: black, irregular
+    x.beginPath();
+    const m = 9;
+    for (let k = 0; k <= m; k++) { const a = (k / m) * Math.PI * 2, r = rIn * (0.7 + Math.random() * 0.35); if (k) x.lineTo(Math.cos(a) * r, Math.sin(a) * r); else x.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+    x.closePath(); x.fillStyle = "rgb(6,5,4)"; x.fill();
+    // a few scratch / split lines in the paint
+    x.strokeStyle = "rgba(150,148,140,0.7)"; x.lineWidth = 0.8;
+    for (let k = 0; k < 3; k++) { const a = Math.random() * Math.PI * 2; x.beginPath(); x.moveTo(Math.cos(a) * rOut * 0.8, Math.sin(a) * rOut * 0.8); x.lineTo(Math.cos(a) * (rOut + 5), Math.sin(a) * (rOut + 5)); x.stroke(); }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+    holeTexs.push(new THREE.MeshStandardMaterial({ map: t, transparent: true, alphaTest: 0.04, depthWrite: false, depthTest: true, roughness: 0.55, metalness: 0.35,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: THREE.DoubleSide }));
+  }
+  const holeGeo = new THREE.PlaneGeometry(1, 1);
+  const ownHoles = [];
+  // 1.4.0: health-driven structural damage (see buildOwnDamage) + fin / stabilizer cut-out maps
+  const ownDmg = { items: [], cuts: [], lastKey: -1, wisp: null, wispT: 0 };
+  function makeCutMap(x0, x1, y0, y1, W, H) { // alphaMap over a shape's cap UVs (shape coords x0..x1, y0..y1)
+    const c = document.createElement("canvas"); c.width = W; c.height = H; const ctx = c.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+    const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.repeat.set(1 / (x1 - x0), 1 / (y1 - y0)); tex.offset.set(-x0 / (x1 - x0), -y0 / (y1 - y0));
+    const px = (sx) => (sx - x0) / (x1 - x0) * W, py = (sy) => (1 - (sy - y0) / (y1 - y0)) * H; // flipY: canvas top = y1
+    const cm = { c, ctx, tex, px, py, events: [], W, H };
+    ownDmg.cuts.push(cm);
+    return cm;
+  }
+  (function buildOwnShip() {
+    // panel lines + rivets + weathering (multiplied into the olive drab)
+    const panelTex = (() => {
+      const c = document.createElement("canvas"); c.width = c.height = 256;
+      const x = c.getContext("2d");
+      x.fillStyle = "#d4d4d4"; x.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 2600; i++) { const v = 190 + Math.random() * 60 | 0; x.fillStyle = "rgba(" + v + "," + v + "," + v + ",0.35)"; x.fillRect(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 6, 1 + Math.random() * 3); }
+      x.strokeStyle = "rgba(70,70,70,0.55)"; x.lineWidth = 1.2;
+      for (let yy = 0; yy <= 256; yy += 64) { x.beginPath(); x.moveTo(0, yy); x.lineTo(256, yy); x.stroke(); }
+      for (let r = 0; r < 4; r++) for (let k = 0; k < 3; k++) { const xx = (k * 96 + (r % 2) * 48) % 256; x.beginPath(); x.moveTo(xx, r * 64); x.lineTo(xx, r * 64 + 64); x.stroke(); }
+      x.fillStyle = "rgba(90,90,90,0.35)";
+      for (let yy = 0; yy < 256; yy += 64) for (let xx = 0; xx < 256; xx += 6) x.fillRect(xx, yy + 3, 1.2, 1.2);
+      const tx = new THREE.CanvasTexture(c);
+      tx.colorSpace = THREE.SRGBColorSpace;
+      tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+      tx.repeat.set(0.3, 0.3);
+      tx.anisotropy = 4;
+      return tx;
+    })();
+    const od = new THREE.MeshStandardMaterial({ color: 0x4d5634, map: panelTex, roughness: 0.5, metalness: 0.2, envMapIntensity: 0.5, side: THREE.DoubleSide });
+    const odDark = new THREE.MeshStandardMaterial({ color: 0x2b2f22, roughness: 0.62, metalness: 0.3, side: THREE.DoubleSide });
+    // polished aluminium: bright env reflection from above, hard sun highlights, rivet rows from the panel texture
+    const aluTex = panelTex.clone(); aluTex.needsUpdate = true; aluTex.repeat.set(0.45, 0.45);
+    // its own bright "sky" environment: a hot hazy horizon band + a sun spot, so the spine glares like the photos
+    const aluEnv = (() => {
+      const W = 256, H = 128, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+      const g = x.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, "#5f86c0"); g.addColorStop(0.36, "#a9c3e3"); g.addColorStop(0.47, "#f4f7fb"); g.addColorStop(0.5, "#e6ebf0"); g.addColorStop(0.56, "#aeb6bf"); g.addColorStop(1, "#5a6068");
+      x.fillStyle = g; x.fillRect(0, 0, W, H);
+      const sx = W * (0.5 + Math.atan2(45, 30) / (2 * Math.PI)), sy = H * (0.5 - Math.asin(90 / Math.hypot(45, 90, 30)) / Math.PI);
+      for (const ox of [-W, 0, W]) { const sg = x.createRadialGradient(sx + ox, sy, 0, sx + ox, sy, 22); sg.addColorStop(0, "rgba(255,255,250,1)"); sg.addColorStop(0.25, "rgba(255,250,235,0.9)"); sg.addColorStop(1, "rgba(255,250,235,0)"); x.fillStyle = sg; x.fillRect(0, 0, W, H); }
+      const t = new THREE.CanvasTexture(c); t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace; return t;
+    })();
+    const alu = new THREE.MeshStandardMaterial({ color: 0xe4e8ec, map: aluTex, envMap: aluEnv, roughness: 0.2, metalness: 0.92, envMapIntensity: 1.0, side: THREE.DoubleSide });
+    const glass = new THREE.MeshStandardMaterial({ color: 0x1c262c, roughness: 0.08, metalness: 0.6, envMapIntensity: 0.65, side: THREE.DoubleSide });
+    const boot = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.85, metalness: 0.05, side: THREE.DoubleSide });
+    const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x || 0, y || 0, z || 0); ownShip.add(m); return m; };
+    // --- fuselage: lofted rings nose → tail ---
+    const st = [
+      [5.3, 0.1, -2.02], [5.1, 0.45, -2.0], [4.6, 0.8, -1.96], [3.8, 0.98, -1.9], [2.6, 1.06, -1.86],
+      [0.5, 1.08, -1.85], [-0.9, 1.072, -1.85], [-3.0, 1.06, -1.85], [-6.0, 0.96, -1.8], [-9.0, 0.74, -1.7],
+      [-11.5, 0.52, -1.6], [-13.2, 0.36, -1.52], [-13.9, 0.12, -1.5],
+    ];
+    const SEG = 18, pos = [], idx = [], uv = [];
+    for (const [z, r, cy] of st) for (let j = 0; j <= SEG; j++) {
+      const a = (j / SEG) * Math.PI * 2;
+      pos.push(Math.cos(a) * r, cy + Math.sin(a) * r * 1.08, z);
+      uv.push(a * 1.06, z);
+    }
+    for (let i = 0; i < st.length - 1; i++) for (let j = 0; j < SEG; j++) {
+      const a = i * (SEG + 1) + j, b = a + SEG + 1;
+      idx.push(a, a + 1, b, b, a + 1, b + 1);
+    }
+    const fg = new THREE.BufferGeometry();
+    fg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    fg.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    fg.setIndex(idx); fg.computeVertexNormals();
+    // 1.4.0: olive-drab nose section, POLISHED bare-aluminium spine aft of the turret (as in the photos)
+    const splitI = st.findIndex((q) => q[0] <= -0.9);
+    fg.addGroup(0, splitI * SEG * 6, 0); fg.addGroup(splitI * SEG * 6, (st.length - 1 - splitI) * SEG * 6, 1);
+    add(fg, [od, alu]);
+    const topAt = (z) => { // fuselage top-line height at station z
+      for (let i = 0; i < st.length - 1; i++) {
+        const [z0, r0, c0] = st[i], [z1, r1, c1] = st[i + 1];
+        if (z <= z0 && z >= z1) { const k = (z0 - z) / (z0 - z1); return (c0 + (c1 - c0) * k) + (r0 + (r1 - r0) * k) * 1.08; }
+      }
+      return -1.5;
+    };
+    // nose glazing (bombardier's plexi)
+    const ng = new THREE.Mesh(new THREE.SphereGeometry(0.62, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), glass);
+    ng.rotation.x = Math.PI / 2; ng.scale.set(1, 1.1, 1); ng.position.set(0, -2.0, 4.85); ownShip.add(ng);
+    // --- cockpit: framed greenhouse (overhead + side glass) and windscreen ahead of the turret ---
+    {
+      const sh = new THREE.Shape();
+      sh.moveTo(0.95, -1.25); sh.lineTo(0.95, -0.86); sh.quadraticCurveTo(1.05, -0.76, 1.4, -0.76);
+      sh.lineTo(2.45, -0.78); sh.lineTo(3.3, -1.18); sh.lineTo(3.55, -1.3); sh.lineTo(0.95, -1.3);
+      const cg = new THREE.ExtrudeGeometry(sh, { depth: 1.2, bevelEnabled: true, bevelSize: 0.12, bevelThickness: 0.14, bevelSegments: 3 });
+      cg.translate(0, 0, -0.6);
+      const cm = new THREE.Mesh(cg, glass);
+      cm.rotation.y = -Math.PI / 2;
+      ownShip.add(cm);
+      // canopy frames (olive-drab bars over the glass)
+      const bar = (w, h, d, x, y, z, rx) => { const b = add(new THREE.BoxGeometry(w, h, d), odDark, x, y, z); if (rx) b.rotation.x = rx; return b; };
+      for (const zz of [1.35, 1.95]) bar(1.3, 0.025, 0.035, 0, -0.612, zz);
+      bar(1.36, 0.03, 0.05, 0, -0.615, 2.47);
+      bar(0.035, 0.025, 1.2, 0, -0.612, 1.85);
+      for (const sd of [-1, 1]) {
+        bar(0.04, 0.03, 1.5, sd * 0.64, -0.63, 1.75);
+        bar(0.04, 0.03, 1.0, sd * 0.6, -0.95, 2.93, -0.44);
+      }
+      bar(0.04, 0.03, 1.0, 0, -0.95, 2.93, -0.44);
+      // fuselage skin skirt under the glass so the greenhouse sits IN the fuselage
+      const sk = add(new THREE.BoxGeometry(1.5, 0.3, 2.6), od, 0, -1.12, 2.25);
+      sk.visible = true;
+    }
+    // turret ring collar under the gunner (just visible at the lowest pitch)
+    // 1.3.5: thin flush seam — reads as the turret ring (not a tyre around the view) when looking down
+    { const ring = new THREE.Mesh(new THREE.TorusGeometry(0.74, 0.03, 5, 40), odDark); ring.rotation.x = Math.PI / 2; ring.scale.set(1, 1, 0.5); ring.position.set(0, topAt(0) + 0.005, 0); ownShip.add(ring); }
+    // (1.4.0: the open radio-room hatch + gun were removed — a clean riveted spine like the photos)
+    // --- wings: tapered low wing with dihedral, de-icer boots, insignia ---
+    const LE = (ax) => 1.6 - (ax - 1) * (2.0 / 12);
+    const TE = (ax) => -3.4 + (ax - 1) * (1.1 / 12);
+    const WY = (ax) => -2.35 + ax * 0.0787;
+    function wingGeo(pts, t0, t1, lift) {
+      const sh = new THREE.Shape();
+      sh.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) sh.lineTo(pts[i][0], pts[i][1]);
+      sh.closePath();
+      const g = new THREE.ExtrudeGeometry(sh, { depth: 1, bevelEnabled: false });
+      g.rotateX(Math.PI / 2); // shape y → world z, extrusion → world -y (0..-1)
+      const p = g.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        const x = p.getX(i), ax = Math.abs(x);
+        const th = t0 + (t1 - t0) * Math.min(1, ax / 13);
+        const y = p.getY(i) + 0.5; // -0.5..0.5
+        p.setY(i, WY(ax) + (lift || 0) + y * th); // rotateX(+90): shape y → world +z
+      }
+      g.computeVertexNormals();
+      return g;
+    }
+    const plan = [];
+    // port tip → root (x>0), then starboard root → tip, then back along trailing edge
+    const xs = [13.0, 10.5, 8.3, 6.3, 4.3, 2.4, 1.0];
+    plan.push([13.35, -1.35]);
+    for (const x of xs) plan.push([x, LE(x)]);
+    for (const x of xs.slice().reverse()) plan.push([-x, LE(x)]);
+    plan.push([-13.35, -1.35]);
+    for (const x of xs) plan.push([-x, TE(x)]);
+    for (const x of xs.slice().reverse()) plan.push([x, TE(x)]);
+    add(wingGeo(plan, 0.7, 0.24, 0), od);
+    for (const sd of [1, -1]) { // de-icer boots along the leading edge
+      const bp = [];
+      const bx = [12.6, 8.3, 4.3, 1.4];
+      for (const x of bx) bp.push([sd * x, LE(x) + 0.03]);
+      for (const x of bx.slice().reverse()) bp.push([sd * x, LE(x) - 0.38]);
+      add(wingGeo(bp, 0.74, 0.28, 0.005), boot);
+    }
+    { // national insignia — upper port wing (as on the real B-17G)
+      const c = document.createElement("canvas"); c.width = c.height = 128;
+      const x = c.getContext("2d");
+      x.fillStyle = "#1f2f5e"; x.beginPath(); x.arc(64, 64, 62, 0, Math.PI * 2); x.fill();
+      x.fillStyle = "#e8e6dc"; x.beginPath();
+      for (let k = 0; k < 10; k++) { const r = k % 2 ? 24 : 60, a = -Math.PI / 2 + k * Math.PI / 5; x.lineTo(64 + Math.cos(a) * r, 64 + Math.sin(a) * r); }
+      x.closePath(); x.fill();
+      const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 4;
+      const ins = new THREE.Mesh(new THREE.CircleGeometry(1.15, 28), new THREE.MeshStandardMaterial({ map: tx, roughness: 0.6, metalness: 0.1, transparent: true, polygonOffset: true, polygonOffsetFactor: -2 }));
+      ins.rotation.x = -Math.PI / 2;
+      ins.rotation.z = Math.PI; // star points forward
+      const ax = 10.2, th = 0.7 + (0.24 - 0.7) * (ax / 13);
+      ins.position.set(ax, WY(ax) + th * 0.5 + 0.015, (LE(ax) + TE(ax)) * 0.5);
+      ownShip.add(ins);
+    }
+    // --- tail (1.4.0 rebuild): bare-metal stabilizers with RED tips; a thicker, tapered B-17G fin at the right
+    // height (tip ≈ 3.1u / 12 ft above the tail cone, y ≈ 2.0), long low dorsal fillet, rudder hinge + trim-tab lines.
+    // Both carry an alphaMap "cut map" so shot-away chunks and holes really open to the sky (buildOwnDamage).
+    const stabCut = makeCutMap(-5.9, 5.9, -13.6, -10.4, 512, 160);
+    const stabMap = (() => {
+      const W = 512, H = 160, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+      const px = (sx) => (sx + 5.9) / 11.8 * W, py = (sz) => (1 - (sz + 13.6) / 3.2) * H;
+      x.fillStyle = "#d9dde1"; x.fillRect(0, 0, W, H);
+      x.strokeStyle = "rgba(90,95,100,0.55)"; x.lineWidth = 1;
+      for (let k = -5; k <= 5; k++) { x.beginPath(); x.moveTo(px(k), 0); x.lineTo(px(k), H); x.stroke(); }
+      x.strokeStyle = "rgba(40,44,48,0.8)"; x.lineWidth = 1.6; x.beginPath(); x.moveTo(0, py(-12.55)); x.lineTo(W, py(-12.55)); x.stroke(); // elevator hinge
+      x.fillStyle = "rgba(120,125,130,0.5)"; for (let xx = 0; xx < W; xx += 5) { x.fillRect(xx, py(-11.2), 1, 1); x.fillRect(xx, py(-12.4), 1, 1); }
+      x.fillStyle = "#b3261e"; x.fillRect(0, 0, px(-4.2), H); x.fillRect(px(4.2), 0, W - px(4.2), H); // red tips
+      x.fillStyle = "rgba(255,255,255,0.15)"; x.fillRect(0, py(-10.7), W, 3);
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+      t.repeat.copy(stabCut.tex.repeat); t.offset.copy(stabCut.tex.offset); return t;
+    })();
+    const stabMat = new THREE.MeshStandardMaterial({ map: stabMap, envMap: aluEnv, alphaMap: stabCut.tex, alphaTest: 0.5, roughness: 0.28, metalness: 0.85, envMapIntensity: 0.95, side: THREE.DoubleSide });
+    {
+      const sh = new THREE.Shape();
+      const hp = [[0.6, -10.6], [5.4, -12.35], [5.6, -12.9], [5.2, -13.35], [0.6, -13.4], [-0.6, -13.4], [-5.2, -13.35], [-5.6, -12.9], [-5.4, -12.35], [-0.6, -10.6]];
+      sh.moveTo(hp[0][0], hp[0][1]);
+      for (let i = 1; i < hp.length; i++) sh.lineTo(hp[i][0], hp[i][1]);
+      const hg = new THREE.ExtrudeGeometry(sh, { depth: 0.2, bevelEnabled: false });
+      { const pa = hg.attributes.position, uv = hg.attributes.uv; for (let i = 0; i < pa.count; i++) uv.setXY(i, pa.getX(i), pa.getY(i)); } // 1.4.0: side walls in shape coords too, so the cut map opens them
+      { const pa = hg.attributes.position; for (let i = 0; i < pa.count; i++) { const ax = Math.abs(pa.getX(i)), k = 1 - 0.55 * Math.min(1, ax / 5.6); pa.setZ(i, (pa.getZ(i) - 0.1) * k + 0.1); } hg.computeVertexNormals(); }
+      hg.rotateX(Math.PI / 2);
+      const stab = add(hg, stabMat, 0, -1.35, 0); stab.userData.part = "stab";
+    }
+    const finCut = makeCutMap(-14.0, -4.8, -1.3, 2.3, 512, 200);
+    const finMat = new THREE.MeshStandardMaterial({ color: 0xe0e4e8, map: aluTex, envMap: aluEnv, alphaMap: finCut.tex, alphaTest: 0.5, roughness: 0.24, metalness: 0.9, envMapIntensity: 1.0, side: THREE.DoubleSide });
+    const FIN_TOP = 2.03;
+    {
+      const sh = new THREE.Shape();
+      sh.moveTo(-5.0, topAt(-5.0) - 0.05);
+      sh.lineTo(-8.8, topAt(-8.8) + 0.2);                              // long low dorsal fillet
+      sh.quadraticCurveTo(-10.35, topAt(-10.35) + 0.45, -10.95, 0.05); // fillet sweeps up into the leading edge
+      sh.lineTo(-11.72, 1.45);                                          // swept leading edge
+      sh.quadraticCurveTo(-12.1, FIN_TOP, -12.66, FIN_TOP);             // rounded tip
+      sh.quadraticCurveTo(-13.34, FIN_TOP - 0.03, -13.55, 1.45);
+      sh.lineTo(-13.82, -0.2);                                          // rudder trailing edge
+      sh.lineTo(-13.88, -1.05);
+      sh.lineTo(-9.0, topAt(-9.0) - 0.14); sh.closePath();
+      const fg2 = new THREE.ExtrudeGeometry(sh, { depth: 0.26, bevelEnabled: true, bevelSize: 0.035, bevelThickness: 0.04, bevelSegments: 2, curveSegments: 10 });
+      { const pa = fg2.attributes.position, uv = fg2.attributes.uv; for (let i = 0; i < pa.count; i++) uv.setXY(i, pa.getX(i), pa.getY(i)); } // side walls cut too (edge-on the fin is ALL side wall)
+      // taper: full thickness at the root, ~40 % at the tip; thinner toward the trailing edge too
+      const pa = fg2.attributes.position, yRoot = -1.0;
+      for (let i = 0; i < pa.count; i++) {
+        const y = pa.getY(i), z = pa.getX(i);
+        const kh = 1 - 0.6 * Math.max(0, Math.min(1, (y - yRoot) / (FIN_TOP - yRoot)));
+        const kc = 1 - 0.35 * Math.max(0, Math.min(1, (-12.9 - z) / 0.9));
+        pa.setZ(i, (pa.getZ(i) - 0.13) * kh * kc);
+      }
+      fg2.computeVertexNormals();
+      const fin = new THREE.Mesh(fg2, finMat);
+      fin.rotation.y = -Math.PI / 2; fin.userData.part = "fin";
+      ownShip.add(fin);
+      // rudder hinge line + rudder outline + trim tab, on both faces (thin dark strips just proud of the skin)
+      const lineMat = new THREE.MeshBasicMaterial({ color: 0x3c4046, transparent: true, opacity: 0.85, polygonOffset: true, polygonOffsetFactor: -2, side: THREE.DoubleSide });
+      const halfT = (y) => (0.13 + 0.04) * (1 - 0.6 * Math.max(0, Math.min(1, (y - yRoot) / (FIN_TOP - yRoot))));
+      const strip = (pts, w) => {
+        for (const sd of [-1, 1]) {
+          const pos = [], idx = [];
+          pts.forEach(([z, y], k) => { const hx = sd * (halfT(y) + 0.006); pos.push(hx, y, z - w / 2, hx, y, z + w / 2); if (k) { const q = k * 2; idx.push(q - 2, q - 1, q, q - 1, q + 1, q); } });
+          const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+          const m = new THREE.Mesh(g, lineMat); m.userData.noHit = true; ownShip.add(m);
+        }
+      };
+      const hinge = []; for (let k = 0; k <= 10; k++) { const y = 1.9 - k * 0.29; hinge.push([-12.92 - (1.9 - y) * 0.035, y]); }
+      strip(hinge, 0.03);
+      strip([[-13.2, -0.35], [-13.72, -0.35]], 0.012 * 0 + 0.02); // trim-tab top edge
+      strip([[-13.2, -0.35], [-13.25, -0.95]], 0.02);
+      strip([[-12.4, 1.95], [-12.2, 1.2], [-12.02, 0.3], [-11.85, -0.5]], 0.012); // fin spar / panel line
+    }
+    // --- four engines: nacelles, cowls, props (#1 outboard port … #4 outboard stbd) ---
+    const EX = [8.3, 4.3, -4.3, -8.3];
+    for (let i = 0; i < 4; i++) {
+      const x = EX[i], ax = Math.abs(x);
+      const zf = LE(ax) + (ax < 6 ? 2.7 : 2.6), zb = TE(ax) + (ax < 6 ? 0.2 : 1.2), L = zf - zb;
+      const cy = WY(ax) - 0.02;
+      const prof = [[0.001, 0], [0.4, 0.02], [0.6, 0.12], [0.65, 0.45], [0.63, 1.3], [0.5, L * 0.45], [0.3, L * 0.78], [0.06, L]].map(([r, y]) => new THREE.Vector2(r, y));
+      const ng2 = new THREE.LatheGeometry(prof, 14);
+      ng2.rotateX(-Math.PI / 2);
+      add(ng2, od, x, cy, zf);
+      const cowl = add(new THREE.TorusGeometry(0.6, 0.06, 6, 18), odDark, x, cy, zf + 0.02);
+      cowl.visible = true;
+      add(new THREE.CircleGeometry(0.56, 16), odDark, x, cy, zf + 0.03);
+      const sp = new THREE.ConeGeometry(0.17, 0.42, 10); sp.rotateX(Math.PI / 2);
+      add(sp, odDark, x, cy, zf + 0.25);
+      { // 1.3.6: sooty exhaust staining on the upper wing aft of the cowl
+        const st = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 3.4), stainMat);
+        st.rotation.x = -Math.PI / 2; st.position.set(x, WY(ax) + (0.7 + (0.24 - 0.7) * (ax / 13)) * 0.5 + 0.03, zb - 1.0);
+        ownShip.add(st);
+      }
+      // turbo-supercharger exhaust under the nacelle
+      add(new THREE.CylinderGeometry(0.12, 0.12, 0.3, 8), odDark, x, cy - 0.5, zb + 1.2);
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(1.45, 32), propDiscMat);
+      disc.position.set(x, cy, zf + 0.34);
+      ownShip.add(disc);
+      const blades = makeBlades(1.45, 0.24);
+      blades.position.copy(disc.position);
+      ownShip.add(blades);
+      const fire = new THREE.Sprite(new THREE.SpriteMaterial({ map: flameTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95 }));
+      fire.center.set(0.5, 0.2);
+      fire.position.set(x, cy + 0.6, zf - 1.3);
+      fire.visible = false;
+      ownShip.add(fire);
+      const smokeAt = new THREE.Object3D();
+      smokeAt.position.set(x, cy + 0.8, zf - 1.9);
+      ownShip.add(smokeAt);
+      ownEngines.push({ disc, blades, fire, smokeAt, emit: 0, spin: Math.random() * 6, wind: 0 });
+    }
+    // 1.3.5: self-inflicted damage — tail fire/smoke and bullet holes
+    {
+      const fire = new THREE.Sprite(new THREE.SpriteMaterial({ map: flameTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95 }));
+      fire.center.set(0.5, 0.15);
+      fire.position.set(0, 0.9, -11.6);
+      fire.visible = false;
+      ownShip.add(fire);
+      const smokeAt = new THREE.Object3D();
+      smokeAt.position.set(0, 1.6, -12.4);
+      ownShip.add(smokeAt);
+      ownTail.fire = fire; ownTail.smokeAt = smokeAt;
+      const hc = document.createElement("canvas"); hc.width = hc.height = 32;
+      const hx = hc.getContext("2d");
+      const g = hx.createRadialGradient(16, 16, 1, 16, 16, 15);
+      g.addColorStop(0, "rgba(8,8,6,1)"); g.addColorStop(0.35, "rgba(20,18,14,0.95)");
+      g.addColorStop(0.55, "rgba(150,140,120,0.7)"); g.addColorStop(0.75, "rgba(40,36,30,0.35)"); g.addColorStop(1, "rgba(0,0,0,0)");
+      hx.fillStyle = g; hx.fillRect(0, 0, 32, 32);
+      const htex = new THREE.CanvasTexture(hc);
+      for (let i = 0; i < 80; i++) {
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: htex, transparent: true, depthWrite: false }));
+        sp.visible = false;
+        ownShip.add(sp);
+        ownHoles.push(sp);
+      }
+    }
+    // 1.3.8: oil streaks on a dead / burning engine — a strip draped over the nacelle top and wing
+    // by raycasting down onto the rendered skin (so it lies exactly on the surface)
+    {
+      const oc = document.createElement("canvas"); oc.width = 64; oc.height = 256;
+      const ox = oc.getContext("2d");
+      for (let k = 0; k < 26; k++) {
+        const x0 = 4 + Math.random() * 56, w = 1 + Math.random() * 4, len = 80 + Math.random() * 176;
+        const gg = ox.createLinearGradient(0, 256, 0, 256 - len);
+        const a = 0.35 + Math.random() * 0.55;
+        gg.addColorStop(0, "rgba(14,11,8," + a + ")"); gg.addColorStop(0.7, "rgba(24,19,12," + a * 0.6 + ")"); gg.addColorStop(1, "rgba(24,19,12,0)");
+        ox.fillStyle = gg; ox.fillRect(x0, 256 - len, w, len);
+      }
+      const otex = new THREE.CanvasTexture(oc); otex.colorSpace = THREE.SRGBColorSpace;
+      ownShip.updateMatrixWorld(true);
+      const rc = new THREE.Raycaster(), targets = [];
+      ownShip.traverse((o) => { if (o.isMesh && o.material && !o.material.transparent) targets.push(o); });
+      for (let i = 0; i < 4; i++) {
+        const E = ownEngines[i], ex = EX[i], ax = Math.abs(ex);
+        const zf = LE(ax) + (ax < 6 ? 2.7 : 2.6), zEnd = TE(ax) + 0.05;
+        const NZ = 14, xs = [-0.34, 0, 0.34], pos = [], uv = [], idx = [];
+        for (let a = 0; a < NZ; a++) {
+          const z = zf - 0.7 - (zf - 0.7 - zEnd) * (a / (NZ - 1));
+          for (let b = 0; b < 3; b++) {
+            const lx = ex + xs[b];
+            rc.set(new THREE.Vector3(CAM.x + lx, CAM.y + 6, CAM.z + z), new THREE.Vector3(0, -1, 0)); rc.far = 12;
+            const h = rc.intersectObjects(targets, false)[0];
+            const y = h ? h.point.y - CAM.y + 0.012 : WY(ax) + 0.3;
+            pos.push(lx, y, z); uv.push(b / 2, 1 - a / (NZ - 1));
+          }
+        }
+        for (let a = 0; a < NZ - 1; a++) for (let b = 0; b < 2; b++) { const q = a * 3 + b; idx.push(q, q + 3, q + 1, q + 1, q + 3, q + 4); }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx); geo.computeVertexNormals();
+        const mat = new THREE.MeshStandardMaterial({ map: otex, transparent: true, depthWrite: false, opacity: 0, roughness: 0.18, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, side: THREE.DoubleSide });
+        const oil = new THREE.Mesh(geo, mat); oil.userData.noHit = true; oil.visible = false; oil.renderOrder = 1;
+        ownShip.add(oil);
+        E.oil = oil; E.oilA = 0;
+      }
+    }
+    // ===== 1.4.0: STRUCTURAL DAMAGE driven by our ship's health =====
+    // Everything is placed once (seeded) by raycasting onto the rendered skin, hidden, and switched on as health
+    // falls past each item's threshold: hole clusters → dents/scorch → fuel/oil streaks → torn, peeled panels →
+    // missing panels; the fin and stabilizer get holes and shot-away chunks cut into their alpha maps (the sky shows
+    // through). Low health adds a trailing smoke wisp (game.js adds spider cracks in the dome and a dead engine).
+    (function buildOwnDamage() {
+      let sd = 4242; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+      const canvasTex = (w, h, draw) => { const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d"); draw(x, w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
+      const jag = (x, cx, cy, r0, r1, n) => { x.beginPath(); for (let k = 0; k <= n; k++) { const a = (k / n) * Math.PI * 2, r = r0 + (r1 - r0) * R(); const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r * (0.75 + R() * 0.4); if (k) x.lineTo(px, py); else x.moveTo(px, py); } x.closePath(); };
+      const soot = (x, cx, cy, r, a) => { const g = x.createRadialGradient(cx, cy, r * 0.1, cx, cy, r); g.addColorStop(0, `rgba(14,11,8,${a})`); g.addColorStop(0.55, `rgba(40,30,20,${a * 0.5})`); g.addColorStop(1, "rgba(0,0,0,0)"); x.fillStyle = g; x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill(); };
+      const torn = [0, 1, 2].map(() => canvasTex(128, 128, (x) => { // torn, peeled panel: dark opening, stringers, bright curled petals
+        soot(x, 64, 64, 62, 0.75);
+        x.fillStyle = "rgb(190,192,188)"; jag(x, 64, 64, 30, 50, 22); x.fill();
+        x.fillStyle = "rgb(12,10,9)"; jag(x, 64, 64, 18, 34, 18); x.fill();
+        x.save(); x.clip(); x.strokeStyle = "rgba(120,118,108,0.8)"; x.lineWidth = 3; for (let k = 0; k < 4; k++) { const yy = 34 + k * 20; x.beginPath(); x.moveTo(20, yy); x.lineTo(108, yy + 4); x.stroke(); } x.strokeStyle = "rgba(90,88,80,0.9)"; x.lineWidth = 5; x.beginPath(); x.moveTo(62, 20); x.lineTo(66, 108); x.stroke(); x.restore();
+        x.strokeStyle = "rgba(60,58,54,0.9)"; x.lineWidth = 1.2; jag(x, 64, 64, 30, 50, 22); x.stroke();
+        for (let k = 0; k < 6; k++) { const a = R() * Math.PI * 2; x.strokeStyle = "rgba(230,230,225,0.8)"; x.lineWidth = 1; x.beginPath(); x.moveTo(64 + Math.cos(a) * 30, 64 + Math.sin(a) * 30); x.lineTo(64 + Math.cos(a) * 52, 64 + Math.sin(a) * 50); x.stroke(); }
+      }));
+      const missing = canvasTex(128, 128, (x) => { // missing panel: dark bay with ribs + stringers, rivet holes round the edge
+        x.fillStyle = "rgba(30,26,22,0.6)"; x.fillRect(4, 4, 120, 120);
+        x.fillStyle = "rgb(14,12,10)"; x.fillRect(12, 16, 104, 96);
+        x.strokeStyle = "rgba(125,122,112,0.85)"; x.lineWidth = 3; for (let k = 0; k < 5; k++) { const xx = 22 + k * 21; x.beginPath(); x.moveTo(xx, 16); x.lineTo(xx, 112); x.stroke(); }
+        x.strokeStyle = "rgba(95,92,84,0.95)"; x.lineWidth = 6; x.beginPath(); x.moveTo(12, 62); x.lineTo(116, 62); x.stroke();
+        x.fillStyle = "rgba(200,200,195,0.8)"; for (let k = 14; k < 116; k += 7) { x.fillRect(k, 11, 2, 2); x.fillRect(k, 114, 2, 2); } for (let k = 18; k < 112; k += 7) { x.fillRect(7, k, 2, 2); x.fillRect(119, k, 2, 2); }
+        x.fillStyle = "rgb(185,186,182)"; x.beginPath(); x.moveTo(116, 16); x.lineTo(126, 8); x.lineTo(124, 30); x.lineTo(116, 34); x.fill(); // a torn corner left behind
+      });
+      const scorch = [0, 1].map(() => canvasTex(128, 128, (x) => { // dent + scorched paint
+        soot(x, 64, 64, 60, 0.7); soot(x, 58 + R() * 12, 60 + R() * 12, 30, 0.6);
+        for (let k = 0; k < 5; k++) soot(x, 64 + (R() - 0.5) * 50, 64 + (R() - 0.5) * 50, 14 + R() * 16, 0.45); // blotchy, no ring
+        const g = x.createRadialGradient(54, 52, 2, 64, 64, 34); g.addColorStop(0, "rgba(255,255,255,0.18)"); g.addColorStop(0.5, "rgba(0,0,0,0.25)"); g.addColorStop(1, "rgba(0,0,0,0)"); x.fillStyle = g; x.beginPath(); x.arc(64, 64, 34, 0, Math.PI * 2); x.fill();
+      }));
+      const streak = canvasTex(64, 256, (x) => { // fuel / oil streaks trailing aft (texture +v = aft)
+        for (let k = 0; k < 18; k++) { const x0 = 6 + R() * 52, w = 1 + R() * 4, len = 90 + R() * 160; const g = x.createLinearGradient(0, 0, 0, len); const a = 0.3 + R() * 0.5, oil = R() < 0.6; g.addColorStop(0, `rgba(${oil ? 16 : 70},${oil ? 12 : 52},${oil ? 8 : 26},${a})`); g.addColorStop(1, "rgba(20,16,10,0)"); x.fillStyle = g; x.fillRect(x0, 0, w, len); }
+        soot(x, 32, 14, 16, 0.8);
+      });
+      const decalMat = (map, dw) => new THREE.MeshStandardMaterial({ map, transparent: true, alphaTest: 0.03, depthWrite: false, roughness: 0.6, metalness: 0.3, polygonOffset: true, polygonOffsetFactor: dw || -4, polygonOffsetUnits: -4, side: THREE.DoubleSide });
+      const mats = { torn: torn.map((t) => decalMat(t)), missing: [decalMat(missing, -5)], scorch: scorch.map((t) => decalMat(t, -3)), streak: [decalMat(streak, -3)] };
+      ownShip.updateMatrixWorld(true);
+      const rc = new THREE.Raycaster(), targets = [];
+      ownShip.traverse((o) => { if (o.isMesh && o.material && !o.userData.noHit && (Array.isArray(o.material) || !o.material.transparent) && o.material !== propDiscMat) targets.push(o); });
+      const O = new THREE.Vector3(CAM.x, CAM.y, CAM.z);
+      const cast = (ox, oy, oz, dx, dy, dz) => { rc.set(new THREE.Vector3(ox, oy, oz).add(O), new THREE.Vector3(dx, dy, dz).normalize()); rc.far = 20; const h = rc.intersectObjects(targets, false)[0]; if (!h) return null; const n = h.face.normal.clone().transformDirection(h.object.matrixWorld); if (n.dot(rc.ray.direction) > 0) n.negate(); return { p: h.point.clone().sub(O), n, part: h.object.userData.part || null }; };
+      const pickSurf = (where) => {
+        for (let tries = 0; tries < 12; tries++) {
+          let h = null;
+          if (where === "spine") h = cast((R() - 0.5) * 1.0, 3, -1.3 - R() * 7.5, 0, -1, 0);
+          else if (where === "side") { const sg = R() < 0.5 ? -1 : 1; const z = -1.5 - R() * 8; h = cast(sg * 3, topAt(z) - 0.25 - R() * 0.35, z, -sg, -0.2, 0); }
+          else if (where === "wing") { const sg = R() < 0.5 ? -1 : 1, ax = 1.6 + R() * 8.5; h = cast(sg * ax, 3, TE(ax) + 0.3 + R() * (LE(ax) - TE(ax) - 0.7), 0, -1, 0); }
+          else if (where === "nacelle") { const i = (R() * 4) | 0, ex = EX[i], ax = Math.abs(ex); h = cast(ex + (R() - 0.5) * 0.5, 3, LE(ax) + 0.6 + R() * 1.4, 0, -1, 0); }
+          else if (where === "stab") { const sg = R() < 0.5 ? -1 : 1; h = cast(sg * (0.9 + R() * 4.2), 3, -11.2 - R() * 1.9, 0, -1, 0); }
+          else if (where === "fin") { const sg = R() < 0.5 ? -1 : 1; h = cast(sg * 3, -0.7 + R() * 2.4, -11.4 - R() * 2.0, -sg, 0, 0); }
+          if (h) return h;
+        }
+        return null;
+      };
+      const _q = new THREE.Quaternion(), _z = new THREE.Vector3(0, 0, 1);
+      const place = (mat, h, w, l, th, alongFlow) => {
+        const m = new THREE.Mesh(holeGeo, mat); m.userData.decal = true; m.userData.noHit = true; m.renderOrder = 2;
+        m.position.copy(h.p).addScaledVector(h.n, 0.008);
+        if (alongFlow) { // texture +v runs aft: local Y = −(aft projected on the surface), local Z = normal
+          const aft = new THREE.Vector3(0, 0, -1); aft.addScaledVector(h.n, -aft.dot(h.n)).normalize();
+          const yv = aft.clone().negate(), xv = new THREE.Vector3().crossVectors(yv, h.n).normalize();
+          m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xv, yv, h.n));
+          m.position.addScaledVector(aft, l * 0.45);
+        } else { _q.setFromUnitVectors(_z, h.n); m.quaternion.copy(_q); m.rotateZ(R() * Math.PI * 2); }
+        m.scale.set(w, l, 1); m.visible = false; ownShip.add(m);
+        ownDmg.items.push({ th, obj: m });
+        return m;
+      };
+      const where = (w) => { const r = R(); for (const [k, p] of w) { if (r < p) return k; } return w[w.length - 1][0]; };
+      const WH = [["spine", 0.5], ["side", 0.58], ["wing", 0.85], ["nacelle", 0.92], ["stab", 1]];
+      // hole clusters: 22, from the first hits down to the wreck
+      for (let i = 0; i < 30; i++) {
+        const h = pickSurf(where(WH)); if (!h) continue;
+        const th = 97 - i * 3.2, n = 6 + ((R() * 9) | 0);
+        for (let k = 0; k < n; k++) {
+          const hh = { p: h.p.clone(), n: h.n.clone() };
+          const t1 = new THREE.Vector3(1, 0, 0).cross(h.n); if (t1.lengthSq() < 0.01) t1.set(0, 0, 1).cross(h.n); t1.normalize(); const t2 = new THREE.Vector3().crossVectors(h.n, t1);
+          const rr = 0.5 * Math.sqrt(R()), a = R() * Math.PI * 2; hh.p.addScaledVector(t1, Math.cos(a) * rr).addScaledVector(t2, Math.sin(a) * rr);
+          const s2 = 0.09 + R() * 0.11; place(holeTexs[(R() * 4) | 0], hh, s2, s2 * (0.8 + R() * 0.4), th - k * 0.4, false);
+        }
+      }
+      for (let i = 0; i < 14; i++) { const h = pickSurf(where([["spine", 0.3], ["side", 0.4], ["wing", 0.85], ["nacelle", 1]])); if (h) { const s2 = 0.6 + R() * 0.9; place(mats.scorch[i % 2], h, s2, s2, 84 - i * 5.5, false); } }
+      for (let i = 0; i < 6; i++) { const h = pickSurf(where([["wing", 0.55], ["nacelle", 0.8], ["spine", 1]])); if (h) place(mats.streak[0], h, 0.3 + R() * 0.25, 1.8 + R() * 1.6, 58 - i * 9, true); }
+      for (let i = 0; i < 13; i++) { // torn, peeled panels + a curled flap of bare skin standing proud
+        const h = pickSurf(where([["spine", 0.3], ["side", 0.4], ["wing", 0.88], ["stab", 1]])); if (!h) continue;
+        const s2 = 0.42 + R() * 0.4, th = 68 - i * 5.1;
+        place(mats.torn[i % 3], h, s2, s2 * (0.8 + R() * 0.4), th, false);
+        const fg3 = new THREE.PlaneGeometry(s2 * 0.55, s2 * 0.45, 4, 4); const fp = fg3.attributes.position;
+        for (let k = 0; k < fp.count; k++) { const yy = fp.getY(k) / (s2 * 0.45) + 0.5; fp.setZ(k, yy * yy * s2 * 0.35); }
+        fg3.computeVertexNormals();
+        const flap = new THREE.Mesh(fg3, new THREE.MeshStandardMaterial({ color: 0xbfc3c6, roughness: 0.3, metalness: 0.85, envMapIntensity: 1.0, side: THREE.DoubleSide }));
+        flap.userData.noHit = true;
+        const t1 = new THREE.Vector3(0, 0, 1).cross(h.n); if (t1.lengthSq() < 0.01) t1.set(1, 0, 0); t1.normalize();
+        flap.position.copy(h.p).addScaledVector(h.n, 0.01).addScaledVector(new THREE.Vector3().crossVectors(h.n, t1), s2 * 0.3);
+        flap.quaternion.setFromUnitVectors(_z, h.n); flap.rotateX(-0.9 - R() * 0.5); flap.rotateZ((R() - 0.5) * 0.8);
+        flap.visible = false; ownShip.add(flap); ownDmg.items.push({ th: th - 2, obj: flap });
+      }
+      for (let i = 0; i < 10; i++) { const h = pickSurf(where([["spine", 0.3], ["side", 0.4], ["wing", 1]])); if (h) { const s2 = 0.6 + R() * 0.45; place(mats.missing[0], h, s2, s2 * (0.7 + R() * 0.3), 48 - i * 4.6, false); } }
+      // fin + stabilizer: holes and shot-away chunks in the cut maps (shape coords: fin (z, y), stab (x, z))
+      const fc = ownDmg.cuts[1], scm = ownDmg.cuts[0];
+      const holesEv = (cm, th, cx, cy, spread, n, r) => { const pts = []; for (let k = 0; k < n; k++) pts.push([cx + (R() - 0.5) * spread, cy + (R() - 0.5) * spread, r * (0.6 + R() * 0.8)]); cm.events.push({ th, draw: (x) => { for (const [a, b, rr] of pts) { x.beginPath(); x.arc(cm.px(a), cm.py(b), rr, 0, Math.PI * 2); x.fill(); } } }); };
+      const chunkEv = (cm, th, poly) => { const pp = poly.map(([a, b]) => [a + (R() - 0.5) * 0.12, b + (R() - 0.5) * 0.12]); cm.events.push({ th, draw: (x) => { x.beginPath(); pp.forEach(([a, b], k) => { const X = cm.px(a), Y = cm.py(b); if (k) x.lineTo(X, Y); else x.moveTo(X, Y); }); x.closePath(); x.fill(); } }); };
+      holesEv(fc, 88, -12.3, 0.9, 0.9, 7, 5); holesEv(fc, 72, -12.9, 0.1, 0.8, 8, 5.5); holesEv(fc, 55, -11.9, 1.4, 0.6, 7, 5); holesEv(fc, 38, -13.3, 1.1, 0.7, 9, 6); holesEv(fc, 20, -12.5, -0.4, 1.0, 11, 6.5);
+      holesEv(scm, 80, 3.2, -11.9, 1.2, 9, 6); holesEv(scm, 62, -2.6, -12.2, 1.2, 10, 6); holesEv(scm, 44, -4.3, -12.6, 1.0, 9, 7); holesEv(scm, 26, 1.8, -12.9, 1.2, 11, 7.5); holesEv(scm, 14, -1.5, -11.6, 1.4, 12, 8);
+      chunkEv(fc, 32, [[-13.0, 2.2], [-12.55, 1.62], [-12.9, 1.28], [-13.35, 1.5], [-13.7, 1.3], [-13.9, 2.2]]);     // top of the rudder shot away
+      chunkEv(scm, 22, [[5.9, -12.1], [4.9, -12.35], [4.6, -12.8], [5.05, -13.05], [4.75, -13.45], [5.9, -13.6]]);   // port stab tip gone
+      chunkEv(fc, 12, [[-13.9, 0.9], [-13.5, 0.75], [-13.3, 0.1], [-13.62, -0.3], [-13.3, -0.62], [-14.0, -0.8]]);  // rudder trailing edge torn out
+      chunkEv(scm, 8, [[-5.9, -12.9], [-5.3, -12.75], [-4.9, -13.1], [-5.2, -13.6], [-5.9, -13.6]]);                // starboard elevator tip
+      chunkEv(fc, 16, [[-11.4, 2.3], [-11.6, 1.62], [-11.95, 1.78], [-12.3, 1.42], [-12.7, 1.66], [-13.0, 1.5], [-13.4, 1.72], [-14.0, 1.55], [-14.0, 2.3]]); // the fin tip shot off (silhouette drops edge-on)
+      chunkEv(fc, 4, [[-11.2, 2.3], [-11.3, 1.2], [-11.7, 1.28], [-12.1, 0.95], [-12.5, 1.25], [-12.9, 1.02], [-13.3, 1.3], [-14.0, 1.1], [-14.0, 2.3]]);  // …and most of the top third
+      // skin torn up and standing proud of the fin + stab (reads edge-on from the turret, where cut-outs can't)
+      const flapM = new THREE.MeshStandardMaterial({ color: 0xc4c8cc, roughness: 0.3, metalness: 0.85, envMap: aluEnv, envMapIntensity: 1.0, side: THREE.DoubleSide });
+      const petal = (th, x, y, z, nx, s2, rz) => {
+        const g = new THREE.PlaneGeometry(s2, s2 * 0.8, 3, 3); const fp = g.attributes.position;
+        for (let k = 0; k < fp.count; k++) { const yy = fp.getY(k) / (s2 * 0.8) + 0.5, xx = fp.getX(k) / s2; fp.setZ(k, yy * yy * s2 * 0.5); fp.setX(k, fp.getX(k) * (1 - 0.5 * yy) + xx * 0.02); }
+        g.computeVertexNormals();
+        const m = new THREE.Mesh(g, flapM); m.userData.noHit = true;
+        m.position.set(x, y, z); m.quaternion.setFromUnitVectors(_z, new THREE.Vector3(nx[0], nx[1], nx[2]).normalize()); m.rotateX(-1.0); m.rotateZ(rz);
+        m.visible = false; ownShip.add(m); ownDmg.items.push({ th, obj: m });
+      };
+      petal(52, 0.12, 0.9, -12.2, [1, 0, 0], 0.32, 0.4); petal(34, -0.12, 0.35, -12.9, [-1, 0, 0], 0.4, -0.6); petal(18, 0.11, 1.35, -11.95, [1, 0, 0], 0.36, 2.2);
+      petal(9, -0.1, -0.2, -12.4, [-1, 0, 0], 0.46, 1.1); petal(40, 2.7, -1.25, -12.1, [0, 1, 0], 0.42, 0.9); petal(24, -3.4, -1.25, -12.5, [0, 1, 0], 0.5, -1.4);
+      // trailing smoke wisp source (aft spine, above the radio room)
+      const wsp = new THREE.Object3D(); wsp.position.set(0.25, topAt(-5.2) + 0.05, -5.2); ownShip.add(wsp); ownDmg.wisp = wsp;
+    })();
+    ownShip.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+  })();
+  const _ov = new THREE.Vector3();
+  const _fallE = new THREE.Euler();
+  let _ownT = performance.now();
+  function updateOwnShip(opts) {
+    const now = performance.now();
+    const rdt = Math.min(0.25, (now - _ownT) / 1000);
+    const dt = Math.min(0.05, rdt);
+    _ownT = now;
+    const FALL = opts.fall;
+    if (FALL && FALL.ship) { // 1.3.8: shot down — the airframe spins and falls away (keeps falling under the chute)
+      const S = FALL.ship;
+      ownShip.position.set(S.x, S.y, S.z);
+      ownShip.quaternion.setFromEuler(_fallE.set(S.pd || 0, S.yaw || 0, -(S.roll || 0), "YXZ"));
+    } else {
+      ownShip.position.set(CAM.x, CAM.y, CAM.z);
+      ownShip.rotation.set(0, 0, -(opts.roll || 0));
+    }
+    ownShip.updateMatrixWorld(true);
+    const engs = (opts.own && opts.own.engines) || [];
+    for (let i = 0; i < 4; i++) {
+      const E = ownEngines[i], st = engs[i] || { fire: 0, out: false };
+      const out = !!st.out;
+      E.disc.visible = !out;
+      E.blades.visible = out;
+      if (ownShip.userData.contrails) ownShip.userData.contrails[i].on = !out;
+      if (!out) E.disc.rotation.z += dt * 33;
+      else { // feathered: windmills down to a stop
+        E.wind = Math.max(0, (E.wind == null ? 3 : E.wind) - dt * 0.8);
+        E.blades.rotation.z += E.wind * dt;
+      }
+      if (!out) E.wind = 3;
+      const burning = st.fire > 0.3 && st.fire < 0.97 || (out && st.fire > 0.5);
+      E.fire.visible = burning;
+      if (E.oil) { // oil streaks grow on a hit / dead engine and stay
+        const want = out ? 0.9 : st.fire > 0.25 ? 0.5 : 0;
+        E.oilA = want > E.oilA ? Math.min(want, E.oilA + dt * 0.12) : E.oilA;
+        if (st.fire < 0.02 && !out) E.oilA = 0; // new mission / repaired
+        E.oil.visible = E.oilA > 0.01; E.oil.material.opacity = E.oilA;
+      }
+      if (burning) {
+        const s = (0.45 + st.fire * 0.5) * (0.8 + Math.random() * 0.4);
+        E.fire.scale.set(s * 0.7, s * (1.2 + Math.random() * 0.5), 1);
+        E.fire.material.opacity = 0.7 + Math.random() * 0.3;
+      }
+      const smoking = st.fire > 0.1 || out;
+      if (smoking) {
+        E.emit -= rdt;
+        for (let n = 0; n < 5 && E.emit <= 0; n++) { // 1.4.0: continuous ribbon trail
+          E.smokeAt.getWorldPosition(_ov);
+          const dk = burning || out;
+          ribbonEmit("own" + i, _ov, { w0: 0.45, w1: dk ? 4.2 : 3.0, life: 2.4, a: dk ? 0.58 : 0.42, col: dk ? [0.2, 0.195, 0.19] : [0.6, 0.6, 0.58], drift: 45 });
+          E.emit += 0.04;
+        }
+        if (E.emit < 0) E.emit = 0;
+      }
+    }
+    // 1.3.5: our own tail, shot up by our own turret
+    const tl = opts.own && opts.own.tail;
+    if (tl && ownTail.fire) {
+      const tf = tl.fire || 0;
+      const burning = tf > 0.4;
+      ownTail.fire.visible = burning;
+      if (burning) {
+        const s = (0.5 + tf * 0.7) * (0.8 + Math.random() * 0.4);
+        ownTail.fire.scale.set(s * 0.8, s * (1.3 + Math.random() * 0.6), 1);
+        ownTail.fire.material.opacity = 0.7 + Math.random() * 0.3;
+      }
+      if (tf > 0.08) {
+        ownTail.emit -= rdt;
+        for (let n = 0; n < 4 && ownTail.emit <= 0; n++) {
+          ownTail.smokeAt.getWorldPosition(_ov);
+          _ov.z -= n * 0.6;
+          emitSmoke(_ov, burning, false, { life: 2.4, vz: -11, s0: 0.5 + n * 0.15, s1: burning ? 3.6 : 2.6, a: burning ? 0.6 : 0.4, color: burning ? 0x34322f : 0x8e8c88 });
+          ownTail.emit += burning ? 0.045 : 0.09;
+        }
+        if (ownTail.emit < 0) ownTail.emit = 0;
+      }
+    }
+    // 1.4.0: structural damage by health
+    {
+      const hp = opts.own && opts.own.health != null ? opts.own.health : 100;
+      for (const it of ownDmg.items) it.obj.visible = hp < it.th;
+      for (const cm of ownDmg.cuts) {
+        const n = cm.events.reduce((a, e) => a + (hp < e.th ? 1 : 0), 0);
+        if (n !== cm.n) {
+          cm.n = n; const x = cm.ctx; x.globalCompositeOperation = "source-over"; x.fillStyle = "#fff"; x.fillRect(0, 0, cm.W, cm.H);
+          x.fillStyle = "#000"; for (const e of cm.events) if (hp < e.th) e.draw(x);
+          cm.tex.needsUpdate = true;
+        }
+      }
+      if (hp < 25 && ownDmg.wisp) { // a thin trailing smoke wisp, darker and thicker near the end
+        ownDmg.wispT -= rdt;
+        const heavy = hp < 10;
+        while (ownDmg.wispT <= 0) {
+          ownDmg.wisp.getWorldPosition(_ov);
+          if (true) ribbonEmit("ownwisp", _ov, { w0: heavy ? 0.35 : 0.2, w1: heavy ? 4.5 : 2.6, life: heavy ? 3.2 : 2.4, a: heavy ? 0.5 : 0.28, col: heavy ? [0.22, 0.21, 0.2] : [0.62, 0.61, 0.6] });
+          else emitSmoke(_ov, heavy, false, { life: heavy ? 2.6 : 2.0, vz: -30, s0: heavy ? 0.5 : 0.3, s1: heavy ? 4 : 2.4, a: heavy ? 0.45 : 0.25, color: heavy ? 0x3a3836 : 0x9e9c98 });
+          ownDmg.wispT += heavy ? 0.04 : 0.07;
+        }
+      }
+    }
+    const holes = []; // 1.3.8: the old floating sprite 'rings' are gone — holes are raycast decals (addHole)
+    for (let i = 0; i < ownHoles.length; i++) {
+      const sp = ownHoles[i], h = holes[i];
+      if (!h) { sp.visible = false; continue; }
+      const L = Math.hypot(h.x, h.y, h.z) || 1, k = Math.max(0.2, 1 - 0.1 / L); // nudge toward the eye
+      sp.position.set(h.x * k, h.y * k, h.z * k);
+      const sc = 0.2 + Math.min(0.25, L * 0.012);
+      sp.scale.set(sc, sc, 1);
+      sp.visible = true;
+    }
+  }
+
+  // ===== 1.3.8: DAMAGE DECALS — punctured skin placed by a real raycast on the rendered mesh =====
+  // Hit point + face normal from THREE.Raycaster on the actual (rolled / banked / spinning) airframe,
+  // decal parented to the airframe group in its local frame (moves with it), depth-tested with a
+  // polygon offset (hidden when that skin is out of view). Dark torn holes with bare-metal petals.
+  const _rc = new THREE.Raycaster();
+  const _ro = new THREE.Vector3(), _rd = new THREE.Vector3(), _rn = new THREE.Vector3(), _rq = new THREE.Quaternion(), _rz = new THREE.Vector3(0, 0, 1);
+  function hitList(g) {
+    if (g.userData.hitList) return g.userData.hitList;
+    const L = [];
+    g.traverse((o) => { if (o.isMesh && (o.material === propDiscMat || o.material === propBladeMat)) o.userData.prop = true; if (o.isMesh && !o.userData.noHit && !o.userData.decal && o.material) L.push(o); });
+    g.userData.hitList = L.filter((o) => !(o.material.transparent && o.material.depthWrite === false && !o.userData.prop));
+    return g.userData.hitList;
+  }
+  function chainVisible(o, root) { for (let q = o; q && q !== root; q = q.parent) if (!q.visible) return false; return root.visible; }
+  function shipGroup(which) { return which === "own" ? ownShip : friendlyPool[which]; }
+  // world-space segment vs the rendered airframe → first surface hit (world point + outward normal)
+  const _rsE = new THREE.Euler();
+  function rayShip(which, x0, y0, z0, x1, y1, z1, pose) {
+    const g = shipGroup(which);
+    if (!g || !g.visible) return null;
+    // 1.3.8: pose the airframe from the sim's CURRENT transform (position, heading, pitch, bank/roll, spin) — never a stale frame
+    if (pose) { g.position.set(pose.x, pose.y, pose.z); g.quaternion.setFromEuler(_rsE.set(pose.rx || 0, pose.ry || 0, pose.rz || 0, "YXZ")); }
+    g.updateMatrixWorld(true);
+    _ro.set(x0, y0, z0); _rd.set(x1 - x0, y1 - y0, z1 - z0);
+    const len = _rd.length(); if (len < 1e-6) return null;
+    _rd.multiplyScalar(1 / len);
+    _rc.set(_ro, _rd); _rc.near = 0; _rc.far = len;
+    const hits = _rc.intersectObjects(hitList(g), false);
+    for (const h of hits) {
+      if (!chainVisible(h.object, g)) continue;
+      _rn.copy(h.face ? h.face.normal : _rd).transformDirection(h.object.matrixWorld);
+      if (_rn.dot(_rd) > 0) _rn.negate();
+      return { x: h.point.x, y: h.point.y, z: h.point.z, nx: _rn.x, ny: _rn.y, nz: _rn.z, t: h.distance / len, prop: !!h.object.userData.prop, part: h.object.userData.part || null };
+    }
+    return null;
+  }
+  const _hl = new THREE.Vector3(), _hn = new THREE.Vector3(), _gq = new THREE.Quaternion();
+  function addHole(which, h, size) {
+    const g = shipGroup(which);
+    if (!g || !h || h.prop) return false;
+    g.updateMatrixWorld(true);
+    const list = g.userData.decals || (g.userData.decals = []);
+    const cap = which === "own" ? 90 : 36;
+    let m;
+    if (list.length >= cap) { m = list.shift(); } else { m = new THREE.Mesh(holeGeo, holeTexs[0]); m.userData.decal = true; m.userData.noHit = true; m.renderOrder = 2; g.add(m); }
+    m.material = holeTexs[(Math.random() * 4) | 0];
+    _hl.set(h.x, h.y, h.z); g.worldToLocal(_hl);
+    g.getWorldQuaternion(_gq).invert();
+    _hn.set(h.nx, h.ny, h.nz).applyQuaternion(_gq).normalize();
+    m.position.copy(_hl).addScaledVector(_hn, 0.006);
+    _rq.setFromUnitVectors(_rz, _hn);
+    m.quaternion.copy(_rq);
+    m.rotateZ(Math.random() * Math.PI * 2);
+    const s = (size || 0.1) * (0.7 + Math.random() * 0.6);
+    m.scale.set(s, s * (0.8 + Math.random() * 0.4), 1);
+    m.visible = true;
+    list.push(m);
+    return true;
+  }
+  function clearDamage() {
+    for (const g of [ownShip, ...friendlyPool]) {
+      const list = g.userData.decals || [];
+      for (const m of list) g.remove(m);
+      g.userData.decals = [];
+      g.userData.fxDone = false;
+    }
+  }
+  // ===== 1.3.8: 109 hit test against the rendered airframe at the fighter's CURRENT attitude =====
+  // One invisible probe clone per type is posed exactly as updateFighters poses the live mesh
+  // (nose = h, canopy = lift vector u → heading, pitch, bank; wreck spin excluded — wrecks are not hit).
+  const fProbes = {};
+  const _pf = new THREE.Vector3(), _pu = new THREE.Vector3(), _pr = new THREE.Vector3(), _pm = new THREE.Matrix4(), _pq = new THREE.Quaternion(), _pw = new THREE.Vector3();
+  function fighterProbe(kind) {
+    const k = kind === "110" ? "109" : (kind || "109");
+    if (fProbes[k] !== undefined) return fProbes[k];
+    const m = prototypes[k] || prototypes["109"] ? cloneFighter(k) : null;
+    if (!m) return null; // models not loaded yet → caller falls back
+    scene.remove(m); m.visible = true;
+    // probe only (never drawn): both faces count, so a thin single-skin wing is solid from either side
+    m.traverse((o) => { if (o.isMesh && o.material) { const mats = Array.isArray(o.material) ? o.material : [o.material]; o.material = mats.length === 1 ? mats[0].clone() : mats.map((x) => x.clone()); (Array.isArray(o.material) ? o.material : [o.material]).forEach((x) => { x.side = THREE.DoubleSide; }); } });
+    fProbes[k] = m;
+    return m;
+  }
+  // 1.3.9: projected silhouette area of each fighter type seen along its local X (side), Y (top) and
+  // Z (nose) axes — CPU-rasterised once from the hit mesh (root-local units, i.e. before the ×base scale).
+  const fAreas = {};
+  function fighterAreas(kind) {
+    const k = kind === "110" ? "109" : (kind || "109");
+    if (fAreas[k]) return fAreas[k];
+    const m = fighterProbe(k);
+    if (!m) return null;
+    const P = m.position.clone(), Q = m.quaternion.clone(), S = m.scale.clone();
+    m.position.set(0, 0, 0); m.quaternion.identity(); m.scale.setScalar(1); m.updateMatrixWorld(true);
+    const tris = [], v = new THREE.Vector3(), bb = new THREE.Box3();
+    for (const o of fighterHitList(m)) {
+      const g = o.geometry, pa = g.attributes.position, ix = g.index, n = ix ? ix.count : pa.count;
+      const w = [];
+      for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i).applyMatrix4(o.matrixWorld); w.push(v.x, v.y, v.z); bb.expandByPoint(v); }
+      for (let i = 0; i + 2 < n; i += 3) { const a = ix ? ix.getX(i) : i, b = ix ? ix.getX(i + 1) : i + 1, c = ix ? ix.getX(i + 2) : i + 2; tris.push(w[a * 3], w[a * 3 + 1], w[a * 3 + 2], w[b * 3], w[b * 3 + 1], w[b * 3 + 2], w[c * 3], w[c * 3 + 1], w[c * 3 + 2]); }
+    }
+    m.position.copy(P); m.quaternion.copy(Q); m.scale.copy(S); m.updateMatrixWorld(true);
+    const N = 192, out = [0, 0, 0];
+    const mn = [bb.min.x, bb.min.y, bb.min.z], ext = [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z];
+    for (let ax = 0; ax < 3; ax++) {
+      const u = (ax + 1) % 3, w2 = (ax + 2) % 3, cu = ext[u] / N || 1e-3, cw = ext[w2] / N || 1e-3;
+      const grid = new Uint8Array(N * N);
+      for (let t = 0; t < tris.length; t += 9) {
+        const x0 = (tris[t + u] - mn[u]) / cu, y0 = (tris[t + w2] - mn[w2]) / cw, x1 = (tris[t + 3 + u] - mn[u]) / cu, y1 = (tris[t + 3 + w2] - mn[w2]) / cw, x2 = (tris[t + 6 + u] - mn[u]) / cu, y2 = (tris[t + 6 + w2] - mn[w2]) / cw;
+        const den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+        if (Math.abs(den) < 1e-9) continue;
+        const ia = Math.max(0, Math.floor(Math.min(x0, x1, x2))), ib = Math.min(N - 1, Math.ceil(Math.max(x0, x1, x2))), ja = Math.max(0, Math.floor(Math.min(y0, y1, y2))), jb = Math.min(N - 1, Math.ceil(Math.max(y0, y1, y2)));
+        for (let j = ja; j <= jb; j++) for (let i = ia; i <= ib; i++) {
+          const px = i + 0.5, py = j + 0.5;
+          const l1 = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) / den, l2 = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) / den;
+          if (l1 >= -0.02 && l2 >= -0.02 && l1 + l2 <= 1.02) grid[j * N + i] = 1;
+        }
+      }
+      let c = 0; for (let i = 0; i < grid.length; i++) c += grid[i];
+      out[ax] = c * cu * cw;
+    }
+    fAreas[k] = { side: out[0], top: out[1], front: out[2] };
+    return fAreas[k];
+  }
+  function fighterHitList(m) {
+    if (m.userData.fHit) return m.userData.fHit;
+    const L = [];
+    m.traverse((o) => {
+      if (!o.isMesh || !o.visible || o.userData.isShadow || o.userData.decal || o.userData.noHit) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      const nm = ((o.name || "") + " " + mats.map((x) => (x && x.name) || "").join(" ")).toLowerCase();
+      if (nm.includes("disc") || mats.some((x) => x && (x.userData.tr0 != null ? x.userData.tr0 : x.transparent) && (x.userData.op0 != null ? x.userData.op0 : x.opacity) < 0.5)) return; // prop blur disc: not metal
+      L.push(o);
+    });
+    m.userData.fHit = L;
+    return L;
+  }
+  function poseFighter(m, e) {
+    const base = e.type === "190" ? 1.4 : e.type === "110" ? 1.6 : 1.3;
+    m.scale.setScalar(base);
+    m.position.set(e.x, e.y, e.z);
+    if (e.ux != null) {
+      _pf.set(e.hx, e.hy, e.hz).normalize();
+      _pu.set(e.ux, e.uy, e.uz); _pu.addScaledVector(_pf, -_pu.dot(_pf)).normalize();
+      _pr.crossVectors(_pu, _pf).negate();
+      _pw.copy(_pf).negate();
+      _pm.makeBasis(_pr, _pu, _pw);
+      m.quaternion.setFromRotationMatrix(_pm);
+    } else {
+      _pf.set(e.hx != null ? e.hx : e.vx || 0, e.hx != null ? e.hy : e.vy || 0, e.hx != null ? e.hz : e.vz || -1);
+      if (_pf.lengthSq() < 1e-6) _pf.set(0, 0, -1);
+      _pf.normalize();
+      _pr.crossVectors(new THREE.Vector3(0, 1, 0), _pf); if (_pr.lengthSq() < 1e-6) _pr.set(1, 0, 0); _pr.normalize();
+      _pu.crossVectors(_pf, _pr).normalize();
+      _pm.makeBasis(_pr.clone().negate(), _pu, _pf.clone().negate());
+      m.quaternion.setFromRotationMatrix(_pm);
+      m.quaternion.premultiply(_pq.setFromAxisAngle(_pf, -(e.bank || 0)));
+    }
+    m.updateMatrixWorld(true);
+  }
+  const _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _to = new THREE.Vector3();
+  const TOL_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.71, 0.71], [-0.71, 0.71], [0.71, -0.71], [-0.71, -0.71]];
+  // tol (world units, optional): a round whose line passes within `tol` of the skin still strikes it — the
+  // strike point is then the skin point hit by the nearest parallel offset ray (so sparks/holes stay ON the mesh)
+  function rayFighter(e, x0, y0, z0, x1, y1, z1, tol) {
+    const m = fighterProbe(e.type);
+    if (!m) return undefined; // not ready
+    poseFighter(m, e);
+    _ro.set(x0, y0, z0); _rd.set(x1 - x0, y1 - y0, z1 - z0);
+    const len = _rd.length(); if (len < 1e-6) return null;
+    _rd.multiplyScalar(1 / len);
+    _rc.set(_ro, _rd); _rc.near = 0; _rc.far = len;
+    const L = fighterHitList(m);
+    let hits = _rc.intersectObjects(L, false), off = 0;
+    if (!hits.length && tol > 0) {
+      _ta.set(0, 1, 0).cross(_rd); if (_ta.lengthSq() < 1e-6) _ta.set(1, 0, 0); _ta.normalize(); _tb.crossVectors(_rd, _ta).normalize();
+      for (const fr of [0.5, 1]) {
+        for (const q of TOL_DIRS) {
+          _to.copy(_ro).addScaledVector(_ta, q[0] * tol * fr).addScaledVector(_tb, q[1] * tol * fr);
+          _rc.set(_to, _rd); _rc.near = 0; _rc.far = len;
+          hits = _rc.intersectObjects(L, false);
+          if (hits.length) { off = tol * fr; break; }
+        }
+        if (hits.length) break;
+      }
+    }
+    if (!hits.length) return null;
+    const h = hits[0];
+    _rn.copy(h.face ? h.face.normal : _rd).transformDirection(h.object.matrixWorld);
+    if (_rn.dot(_rd) > 0) _rn.negate();
+    _hl.copy(h.point); m.worldToLocal(_hl);
+    _gq.copy(m.quaternion).invert(); _hn.copy(_rn).applyQuaternion(_gq).normalize();
+    return { x: h.point.x, y: h.point.y, z: h.point.z, nx: _rn.x, ny: _rn.y, nz: _rn.z, t: h.distance / len, off,
+      lx: _hl.x, ly: _hl.y, lz: _hl.z, lnx: _hn.x, lny: _hn.y, lnz: _hn.z };
+  }
+  function fighterBoundR(kind) {
+    const m = fighterProbe(kind); if (!m) return 0;
+    if (m.userData.bR) return m.userData.bR;
+    m.position.set(0, 0, 0); m.quaternion.identity(); m.scale.setScalar(1); m.updateMatrixWorld(true);
+    const b = new THREE.Box3(); for (const o of fighterHitList(m)) b.expandByObject(o);
+    m.userData.bR = Math.max(b.min.length(), b.max.length());
+    return m.userData.bR;
+  }
+  // bullet hole on the LIVE mesh of that bandit, in its local frame (moves/banks/spins with it)
+  function addFighterHole(e, h, size) {
+    const si = slotOf.get(e.id); if (si == null) return false;
+    const slot = fighterPool[si]; const m = slot && slot.mesh; if (!m || !h || h.lx == null) return false;
+    const list = m.userData.decals || (m.userData.decals = []);
+    let d;
+    if (list.length >= 24) d = list.shift(); else { d = new THREE.Mesh(holeGeo, holeTexs[0]); d.userData.decal = true; d.userData.noHit = true; d.renderOrder = 2; m.add(d); }
+    d.material = holeTexs[(Math.random() * 4) | 0];
+    _hn.set(h.lnx, h.lny, h.lnz).normalize();
+    const ms = m.scale.x || 1;
+    d.position.set(h.lx, h.ly, h.lz).addScaledVector(_hn, 0.006 / ms);
+    _rq.setFromUnitVectors(_rz, _hn); d.quaternion.copy(_rq); d.rotateZ(Math.random() * Math.PI * 2);
+    const s = (size || 0.12) * (0.7 + Math.random() * 0.6) / ms;
+    d.scale.set(s, s, 1); d.visible = true;
+    list.push(d);
+    return true;
+  }
+  function fighterMeshDump(kind) {
+    const m = fighterProbe(kind); if (!m) return null; const out = [];
+    m.traverse((o) => { if (!o.isMesh) return; const mats = Array.isArray(o.material) ? o.material : [o.material]; const b = new THREE.Box3().setFromObject(o);
+      out.push({ n: o.name, vis: o.visible, mats: mats.map((x) => x && [x.name, x.transparent, x.opacity, x.side, x.type]), inList: fighterHitList(m).includes(o), min: b.min.toArray().map((v) => +v.toFixed(2)), max: b.max.toArray().map((v) => +v.toFixed(2)) }); });
+    return out;
+  }
+  function fighterDecalInfo(id) {
+    const si = slotOf.get(id); if (si == null) return null;
+    const m = fighterPool[si].mesh; if (!m) return null;
+    m.updateMatrixWorld(true);
+    return (m.userData.decals || []).map((d) => { const w = d.getWorldPosition(new THREE.Vector3()); return { x: w.x, y: w.y, z: w.z }; });
+  }
+  // ===== 1.3.8: PARACHUTES (US white gores / German beige) and our own canopy overhead =====
+  const goreTex = (base) => {
+    const c = document.createElement("canvas"); c.width = 128; c.height = 32;
+    const x = c.getContext("2d");
+    for (let k = 0; k < 16; k++) { const v = k % 2 ? 0 : 14; x.fillStyle = `rgb(${base[0] - v},${base[1] - v},${base[2] - v})`; x.fillRect(k * 8, 0, 8, 32); x.fillStyle = "rgba(90,85,70,0.5)"; x.fillRect(k * 8, 0, 1, 32); }
+    x.fillStyle = "rgba(60,55,45,0.35)"; x.fillRect(0, 29, 128, 3);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  };
+  const chuteMatUS = new THREE.MeshLambertMaterial({ map: goreTex([236, 232, 218]), side: THREE.DoubleSide, fog: true });
+  const chuteMatDE = new THREE.MeshLambertMaterial({ map: goreTex([214, 196, 160]), side: THREE.DoubleSide, fog: true });
+  const chuteBody = new THREE.MeshLambertMaterial({ color: 0x3b3a2c, fog: true });
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x6a665a, transparent: true, opacity: 0.8, fog: true });
+  const canopyGeo = new THREE.SphereGeometry(1, 16, 6, 0, Math.PI * 2, 0, 1.15);
+  const lineGeo = (() => {
+    const p = [];
+    for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2; p.push(Math.cos(a) * Math.sin(1.15), Math.cos(1.15), Math.sin(a) * Math.sin(1.15), 0, -1.45, 0); }
+    return new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+  })();
+  const bodyGeo = new THREE.CylinderGeometry(0.2, 0.17, 1.15, 6);
+  const chutePool = [];
+  function makeChute(mat) {
+    const g = new THREE.Group();
+    const can = new THREE.Group();
+    const dome = new THREE.Mesh(canopyGeo, mat); can.add(dome);
+    const lines = new THREE.LineSegments(lineGeo, lineMat); can.add(lines);
+    g.add(can);
+    const body = new THREE.Mesh(bodyGeo, chuteBody); g.add(body);
+    g.userData = { can, dome, lines, body };
+    g.visible = false; scene.add(g);
+    return g;
+  }
+  for (let i = 0; i < 72; i++) chutePool.push(makeChute(chuteMatUS));
+  function updateChutes3D(list) {
+    list = list || [];
+    for (let i = 0; i < chutePool.length; i++) {
+      const g = chutePool[i], c = list[i];
+      if (!c) { g.visible = false; continue; }
+      g.visible = true;
+      const U = g.userData;
+      U.dome.material = c.kind === "de" ? chuteMatDE : chuteMatUS;
+      g.position.set(c.x, c.y, c.z);
+      const o = c.open || 0, R = 2.8;
+      // streamer (tall, narrow) → blossoming canopy
+      const w = 0.12 + 0.88 * Math.pow(o, 0.7), hgt = o > 0 ? 1 : 0.2;
+      U.can.position.set(0, 0.6 + (1.2 + 2.9 * o) * (o > 0 ? 1 : 0.3), 0);
+      U.can.scale.set(R * w, R * (o > 0 ? (0.55 + 0.25 * o) : 1.6) * hgt + 0.3, R * w);
+      U.lines.visible = o > 0.05;
+      U.can.visible = o > 0 || c.t > 0.4;
+      const sw = Math.sin((c.t || 0) * 0.9 + c.id) * 0.12 * o;
+      g.rotation.set(sw * 0.6, 0, sw);
+      U.body.rotation.set(o > 0 ? 0 : (c.t || 0) * 3, 0, o > 0 ? 0 : (c.t || 0) * 2.2);
+    }
+  }
+  // our own canopy, seen from the harness: dome ~3u above, 12 shroud lines to the risers, boots below
+  const ownChute = new THREE.Group();
+  {
+    const dome = new THREE.Mesh(canopyGeo, chuteMatUS); dome.scale.set(2.9, 1.9, 2.9); dome.position.y = 4.4; ownChute.add(dome);
+    const p = [];
+    for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2; p.push(Math.cos(a) * 2.9 * Math.sin(1.15), 4.4 + 1.9 * Math.cos(1.15), Math.sin(a) * 2.9 * Math.sin(1.15), (k < 6 ? 0.22 : -0.22), 0.35, 0.05); }
+    ownChute.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(p, 3)), new THREE.LineBasicMaterial({ color: 0x8a8578 })));
+    const bootM = new THREE.MeshLambertMaterial({ color: 0x241c14 });
+    for (const sx of [-0.14, 0.14]) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.3), bootM); b.position.set(sx, -1.45, 0.12); ownChute.add(b); const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.8, 6), new THREE.MeshLambertMaterial({ color: 0x4a4330 })); leg.position.set(sx, -1.0, 0.02); ownChute.add(leg); }
+    const streamer = new THREE.Mesh(canopyGeo, chuteMatUS); streamer.scale.set(0.35, 3.2, 0.35); streamer.position.y = 3.0; ownChute.add(streamer);
+    ownChute.userData = { dome, streamer };
+    ownChute.visible = false; scene.add(ownChute);
+  }
+
+  // ===== 1.4.0: CONTINUOUS SMOKE TRAILS — camera-facing ribbons through a history of emission points =====
+  // (1.3.9 puffs 7–9 u apart behind a 150 u/s 109 read as a string of beads). Points are left in the air mass and
+  // drift aft with it; the ribbon widens and fades with age; the texture is lumpy along its length and fixed to
+  // the smoke (v is assigned at emission) so it billows instead of sliding.
+  const RIB_N = 44, RIB_P = 64;
+  const ribTex = (() => {
+    const W = 64, H = 256, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d"); const img = x.createImageData(W, H);
+    let sd = 99; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    const blobs = []; for (let k = 0; k < 60; k++) blobs.push([R() * W, R() * H, 6 + R() * 16, 0.4 + R() * 0.6]);
+    for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) {
+      let n = 0; for (const [bx, by, br, ba] of blobs) { for (const oy of [-H, 0, H]) { const dx = (u - bx) / br, dy = (v - by - oy) / br, d = dx * dx + dy * dy; if (d < 1) n += ba * (1 - d) * (1 - d); } }
+      const w = (u - (W - 1) / 2) / ((W - 1) / 2), across = Math.exp(-w * w * 3.2) * (1 - w * w);
+      const a = Math.min(1, across * (0.45 + 0.75 * Math.min(1.2, n)));
+      const o = (v * W + u) * 4; const l = 200 + 55 * Math.min(1, n); img.data[o] = l; img.data[o + 1] = l; img.data[o + 2] = l; img.data[o + 3] = 255 * a;
+    }
+    x.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapT = THREE.RepeatWrapping; return t;
+  })();
+  const ribMat = new THREE.MeshBasicMaterial({ map: ribTex, vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: true });
+  const ribbons = [], ribByKey = new Map();
+  {
+    const idx = []; for (let i = 0; i < RIB_P - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    for (let r = 0; r < RIB_N; r++) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(RIB_P * 6), 3).setUsage(THREE.DynamicDrawUsage));
+      g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(RIB_P * 8), 4).setUsage(THREE.DynamicDrawUsage));
+      g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(RIB_P * 4), 2).setUsage(THREE.DynamicDrawUsage));
+      g.setIndex(idx); g.setDrawRange(0, 0);
+      const m = new THREE.Mesh(g, ribMat); m.frustumCulled = false; m.visible = false; m.renderOrder = 1; scene.add(m);
+      ribbons.push({ key: null, pts: [], mesh: m, geo: g, v: 0, last: null, lastT: 0 });
+    }
+  }
+  const ribStats = { emits: 0, live: 0 };
+  function ribbonEmit(key, pos, o) {
+    let rb = ribByKey.get(key);
+    if (!rb) {
+      rb = ribbons.find((q) => !q.pts.length) || ribbons.reduce((a, q) => (q.lastT < a.lastT ? q : a), ribbons[0]);
+      if (rb.key != null) ribByKey.delete(rb.key);
+      rb.key = key; rb.pts.length = 0; rb.v = Math.random() * 4; rb.last = null; ribByKey.set(key, rb);
+    }
+    if (rb.last) rb.v += rb.last.distanceTo(pos) / 9; else rb.last = new THREE.Vector3();
+    rb.last.copy(pos); rb.lastT = performance.now();
+    if (rb.pts.length >= RIB_P) rb.pts.shift();
+    rb.pts.push({ x: pos.x, y: pos.y, z: pos.z, age: 0, life: o.life || 2.5, w0: o.w0 || 0.4, w1: o.w1 || 4, a: o.a || 0.5, c: o.col || [0.2, 0.2, 0.2], v: rb.v, dz: o.drift == null ? 55 : o.drift });
+    ribStats.emits++;
+  }
+  const _rbA = new THREE.Vector3(), _rbT = new THREE.Vector3(), _rbS = new THREE.Vector3();
+  function updateRibbons(dt) {
+    let live = 0;
+    for (const rb of ribbons) {
+      const P = rb.pts;
+      for (const p of P) { p.age += dt; p.z -= p.dz * dt; p.y += 0.35 * dt; }
+      while (P.length && P[0].age >= P[0].life) P.shift();
+      if (P.length < 2) { rb.mesh.visible = false; rb.geo.setDrawRange(0, 0); if (!P.length && rb.key != null) { ribByKey.delete(rb.key); rb.key = null; } continue; }
+      live++;
+      rb.mesh.visible = true;
+      const pos = rb.geo.attributes.position.array, col = rb.geo.attributes.color.array, uv = rb.geo.attributes.uv.array;
+      const n = P.length;
+      for (let i = 0; i < n; i++) {
+        const p = P[i], a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)];
+        _rbT.set(b.x - a.x, b.y - a.y, b.z - a.z);
+        _rbA.set(camera.position.x - p.x, camera.position.y - p.y, camera.position.z - p.z);
+        _rbS.crossVectors(_rbT, _rbA); const L = _rbS.length() || 1;
+        const k = p.age / p.life, w = (p.w0 + (p.w1 - p.w0) * Math.sqrt(k)) * 0.5;
+        _rbS.multiplyScalar(w / L);
+        const o = i * 6;
+        pos[o] = p.x - _rbS.x; pos[o + 1] = p.y - _rbS.y; pos[o + 2] = p.z - _rbS.z;
+        pos[o + 3] = p.x + _rbS.x; pos[o + 4] = p.y + _rbS.y; pos[o + 5] = p.z + _rbS.z;
+        const al = p.a * Math.pow(1 - k, 1.3) * (i === n - 1 ? 0.35 : 1) * Math.min(1, p.age * 10 + 0.35);
+        const c = i * 8; col[c] = p.c[0]; col[c + 1] = p.c[1]; col[c + 2] = p.c[2]; col[c + 3] = al; col[c + 4] = p.c[0]; col[c + 5] = p.c[1]; col[c + 6] = p.c[2]; col[c + 7] = al;
+        const u = i * 4; uv[u] = 0; uv[u + 1] = p.v; uv[u + 2] = 1; uv[u + 3] = p.v;
+      }
+      rb.geo.setDrawRange(0, (n - 1) * 6);
+      rb.geo.attributes.position.needsUpdate = true; rb.geo.attributes.color.needsUpdate = true; rb.geo.attributes.uv.needsUpdate = true;
+    }
+    ribStats.live = live;
+  }
+  // Smoke puffs (world-space, stream aft with the airflow)
+  const smokePool = [];
+  for (let i = 0; i < 150; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: smokeTex, color: 0x2a2a2a, transparent: true, depthWrite: false, opacity: 0,
+    }));
+    sp.visible = false;
+    scene.add(sp);
+    smokePool.push({ sp, life: 0, max: 1, vx: 0, vy: 0, vz: 0, s0: 1, s1: 4, a: 0.5 });
+  }
+  let smokeIdx = 0;
+  function emitSmoke(pos, dark, big, o) {
+    const p = smokePool[smokeIdx];
+    smokeIdx = (smokeIdx + 1) % smokePool.length;
+    p.sp.position.copy(pos);
+    p.life = p.max = o && o.life ? o.life : big ? 3.2 : 2.4;
+    p.vx = (Math.random() - 0.5) * 0.8;
+    p.vy = 0.3 + Math.random() * 0.4;
+    p.vz = o && o.vz ? o.vz * (0.85 + Math.random() * 0.3) : -9 - Math.random() * 3;
+    p.s0 = o && o.s0 ? o.s0 : big ? 1.4 : 0.8;
+    p.s1 = o && o.s1 ? o.s1 : big ? 7 : 4.5;
+    p.a = o && o.a ? o.a : dark ? 0.55 : 0.35;
+    p.sp.material.color.setHex(o && o.color != null ? o.color : dark ? 0x1e1e1e : 0x8a8a88);
+    p.sp.visible = true;
+  }
+  function updateSmoke(dt) {
+    for (const p of smokePool) {
+      if (p.life <= 0) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.sp.visible = false; continue; }
+      const k = 1 - p.life / p.max;
+      p.sp.position.x += p.vx * dt;
+      p.sp.position.y += p.vy * dt;
+      p.sp.position.z += p.vz * dt;
+      const s = p.s0 + (p.s1 - p.s0) * k;
+      p.sp.scale.set(s, s, 1);
+      p.sp.material.opacity = p.a * (1 - k) * Math.min(1, k * 6 + 0.2);
+    }
+  }
+
+  // Procedural northern-European farmland 200u (20,000 ft) below
+  const GROUND_Y = -192;
+  // 1.3.2: natural northern-European patchwork seen from ~20,000 ft.
+  // Tileable jittered-Voronoi fields (irregular shapes, varied greens/yellows/browns, plough
+  // striping), soft hedgerow edges, woods, villages, roads and a river; mipmapped + anisotropic.
+  // A second/third lower-frequency lookup in the shader breaks up the tiling (see ground mat).
+  const farmTex = (() => {
+    const N = 1024, CELL = 26;
+    const G = Math.ceil(N / CELL);
+    const c = document.createElement("canvas");
+    c.width = c.height = N;
+    const x = c.getContext("2d");
+    let seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const pal = [
+      [98, 110, 66], [108, 118, 72], [90, 104, 60], [122, 126, 80], [136, 132, 88],
+      [150, 142, 98], [116, 106, 76], [104, 96, 70], [94, 108, 64], [128, 134, 86],
+      [84, 98, 58], [140, 138, 100],
+    ];
+    // Farm blocks = coarse Voronoi cells (each with its own orientation); inside a block the
+    // land is cut into rectangular parcels/strips aligned to that orientation (real patchwork).
+    const img = x.createImageData(N, N);
+    const d = img.data;
+    const hash = (a, b, c) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967295; };
+    const BLK = 96, GB = Math.ceil(N / BLK);
+    const blocks = [];
+    for (let j = 0; j < GB; j++) for (let i = 0; i < GB; i++) {
+      const w1 = 7 + rnd() * 10, w2 = 14 + rnd() * 26;
+      blocks.push({ x: (i + 0.2 + rnd() * 0.6) * BLK, y: (j + 0.2 + rnd() * 0.6) * BLK, a: rnd() * Math.PI, w1, w2, id: j * GB + i });
+    }
+    for (let py = 0; py < N; py++) {
+      const gj = (py / BLK) | 0;
+      for (let px = 0; px < N; px++) {
+        const gi = (px / BLK) | 0;
+        let d1 = 1e9, d2 = 1e9, best = null;
+        for (let oj = -1; oj <= 1; oj++) for (let oi = -1; oi <= 1; oi++) {
+          let ci = gi + oi, cj = gj + oj, sx = 0, sy = 0;
+          if (ci < 0) { ci += GB; sx = -N; } else if (ci >= GB) { ci -= GB; sx = N; }
+          if (cj < 0) { cj += GB; sy = -N; } else if (cj >= GB) { cj -= GB; sy = N; }
+          const p = blocks[cj * GB + ci];
+          const dx = p.x + sx - px, dy = p.y + sy - py;
+          const dd = dx * dx + dy * dy;
+          if (dd < d1) { d2 = d1; d1 = dd; best = p; } else if (dd < d2) d2 = dd;
+        }
+        const ca = Math.cos(best.a), sa = Math.sin(best.a);
+        const u = px * ca + py * sa, v = -px * sa + py * ca;
+        const iu = Math.floor(u / best.w1), iv = Math.floor(v / best.w2);
+        const fu = u / best.w1 - iu, fv = v / best.w2 - iv;
+        const hsh = hash(best.id, iu, iv);
+        const pc = pal[(hsh * pal.length) | 0];
+        const k = 0.92 + hash(iv, best.id, iu) * 0.14;
+        // crop rows inside some parcels
+        const rows = hsh > 0.6 ? Math.sin(u * 2.2) * 0.035 : 0;
+        let r = pc[0] * (k + rows), g = pc[1] * (k + rows), b = pc[2] * (k + rows);
+        // parcel boundaries (thin, soft) and block edges (hedgerows / lanes)
+        const eu = Math.min(fu, 1 - fu) * best.w1, ev = Math.min(fv, 1 - fv) * best.w2;
+        const pe = Math.min(eu, ev);
+        if (pe < 0.9) { const q = (1 - pe / 0.9) * 0.22; r = r * (1 - q) + 58 * q; g = g * (1 - q) + 70 * q; b = b * (1 - q) + 42 * q; }
+        const be = Math.sqrt(d2) - Math.sqrt(d1);
+        if (be < 2.2) { const q = (1 - be / 2.2) * 0.5; r = r * (1 - q) + 52 * q; g = g * (1 - q) + 64 * q; b = b * (1 - q) + 38 * q; }
+        const o = (py * N + px) * 4;
+        d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+      }
+    }
+    x.putImageData(img, 0, 0);
+    // Tile-safe drawing helper: draw at the 9 wrap offsets
+    const wrap = (fn) => { for (const ox of [-N, 0, N]) for (const oy of [-N, 0, N]) { x.save(); x.translate(ox, oy); fn(); x.restore(); } };
+    // Woods: clumps of dark soft blobs
+    for (let k = 0; k < 16; k++) {
+      const cx = rnd() * N, cy = rnd() * N, n = 6 + ((rnd() * 10) | 0);
+      const blobs = [];
+      for (let i = 0; i < n; i++) blobs.push([cx + (rnd() - 0.5) * 60, cy + (rnd() - 0.5) * 40, 6 + rnd() * 12]);
+      wrap(() => {
+        for (const [bx, by, br] of blobs) {
+          const gr = x.createRadialGradient(bx, by, 0, bx, by, br);
+          gr.addColorStop(0, "rgba(40,56,32,0.9)");
+          gr.addColorStop(0.7, "rgba(46,62,36,0.7)");
+          gr.addColorStop(1, "rgba(52,68,40,0)");
+          x.fillStyle = gr;
+          x.beginPath(); x.arc(bx, by, br, 0, Math.PI * 2); x.fill();
+        }
+      });
+    }
+    // River: meandering, crosses the tile top→bottom (enters/exits at the same x → seamless)
+    {
+      const x0 = rnd() * N;
+      const ctrl = [x0, x0 + 90, x0 - 110, x0 + 60, x0];
+      wrap(() => {
+        x.strokeStyle = "rgba(70,86,64,0.8)"; x.lineWidth = 9; x.lineCap = "round";
+        const path = () => { x.beginPath(); x.moveTo(ctrl[0], 0);
+          x.bezierCurveTo(ctrl[1], N * 0.25, ctrl[2], N * 0.5, ctrl[2] + 20, N * 0.6);
+          x.bezierCurveTo(ctrl[2] + 40, N * 0.7, ctrl[3], N * 0.85, ctrl[4], N); };
+        path(); x.stroke();
+        x.strokeStyle = "rgba(96,116,124,0.95)"; x.lineWidth = 4.5; path(); x.stroke();
+      });
+    }
+    // Roads: pale thin lines crossing the tile (seamless: same edge coordinate in/out)
+    for (let k = 0; k < 4; k++) {
+      const horiz = k % 2 === 0, a0 = rnd() * N, m1 = (rnd() - 0.5) * 160, m2 = (rnd() - 0.5) * 160;
+      wrap(() => {
+        x.strokeStyle = "rgba(176,168,140,0.5)"; x.lineWidth = 1.4;
+        x.beginPath();
+        if (horiz) { x.moveTo(0, a0); x.bezierCurveTo(N * 0.33, a0 + m1, N * 0.66, a0 + m2, N, a0); }
+        else { x.moveTo(a0, 0); x.bezierCurveTo(a0 + m1, N * 0.33, a0 + m2, N * 0.66, a0, N); }
+        x.stroke();
+      });
+    }
+    // Villages: small clusters of red-brown roofs and grey walls
+    for (let k = 0; k < 12; k++) {
+      const cx = rnd() * N, cy = rnd() * N, n = 10 + ((rnd() * 18) | 0);
+      const houses = [];
+      for (let i = 0; i < n; i++) houses.push([cx + (rnd() - 0.5) * 22, cy + (rnd() - 0.5) * 18, 1.5 + rnd() * 2.2, rnd() < 0.6]);
+      wrap(() => {
+        x.fillStyle = "rgba(150,146,130,0.55)";
+        x.beginPath(); x.ellipse(cx, cy, 15, 12, 0, 0, Math.PI * 2); x.fill();
+        for (const [hx, hy, hs, red] of houses) {
+          x.fillStyle = red ? "rgba(140,72,54,0.95)" : "rgba(170,164,150,0.95)";
+          x.fillRect(hx, hy, hs, hs * 0.8);
+        }
+      });
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(60, 60); // 1 tile ≈ 1000u; fields ≈ 25u
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 4);
+    return t;
+  })();
+  const horizonHaze = (() => {
+    const c = document.createElement("canvas");
+    c.width = 4; c.height = 256;
+    const x = c.getContext("2d");
+    const g = x.createLinearGradient(0, 0, 0, 256);
+    // canvas top → cylinder BOTTOM (CanvasTexture flipY) — opaque low, clear high
+    g.addColorStop(0, "rgba(179,191,202,0)");
+    g.addColorStop(0.55, "rgba(179,191,202,0.75)");
+    g.addColorStop(0.75, "rgba(179,191,202,0.45)");
+    g.addColorStop(1, "rgba(179,191,202,0)");
+    x.fillStyle = g;
+    x.fillRect(0, 0, 4, 256);
+    const tx = new THREE.CanvasTexture(c);
+    tx.colorSpace = THREE.SRGBColorSpace;
+    const m = new THREE.Mesh(
+      new THREE.CylinderGeometry(14000, 14000, 900, 64, 1, true),
+      new THREE.MeshBasicMaterial({ map: tx, transparent: true, depthWrite: false, side: THREE.BackSide, fog: false })
+    );
+    m.position.y = -260; // spans ~ -2.9° .. +0.8°: softens the far-ground/sky seam only
+    m.renderOrder = -1;
+    scene.add(m);
+    return m;
+  })();
+  // 1.3.6: the Earth ~2.1 km below the box (EARTH_K = 7 × the 202u local depth), scaled about the camera.
+  // The ground no longer "scrolls a texture": a ground FRAME (ground + town + bomb smoke) is placed each
+  // frame from the game's ground odometer (geo.x/z/rot, world units) — it moves past at exactly the
+  // box's 280 mph ground speed and rotates with the box's heading, so everything flying (109s, clouds,
+  // flak) now reads against a ground that really moves at 280 mph.
+  const cloudShadowTex = (() => { // tileable soft blotches (cloud shadows on the ground)
+    const N = 256, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
+    x.fillStyle = "#000"; x.fillRect(0, 0, N, N);
+    let sd = 31; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    for (let k = 0; k < 26; k++) { const cx = R() * N, cy = R() * N, r = 10 + R() * 26, n = 4 + ((R() * 5) | 0);
+      for (let i = 0; i < n; i++) { const bx = cx + (R() - 0.5) * r * 1.6, by = cy + (R() - 0.5) * r, br = r * (0.5 + R() * 0.6);
+        for (const ox of [-N, 0, N]) for (const oy of [-N, 0, N]) { const g = x.createRadialGradient(bx + ox, by + oy, 0, bx + ox, by + oy, br); g.addColorStop(0, "rgba(255,255,255,0.55)"); g.addColorStop(1, "rgba(255,255,255,0)"); x.fillStyle = g; x.beginPath(); x.arc(bx + ox, by + oy, br, 0, Math.PI * 2); x.fill(); } } }
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+  })();
+  const EARTH_K = 7;
+  const earth = new THREE.Group();
+  earth.scale.setScalar(EARTH_K);
+  earth.position.set(CAM.x * (1 - EARTH_K), CAM.y * (1 - EARTH_K), CAM.z * (1 - EARTH_K));
+  scene.add(earth);
+  const earthFog = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace("#include <fog_fragment>",
+      "#ifdef USE_FOG\n  float fogFactor = smoothstep( fogNear, fogFar, vFogDepth / " + EARTH_K.toFixed(1) + " );\n  gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif");
+  };
+  const groundFrame = new THREE.Group();
+  groundFrame.position.y = GROUND_Y;
+  earth.add(groundFrame);
+  farmTex.repeat.set(92, 92); // 1.4.0: 64 → 92 — fields read smaller, as from 25,000 ft
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(60000, 60000),
+    (() => {
+      const m = new THREE.MeshBasicMaterial({ map: farmTex, color: 0xa9b0a2, fog: true });
+      m.onBeforeCompile = (sh) => {
+        sh.uniforms.uShadow = { value: cloudShadowTex };
+        sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;").replace("#include <map_fragment>", `
+#ifdef USE_MAP
+  vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+  vec3 lo1 = texture2D( map, vMapUv * 0.113 + vec2(0.37, 0.61) ).rgb;
+  vec3 lo2 = texture2D( map, vec2(vMapUv.y, -vMapUv.x) * 0.031 + vec2(0.2, 0.7) ).rgb;
+  float l1 = dot(lo1, vec3(0.333)), l2 = dot(lo2, vec3(0.333));
+  vec3 col = sampledDiffuseColor.rgb * (0.72 + 0.62 * l1 + 0.0);
+  col = mix(col, col * vec3(1.06, 1.04, 0.9), smoothstep(0.35, 0.55, l2));
+  col = mix(col, (lo1 + sampledDiffuseColor.rgb) * 0.5, 0.18);
+  float gl = dot(col, vec3(0.3, 0.55, 0.15));
+  col = mix(vec3(gl), col, 0.62); // desaturated, hazy high-altitude ground
+  // 1.4.0: seen from 25,000 ft — soft cloud shadows from the deck below us, then a veil of blue-grey air even straight down
+  float shd = texture2D(uShadow, vMapUv * 0.9 + vec2(0.13, 0.41)).r * 0.65 + texture2D(uShadow, vMapUv * 0.37 + vec2(0.7, 0.2)).r * 0.35;
+  col *= 1.0 - 0.34 * smoothstep(0.35, 0.75, shd);
+  col = mix(col, vec3(0.62, 0.68, 0.76), 0.3);
+  diffuseColor.rgb *= col;
+#endif
+`);
+        earthFog(sh);
+      };
+      return m;
+    })()
+  );
+  ground.rotation.x = -Math.PI / 2;
+  groundFrame.add(ground);
+
+  // 1.3.6 TARGET: a small German town with a railway depot (local units: 1 = 10 world u ≈ 15 m).
+  // Rail yard (12 tracks, wagons), engine shed, roundhouse + turntable, station, a river with a
+  // bridge, streets with gabled roofs, a church, a few sheds/works along the yard.
+  const TOWN_Z = 1680;          // ground-frame local z: under the box ≈ 21 s after release (world z = geo.z + K·TOWN_Z)
+  const TOWN_X = 300;            // ≈2.2 km to port of our track: seen ahead-left past the cockpit on the run-in
+  const town = new THREE.Group();
+  town.position.set(TOWN_X, 0.05, TOWN_Z);
+  town.scale.set(1.5, 1.5, 1.5); // a readable town from 5 km (≈1.4 km across)
+  groundFrame.add(town);
+  const townMats = [];
+  {
+    let seed = 1936;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const lam = (c) => { const m = new THREE.MeshLambertMaterial({ color: c, fog: true }); townMats.push(m); return m; };
+    const bas = (c, o) => { const m = new THREE.MeshBasicMaterial(Object.assign({ color: c, fog: true }, o || {})); townMats.push(m); return m; };
+    const YARD_A = 0.35; // yard / main line bearing (rad) relative to the ground frame
+    // canvas texture for the yard: ballast bed, rails, wagons in rows
+    const yardTex = (() => {
+      const c = document.createElement("canvas"); c.width = 128; c.height = 1024;
+      const x = c.getContext("2d");
+      x.fillStyle = "#6e6a60"; x.fillRect(0, 0, 128, 1024);
+      for (let i = 0; i < 2600; i++) { const v = 90 + rnd() * 40 | 0; x.fillStyle = "rgba(" + v + "," + (v - 4) + "," + (v - 10) + ",0.5)"; x.fillRect(rnd() * 128, rnd() * 1024, 2, 2); }
+      const n = 12;
+      for (let t = 0; t < n; t++) {
+        const cx = 8 + t * (112 / (n - 1));
+        x.fillStyle = "rgba(48,44,40,0.9)"; x.fillRect(cx - 2.5, 0, 5, 1024); // ballast + sleepers
+        x.fillStyle = "rgba(150,146,140,0.8)"; x.fillRect(cx - 1.5, 0, 0.8, 1024); x.fillRect(cx + 0.8, 0, 0.8, 1024);
+        // strings of wagons on most tracks
+        let y = rnd() * 80;
+        while (y < 1000) {
+          const run = 60 + rnd() * 260;
+          if (rnd() < 0.72) for (let k = 0; k < run; k += 13) {
+            const col = rnd() < 0.5 ? "rgb(86,62,48)" : rnd() < 0.5 ? "rgb(70,72,70)" : "rgb(104,88,70)";
+            x.fillStyle = col; x.fillRect(cx - 3, y + k, 6, 11);
+          }
+          y += run + 20 + rnd() * 90;
+        }
+      }
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+      t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
+      return t;
+    })();
+    const yard = new THREE.Mesh(new THREE.PlaneGeometry(6.2, 58), bas(0xffffff, { map: yardTex }));
+    yard.rotation.set(-Math.PI / 2, 0, YARD_A);
+    town.add(yard);
+    // main line out of town both ways (a thin dark line across the countryside)
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 900), bas(0x3e3a34));
+    line.rotation.set(-Math.PI / 2, 0, YARD_A); line.position.y = -0.01;
+    town.add(line);
+    const branch = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 500), bas(0x423e38));
+    branch.rotation.set(-Math.PI / 2, 0, YARD_A + 0.9); branch.position.set(-2, -0.01, -26);
+    town.add(branch);
+    const ax = (u, v) => { // yard-aligned coordinates → town local
+      const c = Math.cos(YARD_A), s = Math.sin(YARD_A);
+      return [u * c + v * s, -u * s + v * c];
+    };
+    // freight wagons in 3D (catch the sun), engine shed, roundhouse, station
+    const wagonGeo = new THREE.BoxGeometry(0.2, 0.2, 0.85);
+    const wagons = new THREE.InstancedMesh(wagonGeo, lam(0x5a4638), 140);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(1, 1, 1), pv = new THREE.Vector3();
+    const yq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), YARD_A);
+    for (let i = 0; i < 140; i++) {
+      const tr = (rnd() * 12) | 0, u = -3.1 + 0.25 + tr * (5.7 / 11), v = -26 + rnd() * 52;
+      const [px, pz] = ax(u, v);
+      pv.set(px, 0.1, pz); m4.compose(pv, yq, sc); wagons.setMatrixAt(i, m4);
+      const tint = 0.75 + rnd() * 0.5; wagons.setColorAt(i, new THREE.Color(0x5a4638).multiplyScalar(tint));
+    }
+    town.add(wagons);
+    const box = (w, h, d, u, v, mat, rotExtra) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      const [px, pz] = ax(u, v); m.position.set(px, h / 2, pz); m.rotation.y = YARD_A + (rotExtra || 0);
+      town.add(m); return m;
+    };
+    const roofDark = lam(0x4a4642), brick = lam(0x7a5a4a), stone = lam(0x9a968c);
+    box(2.2, 0.7, 9, 4.6, 12, roofDark);           // engine shed (long, dark)
+    box(1.6, 0.9, 5.5, -4.8, -2, stone);           // station building
+    box(1.0, 0.6, 1.4, -4.8, -6.2, brick);         // goods shed
+    box(3.2, 0.9, 1.8, 5.2, -14, brick);           // works / warehouse
+    box(2.4, 1.1, 3.2, -6.2, 16, brick);           // factory hall
+    { // roundhouse: a 3/4 ring of stalls around a turntable
+      const [cx, cz] = ax(5.5, 22);
+      const tt = new THREE.Mesh(new THREE.CircleGeometry(0.8, 20), bas(0x4a4640));
+      tt.rotation.x = -Math.PI / 2; tt.position.set(cx, 0.02, cz); town.add(tt);
+      for (let k = 0; k < 14; k++) {
+        const a = -0.6 + k * (4.2 / 13);
+        const st = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.45, 1.5), roofDark);
+        st.position.set(cx + Math.cos(a) * 1.9, 0.22, cz + Math.sin(a) * 1.9);
+        st.rotation.y = -a + Math.PI / 2; town.add(st);
+      }
+    }
+    // river with a bridge where the main line crosses
+    {
+      const pts = [];
+      for (let k = 0; k <= 24; k++) { const t = k / 24; pts.push(new THREE.Vector2(-70 + t * 140, 28 * Math.sin(t * 3.1 + 0.4) - 30 + t * 18)); }
+      const shape = [];
+      const pos = [], idx = [];
+      for (let k = 0; k < pts.length; k++) {
+        const p = pts[k], q2 = pts[Math.min(pts.length - 1, k + 1)], p0 = pts[Math.max(0, k - 1)];
+        const dx = q2.x - p0.x, dy = q2.y - p0.y, l = Math.hypot(dx, dy) || 1, w = 1.6 + Math.sin(k) * 0.3;
+        pos.push(p.x - dy / l * w, 0.015, p.y + dx / l * w, p.x + dy / l * w, 0.015, p.y - dx / l * w);
+        if (k) { const a = (k - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      }
+      void shape;
+      const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+      const river = new THREE.Mesh(g, bas(0x46545a, { side: THREE.DoubleSide }));
+      town.add(river);
+    }
+    // streets (pale) + houses (walls + gabled roofs, instanced)
+    const streetM = bas(0x8e8a80);
+    const streets = [];
+    for (let k = -3; k <= 3; k++) streets.push([k * 7.5 - 16, 0, 0.35, 44, 0.12]);
+    for (let k = -3; k <= 3; k++) streets.push([-16, k * 6.5, 44, 0.35, 0.12]);
+    streets.push([-8, -4, 0.45, 60, 0.55]); streets.push([-20, 10, 0.45, 50, -0.8]);
+    for (const [cx, cz, w, d, rot] of streets) {
+      const st = new THREE.Mesh(new THREE.PlaneGeometry(w, d), streetM);
+      st.rotation.set(-Math.PI / 2, 0, rot); st.position.set(cx, 0.01, cz); town.add(st);
+    }
+    const N = 520;
+    const wallG = new THREE.BoxGeometry(1, 0.55, 1); wallG.translate(0, 0.275, 0);
+    const roofG = (() => { // gable prism, ridge along x
+      const v = [-0.55, 0.55, -0.58, 0.55, 0.55, -0.58, 0.55, 0.95, 0, -0.55, 0.95, 0, -0.55, 0.55, 0.58, 0.55, 0.55, 0.58];
+      const i = [0, 2, 1, 0, 3, 2, 4, 3, 5, 3, 2, 5, 5, 2, 1, 5, 1, 4, 0, 4, 3, 0, 1, 4];
+      const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3)); g.setIndex(i);
+      g.computeVertexNormals(); return g;
+    })();
+    const walls = new THREE.InstancedMesh(wallG, lam(0xb4ada0), N);
+    const roofs = new THREE.InstancedMesh(roofG, lam(0xffffff), N);
+    const roofPal = [0x94543f, 0x7e4a3a, 0xa0624a, 0x6e6660, 0x7a7268, 0x8a4e3c];
+    let n = 0;
+    const scl = new THREE.Vector3(), rq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+    const place = (x0, z0, rot, len, wid) => {
+      if (n >= N) return;
+      pv.set(x0, 0, z0); scl.set(len, 0.8 + rnd() * 0.7, wid); rq.setFromAxisAngle(up, rot);
+      m4.compose(pv, rq, scl); walls.setMatrixAt(n, m4); roofs.setMatrixAt(n, m4);
+      const rc = new THREE.Color(roofPal[(rnd() * roofPal.length) | 0]).multiplyScalar(0.85 + rnd() * 0.3);
+      roofs.setColorAt(n, rc); walls.setColorAt(n, new THREE.Color(1, 1, 1).multiplyScalar(0.85 + rnd() * 0.2));
+      n++;
+    };
+    // old town: dense blocks between the streets, west of the yard
+    for (let bx = -3; bx < 3; bx++) for (let bz = -3; bz < 3; bz++) {
+      const cx = bx * 7.5 - 16 + 3.75, cz = bz * 6.5 + 3.25;
+      const dcen = Math.hypot(cx + 14, cz);
+      if (dcen > 24 && rnd() < 0.6) continue;
+      for (let k = 0; k < 14; k++) {
+        const side = k % 4, t = rnd() * 5.4 - 2.7;
+        const ox = side === 0 ? t : side === 1 ? t : side === 2 ? -2.9 : 2.9;
+        const oz = side === 0 ? -2.3 : side === 1 ? 2.3 : t * 0.8;
+        place(cx + ox, cz + oz, side < 2 ? 0 : Math.PI / 2, 0.9 + rnd() * 0.9, 0.7 + rnd() * 0.3);
+      }
+    }
+    // villas / outskirts scattered along the roads
+    while (n < N) {
+      const a = rnd() * Math.PI * 2, r = 20 + rnd() * 26;
+      place(Math.cos(a) * r - 12, Math.sin(a) * r, rnd() * Math.PI, 0.8 + rnd() * 0.5, 0.7 + rnd() * 0.3);
+    }
+    walls.instanceMatrix.needsUpdate = true; roofs.instanceMatrix.needsUpdate = true;
+    town.add(walls); town.add(roofs);
+    { // church: nave + tall spire in the market square
+      const nave = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.9, 2.6), stone); nave.position.set(-14, 0.45, 0.5); town.add(nave);
+      const tw = new THREE.Mesh(new THREE.BoxGeometry(0.6, 2.0, 0.6), stone); tw.position.set(-14, 1.0, -1.1); town.add(tw);
+      const sp = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.6, 4), lam(0x3e4c46)); sp.position.set(-14, 2.8, -1.1); sp.rotation.y = Math.PI / 4; town.add(sp);
+    }
+  }
+  town.traverse((o) => { if (o.material && !o.material._earthFog) { o.material._earthFog = true; o.material.onBeforeCompile = earthFog; } });
+
+  // bomb bursts + smoke columns on the target (children of the ground frame → move with the ground)
+  const impactFlash = [], impactSmoke = [];
+  const flashMat0 = new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+  for (let i = 0; i < 40; i++) { const sp = new THREE.Sprite(flashMat0.clone()); sp.visible = false; groundFrame.add(sp); impactFlash.push({ sp, life: 0 }); }
+  for (let i = 0; i < 170; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x3a3632, transparent: true, depthWrite: false, fog: true }));
+    sp.visible = false; groundFrame.add(sp); impactSmoke.push({ sp, life: 0, max: 1, vy: 0, s0: 1, s1: 4, a: 0.6 });
+  }
+  let _ifI = 0, _isI = 0;
+  function bombBurst(lx, lz, big) { // ground-frame local coords
+    const f = impactFlash[_ifI]; _ifI = (_ifI + 1) % impactFlash.length;
+    f.sp.position.set(lx, 0.6, lz); f.life = f.max = 0.5; f.big = big ? 1.5 : 1; f.sp.visible = true;
+    for (let k = 0; k < 3; k++) {
+      const p = impactSmoke[_isI]; _isI = (_isI + 1) % impactSmoke.length;
+      p.sp.position.set(lx + (Math.random() - 0.5) * 1.2, 0.4 + k * 0.6, lz + (Math.random() - 0.5) * 1.2);
+      p.life = p.max = 50 + Math.random() * 30; p.vy = 0.5 + Math.random() * 0.5 + k * 0.15;
+      p.s0 = 1.6 + k * 0.4; p.s1 = 10 + Math.random() * 9; p.a = k === 0 ? 0.85 : 0.6;
+      p.sp.material.color.setHex(k === 0 ? 0x5a5048 : 0x2e2b28);
+      p.sp.visible = true;
+    }
+  }
+  function updateImpacts(dt) {
+    for (const f of impactFlash) {
+      if (f.life <= 0) continue;
+      f.life -= dt;
+      if (f.life <= 0) { f.sp.visible = false; continue; }
+      const k = 1 - f.life / f.max, s = (2.2 + k * 3.5) * f.big;
+      f.sp.scale.set(s, s, 1); f.sp.material.opacity = (1 - k);
+    }
+    for (const p of impactSmoke) {
+      if (p.life <= 0) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.sp.visible = false; continue; }
+      const k = 1 - p.life / p.max;
+      p.sp.position.y += p.vy * dt * (1 - k * 0.6);
+      p.sp.position.x += 0.03 * dt; // drifting downwind
+      const s = p.s0 + (p.s1 - p.s0) * Math.sqrt(k);
+      p.sp.scale.set(s, s, 1);
+      p.sp.material.opacity = p.a * Math.min(1, k * 30) * (1 - k * k);
+    }
+  }
+  // the bombing: earlier groups of the bomber stream are already hitting the target as we come in;
+  // our box's pattern lands ~25 s after "bombs away" across the yard.
+  const _bombPlan = { streamNext: 0, ours: 0, oursT: -1 };
+  function townBombing(opts, dt) {
+    const mt = opts.missionT || 0;
+    if (mt < 1) { _bombPlan.streamNext = 40; _bombPlan.ours = 0; _bombPlan.oursT = -1; }
+    const yardPt = (u, v) => { const c = Math.cos(0.35), s = Math.sin(0.35); return [TOWN_X + 1.5 * (u * c + v * s), TOWN_Z + 1.5 * (-u * s + v * c)]; };
+    if (mt > _bombPlan.streamNext && mt < 200) { // a stick from the group ahead
+      _bombPlan.streamNext = mt + 3 + Math.random() * 4;
+      const u0 = (Math.random() - 0.5) * 18, v0 = (Math.random() - 0.5) * 50, du = (Math.random() - 0.5) * 0.6;
+      const n = 5 + ((Math.random() * 6) | 0);
+      for (let k = 0; k < n; k++) setTimeout(() => { const [x, z] = yardPt(u0 + du * k * 3, v0 + k * 3.2); bombBurst(x, z, false); }, k * 110);
+    }
+    const post = opts.post || 0;
+    if (opts.bombsAway && _bombPlan.oursT < 0) { _bombPlan.oursT = post; _bombPlan.ours = Math.max(1, opts.dropped || 15) * 5; }
+    if (_bombPlan.oursT >= 0 && post > 4 && _bombPlan.ours > 0) {
+      const n = Math.min(_bombPlan.ours, Math.ceil(dt * 12));
+      for (let k = 0; k < n; k++) { const [x, z] = yardPt((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 50); bombBurst(x, z, true); }
+      _bombPlan.ours -= n;
+    }
+    updateImpacts(dt);
+  }
+
+  // 1.3.2: volumetric-looking cumulus = clusters of 5–9 lit puff billboards of several sizes.
+  // Each puff texture has a sunlit top and a grey-blue shaded base; puffs lower in a cluster are
+  // tinted darker, so a cluster reads as a lumpy volume rather than one flat cutout.
+  const cloudClusters = [];
+  const puffTexs = [0, 1, 2, 3].map((k) => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 128;
+    const x = c.getContext("2d");
+    let seed = 91 + k * 57;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    // body: several overlapping soft lobes
+    for (let i = 0; i < 9; i++) {
+      const px = 34 + rnd() * 60, py = 46 + rnd() * 34;
+      const r = Math.min(20 + rnd() * 22, px - 2, 126 - px, py - 2, 126 - py);
+      const g = x.createRadialGradient(px, py - r * 0.25, r * 0.1, px, py, r);
+      g.addColorStop(0, "rgba(255,255,255,1)");
+      g.addColorStop(0.55, "rgba(246,248,252,0.75)");
+      g.addColorStop(1, "rgba(236,240,246,0)");
+      x.fillStyle = g;
+      x.beginPath(); x.arc(px, py, r, 0, Math.PI * 2); x.fill();
+    }
+    // shade the underside (source-atop keeps alpha)
+    x.globalCompositeOperation = "source-atop";
+    const ug = x.createLinearGradient(0, 40, 0, 118);
+    ug.addColorStop(0, "rgba(255,252,244,0.25)");
+    ug.addColorStop(0.45, "rgba(200,208,220,0.0)");
+    ug.addColorStop(1, "rgba(118,130,150,0.65)");
+    x.fillStyle = ug;
+    x.fillRect(0, 0, 128, 128);
+    const tx = new THREE.CanvasTexture(c);
+    tx.colorSpace = THREE.SRGBColorSpace;
+    return tx;
+  });
+  function buildCluster() {
+    const g = new THREE.Group();
+    const n = 5 + ((Math.random() * 5) | 0);
+    for (let i = 0; i < n; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: puffTexs[(Math.random() * 4) | 0], transparent: true, depthWrite: false, opacity: 0.92, fog: true,
+      }));
+      g.add(sp);
+    }
+    scene.add(g);
+    return g;
+  }
+  function shapeCluster(g, size) {
+    const n = g.children.length;
+    for (let i = 0; i < n; i++) {
+      const sp = g.children[i];
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.6;
+      const rr = Math.random() * 0.45 * size;
+      const hy = (Math.random() - 0.35) * 0.3 * size;
+      sp.position.set(Math.cos(a) * rr, hy, Math.sin(a) * rr * 0.6);
+      const s = size * (0.45 + Math.random() * 0.45) * (hy > 0 ? 0.85 : 1.15);
+      sp.scale.set(s, s * (hy > 0 ? 0.72 : 0.5), 1);
+      // lower puffs darker / bluer, upper puffs sunlit warm
+      const k = Math.max(0, Math.min(1, 0.5 + hy / (0.3 * size)));
+      sp.material.color.setRGB(0.66 + 0.3 * k, 0.69 + 0.28 * k, 0.76 + 0.22 * k);
+    }
+  }
+  function resetCloud(g, initial) {
+    const r = Math.random();
+    const kind = r < 0.42 ? "low" : r < 0.66 ? "level" : r < 0.84 ? "tower" : "near";
+    let x0, y0, size;
+    if (kind === "low") { // broken deck ~150–250 m below the box
+      x0 = (Math.random() - 0.5) * 5000; y0 = -95 - Math.random() * 70; size = 130 + Math.random() * 220;
+    } else if (kind === "level") { // level with the box, off to the sides
+      x0 = (Math.random() < 0.5 ? -1 : 1) * (400 + Math.random() * 2600); y0 = -30 + Math.random() * 70; size = 120 + Math.random() * 240;
+    } else if (kind === "tower") { // 1.3.6: big distant cumulus build-ups, layered toward the horizon
+      x0 = (Math.random() < 0.5 ? -1 : 1) * (1800 + Math.random() * 3200); y0 = -260 + Math.random() * 120; size = 420 + Math.random() * 480;
+    } else { // small puffs streaming past close by — 280 mph made visible
+      x0 = (Math.random() < 0.5 ? -1 : 1) * (170 + Math.random() * 220); y0 = -50 + Math.random() * 90; size = 26 + Math.random() * 30;
+    }
+    g.position.set(x0, y0, initial ? -2400 + Math.random() * 8400 : 5200 + Math.random() * 2400);
+    g.userData.kind = kind;
+    shapeCluster(g, size);
+  }
+  for (let i = 0; i < 30; i++) {
+    const g = buildCluster();
+    resetCloud(g, true);
+    cloudClusters.push(g);
+  }
+  // 1.3.6: a second, lower layer — flat fair-weather cumulus ~2 km below, over the ground haze
+  const lowDeck = [];
+  // 1.4.0: two decks (≈1.3 km and ≈2.2 km below) with a darker, flatter underside under every cloud → depth
+  function resetLow(sp, initial) {
+    const deep = sp.userData.deep, s = (deep ? 420 : 280) + Math.random() * (deep ? 700 : 480);
+    sp.scale.set(s, s * 0.3, 1);
+    sp.position.set((Math.random() - 0.5) * 20000, deep ? -1700 - Math.random() * 450 : -950 - Math.random() * 300, initial ? -7000 + Math.random() * 20000 : 12000 + Math.random() * 3000);
+    const u = sp.userData.under; if (u) { u.scale.set(s * 0.92, s * 0.16, 1); u.position.set(sp.position.x, sp.position.y - s * 0.07, sp.position.z); }
+  }
+  for (let i = 0; i < 40; i++) {
+    const deep = i % 3 === 0;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexs[i % 4], transparent: true, depthWrite: false, opacity: deep ? 0.72 : 0.86, fog: true, color: deep ? 0xd8dee6 : 0xeef2f6 }));
+    const under = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexs[(i + 1) % 4], transparent: true, depthWrite: false, opacity: 0.5, fog: true, color: 0x8a94a2 }));
+    under.renderOrder = -1; sp.userData.deep = deep; sp.userData.under = under;
+    resetLow(sp, true); scene.add(under); scene.add(sp); lowDeck.push(sp);
+  }
+  const cloudSprites = cloudClusters; // legacy name
+  void cloudSprites;
+
+  // 1.3.6 flak: black 88 mm bursts hanging in the air (they stream aft at the box's airspeed),
+  // depth-tested sprites instead of the old 2D overlay
+  const flakPool = [];
+  for (let i = 0; i < 30; i++) {
+    const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    fl.visible = false; scene.add(fl);
+    const puffs = [0, 1, 2, 3].map(() => { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x1c1b1a, transparent: true, depthWrite: false, fog: true })); sp.visible = false; scene.add(sp); return sp; });
+    flakPool.push({ fl, puffs, age: 99, off: puffs.map(() => new THREE.Vector3()), x: 0, y: 0, z: 0 });
+  }
+  let _flakAcc = 0;
+  function updateFlak(on, dt, dz) {
+    if (on) _flakAcc += dt * 2.6;
+    while (_flakAcc >= 1) {
+      _flakAcc -= 1;
+      const f = flakPool.find((q) => q.age > 5);
+      if (!f) break;
+      f.age = 0; f.x = (Math.random() - 0.5) * 900; f.y = -60 + Math.random() * 300; f.z = -150 + Math.random() * 1100;
+      f.off.forEach((o, k) => o.set((Math.random() - 0.5) * 7, (Math.random() - 0.3) * 5, (Math.random() - 0.5) * 7).multiplyScalar(k ? 1 : 0.2));
+      if (window.FGAudio) window.FGAudio.flak(f.x, f.y, f.z); // 1.3.7: the crump
+    }
+    for (const f of flakPool) {
+      if (f.age > 5) { f.fl.visible = false; f.puffs.forEach((p) => { p.visible = false; }); continue; }
+      f.age += dt; f.z -= dz;
+      const t = f.age;
+      f.fl.visible = t < 0.14;
+      if (f.fl.visible) { f.fl.position.set(f.x, f.y, f.z); const s = 9 + t * 60; f.fl.scale.set(s, s, 1); f.fl.material.opacity = 1 - t / 0.14; }
+      const grow = 0.4 + Math.min(1, t / 1.1) * 0.8, a = t < 0.1 ? t / 0.1 : Math.max(0, 1 - (t - 0.1) / 4.9);
+      f.puffs.forEach((p, k) => {
+        p.visible = a > 0.01;
+        p.position.set(f.x + f.off[k].x * grow, f.y + f.off[k].y * grow + t * 0.6, f.z + f.off[k].z * grow);
+        const s = (14 + k * 3) * grow; p.scale.set(s, s, 1); p.material.opacity = 0.78 * a;
+      });
+    }
+  }
+
+  // ===== 1.3.8: 88 mm FLAK — flash, then a black-brown, oily, ragged cloud that expands, drifts, lingers =====
+  // One small mesh per live burst (8 camera-facing puffs expanded in the vertex shader) so three.js
+  // sorts every burst against the cloud sprites; depth-tested (our airframe / other ships hide it) + fog.
+  const flakAtlas = (() => {
+    const c = document.createElement("canvas"); c.width = 512; c.height = 256;
+    const x = c.getContext("2d");
+    for (let cell = 0; cell < 8; cell++) {
+      const cx = (cell % 4) * 128 + 64, cy = ((cell / 4) | 0) * 128 + 64;
+      x.save(); x.beginPath(); x.rect(cx - 64, cy - 64, 128, 128); x.clip();
+      for (let k = 0; k < 46; k++) { // clumped soft blobs → cauliflower/ragged outline
+        const a = Math.random() * Math.PI * 2, rr = Math.pow(Math.random(), 0.7) * 34;
+        const bx = cx + Math.cos(a) * rr, by = cy + Math.sin(a) * rr * 0.9, br = 10 + Math.random() * 18;
+        const lum = 150 + Math.random() * 90 - (by - cy) * 0.9; // fake light from above
+        const g = x.createRadialGradient(bx, by, 0, bx, by, br);
+        g.addColorStop(0, `rgba(${lum | 0},${lum * 0.94 | 0},${lum * 0.86 | 0},0.55)`);
+        g.addColorStop(0.6, `rgba(${lum * 0.8 | 0},${lum * 0.74 | 0},${lum * 0.66 | 0},0.32)`);
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        x.fillStyle = g; x.beginPath(); x.arc(bx, by, br, 0, Math.PI * 2); x.fill();
+      }
+      // ragged bites out of the edge + oily streaks
+      x.globalCompositeOperation = "destination-out";
+      for (let k = 0; k < 18; k++) { const a = Math.random() * Math.PI * 2, rr = 40 + Math.random() * 18, br = 6 + Math.random() * 12; const g = x.createRadialGradient(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 0, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, br); g.addColorStop(0, "rgba(0,0,0,0.9)"); g.addColorStop(1, "rgba(0,0,0,0)"); x.fillStyle = g; x.fillRect(cx - 64, cy - 64, 128, 128); }
+      x.globalCompositeOperation = "source-over";
+      for (let k = 0; k < 3; k++) { const a = Math.random() * Math.PI * 2; x.strokeStyle = "rgba(120,110,95,0.25)"; x.lineWidth = 3 + Math.random() * 4; x.beginPath(); x.moveTo(cx, cy); x.lineTo(cx + Math.cos(a) * 58, cy + Math.sin(a) * 58); x.stroke(); }
+      x.restore();
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  const flakMat = new THREE.ShaderMaterial({
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { map: { value: null } }]),
+    vertexShader: [
+      "attribute vec2 corner; attribute vec4 aData; attribute vec3 aTint;",
+      "varying vec2 vUv; varying float vA; varying vec3 vT;",
+      "#include <fog_pars_vertex>",
+      "void main(){",
+      "  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);",
+      "  float c = cos(aData.z), s = sin(aData.z);",
+      "  mvPosition.xy += vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y) * aData.x;",
+      "  gl_Position = projectionMatrix * mvPosition;",
+      "  vUv = (vec2(mod(aData.w, 4.0), floor(aData.w / 4.0)) + corner + 0.5) / vec2(4.0, 2.0);",
+      "  vA = aData.y; vT = aTint;",
+      "  #include <fog_vertex>",
+      "}"].join("\n"),
+    fragmentShader: [
+      "uniform sampler2D map; varying vec2 vUv; varying float vA; varying vec3 vT;",
+      "#include <fog_pars_fragment>",
+      "void main(){ vec4 t = texture2D(map, vUv); float a = min(1.0, t.a * 1.6) * vA; if (a < 0.004) discard;",
+      "  gl_FragColor = vec4(t.rgb * vT, a);",
+      "  #include <fog_fragment>",
+      "}"].join("\n"),
+    transparent: true, depthWrite: false, depthTest: true, fog: true,
+  });
+  flakMat.uniforms.map.value = flakAtlas;
+  const FP = 9; // puffs per burst
+  const flakFlashTex = (() => {
+    const c = document.createElement("canvas"); c.width = c.height = 64; const x = c.getContext("2d");
+    const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, "rgba(255,250,220,1)"); g.addColorStop(0.18, "rgba(255,190,90,1)"); g.addColorStop(0.45, "rgba(255,90,30,0.75)"); g.addColorStop(1, "rgba(160,20,0,0)");
+    x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  const flakMeshes = [];
+  for (let i = 0; i < 130; i++) {
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(FP * 4 * 3), cor = new Float32Array(FP * 4 * 2), dat = new Float32Array(FP * 4 * 4), tin = new Float32Array(FP * 4 * 3), idx = [];
+    for (let p = 0; p < FP; p++) {
+      const v = p * 4; cor.set([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5], v * 2);
+      idx.push(v, v + 1, v + 2, v + 1, v + 3, v + 2);
+    }
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute("corner", new THREE.BufferAttribute(cor, 2));
+    geo.setAttribute("aData", new THREE.BufferAttribute(dat, 4).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute("aTint", new THREE.BufferAttribute(tin, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setIndex(idx);
+    const m = new THREE.Mesh(geo, flakMat); m.frustumCulled = false; m.visible = false; scene.add(m);
+    const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: flakFlashTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    fl.visible = false; scene.add(fl);
+    flakMeshes.push({ m, fl, id: -1, puffs: null });
+  }
+  const flakLight = new THREE.PointLight(0xff7a30, 0, 140, 1.2); scene.add(flakLight);
+  // 1.4.0 flak debris: dark shell fragments + a few hot sparks thrown out of each burst, falling under gravity
+  const DEB_N = 900;
+  const debGeo = new THREE.BufferGeometry();
+  const debPos = new Float32Array(DEB_N * 3), debCol = new Float32Array(DEB_N * 3);
+  debGeo.setAttribute("position", new THREE.BufferAttribute(debPos, 3));
+  debGeo.setAttribute("color", new THREE.BufferAttribute(debCol, 3));
+  const debMat = new THREE.PointsMaterial({ size: 2.2, sizeAttenuation: true, vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false, fog: true });
+  const debPts = new THREE.Points(debGeo, debMat); debPts.frustumCulled = false; scene.add(debPts);
+  const deb = []; for (let i = 0; i < DEB_N; i++) deb.push({ t: 99, x: 0, y: -1e5, z: 0, vx: 0, vy: 0, vz: 0, hot: false, life: 1 });
+  let debNext = 0;
+  function spawnDebris(x, y, z, n, scale) {
+    for (let i = 0; i < n; i++) {
+      const d = deb[debNext]; debNext = (debNext + 1) % DEB_N;
+      const a = Math.random() * 6.283, e = (Math.random() - 0.35) * 2.2, sp = (18 + Math.random() * 55) * scale;
+      d.x = x; d.y = y; d.z = z; d.vx = Math.cos(a) * Math.cos(e) * sp; d.vy = Math.sin(e) * sp * 0.7; d.vz = Math.sin(a) * Math.cos(e) * sp;
+      d.hot = i < n * 0.3; d.t = 0; d.life = d.hot ? 0.25 + Math.random() * 0.35 : 1.4 + Math.random() * 1.6;
+    }
+  }
+  let debLast = performance.now();
+  function updateDebris(dz) {
+    const now = performance.now(), dt = Math.min(0.05, (now - debLast) / 1000); debLast = now;
+    for (let i = 0; i < DEB_N; i++) {
+      const d = deb[i];
+      if (d.t < d.life) {
+        d.t += dt; d.vy -= 9.8 * dt; const drag = Math.exp(-dt * 1.6); d.vx *= drag; d.vy *= drag; d.vz *= drag;
+        d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt - dz;
+        debPos[i * 3] = d.x; debPos[i * 3 + 1] = d.y; debPos[i * 3 + 2] = d.z;
+        const f = 1 - d.t / d.life;
+        if (d.hot) { debCol[i * 3] = 1.0 * f + 0.1; debCol[i * 3 + 1] = 0.62 * f + 0.05; debCol[i * 3 + 2] = 0.2 * f; }
+        else { debCol[i * 3] = 0.07; debCol[i * 3 + 1] = 0.065; debCol[i * 3 + 2] = 0.06; }
+      } else debPos[i * 3 + 1] = -1e5;
+    }
+    debGeo.attributes.position.needsUpdate = true; debGeo.attributes.color.needsUpdate = true;
+  }
+  const flakStats = { live: 0, flashes: 0, maxLive: 0 };
+  function prng(seed) { let s = (seed * 9301 + 49297) % 233280; return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
+  function updateFlakBursts(list) {
+    list = list || [];
+    const byId = new Map(); for (const b of list) if (b.t >= 0) byId.set(b.id, b);
+    // keep each burst in its mesh
+    for (const F of flakMeshes) if (F.id >= 0 && !byId.has(F.id)) { F.id = -1; F.m.visible = false; F.fl.visible = false; }
+    const used = new Set(flakMeshes.filter((F) => F.id >= 0).map((F) => F.id));
+    for (const b of byId.values()) {
+      if (used.has(b.id)) continue;
+      const F = flakMeshes.find((q) => q.id < 0); if (!F) break;
+      F.id = b.id; used.add(b.id);
+      const r = prng(Math.floor(b.seed * 1000) + 7);
+      F.puffs = [];
+      // 1.4.0: ragged, lopsided bursts — a random blast axis stretches the lobes, each burst has its own size and a
+      // warm/cool/brown tint, and some lobes are thrown further out (no two bursts look like the same ball)
+      const sz = b.size || 1, ax = r() * 6.283, ay = (r() - 0.5) * 1.2, str = 1 + r() * 1.3;
+      const bx = Math.cos(ax) * Math.cos(ay), by = Math.sin(ay), bz = Math.sin(ax) * Math.cos(ay);
+      const tint = r(); F.tint = tint < 0.33 ? [1.12, 1.0, 0.86] : tint < 0.66 ? [0.9, 0.93, 1.02] : [1.0, 0.97, 0.95];
+      F.dark = 0.7 + r() * 0.6;
+      for (let p = 0; p < FP; p++) {
+        const a = r() * Math.PI * 2, e = (r() - 0.5) * 1.6, d = p === 0 ? 0 : (1.0 + r() * 3.4) * (r() < 0.25 ? 1.8 : 1);
+        let ox = Math.cos(a) * Math.cos(e) * d, oy = Math.sin(e) * d * 0.8, oz = Math.sin(a) * Math.cos(e) * d;
+        const along = (ox * bx + oy * by + oz * bz) * (str - 1); ox += bx * along; oy += by * along; oz += bz * along;
+        F.puffs.push({ ox: ox * sz, oy: oy * sz, oz: oz * sz, s: (p === 0 ? 9.5 : 4 + r() * 6.5) * sz, rot: r() * 6.28, spin: (r() - 0.5) * 0.25, cell: (r() * 8) | 0, lum: 0.7 + r() * 0.6, wx: (r() - 0.5) * 1.3, wz: (r() - 0.5) * 1.3, late: r() * 0.5 });
+      }
+      spawnDebris(b.x, b.y, b.z, 14 + ((sz * 14) | 0), sz);
+    }
+    let live = 0, best = null, bestD = 1e9;
+    for (const F of flakMeshes) {
+      if (F.id < 0) continue;
+      const b = byId.get(F.id); if (!b) continue;
+      live++;
+      const t = b.t;
+      F.m.visible = true; F.m.position.set(b.x, b.y, b.z);
+      const geo = F.m.geometry, pos = geo.attributes.position.array, dat = geo.attributes.aData.array, tin = geo.attributes.aTint.array;
+      const grow = 1 - Math.exp(-t * 5.5);       // fast blast expansion, then slow billowing
+      const fade = t < 0.04 ? t / 0.04 : t < 5 ? 1 : Math.max(0, 1 - (t - 5) / 8.5);
+      const glow = Math.max(0, 1 - t / 0.45);   // hot orange core in the first instants
+      for (let p = 0; p < FP; p++) {
+        const P = F.puffs[p], tp = Math.max(0, t - P.late * 0.2);
+        const g2 = 1 - Math.exp(-tp * 5.5);
+        const ox = P.ox * (0.35 + 1.1 * g2) + P.wx * t, oy = P.oy * (0.35 + 1.1 * g2) + 0.22 * t, oz = P.oz * (0.35 + 1.1 * g2) + P.wz * t;
+        const size = P.s * (0.3 + 0.75 * g2) + t * 0.55;
+        const alpha = 0.92 * fade * (p === 0 ? 1 : 0.9) * (1 - 0.3 * Math.min(1, t / 12));
+        const kGlow = glow * (p === 0 ? 1 : 0.6);
+        const tr = (0.12 + 0.03 * P.lum) * (1 - kGlow) + 2.2 * kGlow, tg = (0.10 + 0.025 * P.lum) * (1 - kGlow) + 0.75 * kGlow, tb = (0.085 + 0.02 * P.lum) * (1 - kGlow) + 0.2 * kGlow;
+        for (let v = 0; v < 4; v++) {
+          const o = (p * 4 + v);
+          pos[o * 3] = ox; pos[o * 3 + 1] = oy; pos[o * 3 + 2] = oz;
+          dat[o * 4] = size; dat[o * 4 + 1] = alpha; dat[o * 4 + 2] = P.rot + P.spin * t; dat[o * 4 + 3] = P.cell;
+          const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark);
+          tin[o * 3] = tr * kk * F.tint[0]; tin[o * 3 + 1] = tg * kk * F.tint[1]; tin[o * 3 + 2] = tb * kk * F.tint[2];
+        }
+      }
+      void grow;
+      geo.attributes.position.needsUpdate = true; geo.attributes.aData.needsUpdate = true; geo.attributes.aTint.needsUpdate = true;
+      // the instant flash: bright orange-red, ~0.12 s
+      F.fl.visible = t < 0.16;
+      if (F.fl.visible) { F.fl.position.set(b.x, b.y, b.z); const s = (10 + t * 90) * (b.size || 1); F.fl.scale.set(s, s, 1); F.fl.material.opacity = Math.min(1, 1.25 * (1 - t / 0.16)); flakStats.flashes++; }
+      if (t < 0.18) { const d = camera.position.distanceTo(F.m.position); if (d < bestD) { bestD = d; best = { b, t }; } }
+    }
+    flakStats.live = live; flakStats.maxLive = Math.max(flakStats.maxLive, live);
+    if (best && bestD < 160) { flakLight.position.set(best.b.x, best.b.y, best.b.z); flakLight.intensity = 140 * (1 - best.t / 0.18); } else flakLight.intensity = 0;
+  }
+
+  // 1.3.6 contrails: white trails from every engine of every Fortress at altitude
+  // 1.4.0: they start a couple of ship-lengths behind the engines (a gap), widen steadily and break up / fade with
+  // age (lumpy texture), and are shorter — the 1.3.9 420u constant-width strips read as rays painted on the ground.
+  const conTex = (() => {
+    const W = 64, H = 512, c = document.createElement("canvas"); c.width = W; c.height = H;
+    const x = c.getContext("2d"); const img = x.createImageData(W, H);
+    let sd = 5; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    const bl = []; for (let k = 0; k < 90; k++) bl.push([R() * W, R() * H, 4 + R() * 12, R()]);
+    for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) {
+      const t = v / (H - 1), w = (u - (W - 1) / 2) / ((W - 1) / 2);
+      const along = t < 0.035 ? 0 : t < 0.09 ? Math.pow((t - 0.035) / 0.055, 1.5) : Math.exp(-(t - 0.09) * 2.6) * (1 - t);
+      let n = 0; for (const [bx, by, br, ba] of bl) { const dx = (u - bx) / br, dy = (v - by) / (br * 2.2), d = dx * dx + dy * dy; if (d < 1) n += (0.3 + ba) * (1 - d); }
+      const lump = t < 0.12 ? 1 : 1 - Math.min(0.75, (t - 0.12) * 1.1) * (1 - Math.min(1, n * 0.8));
+      const across = Math.exp(-w * w * (2.6 - 1.6 * t)) * (1 - w * w);
+      const o = (v * W + u) * 4; img.data[o] = 250; img.data[o + 1] = 252; img.data[o + 2] = 255; img.data[o + 3] = 255 * along * across * lump;
+    }
+    x.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; return t;
+  })();
+  const conMat = new THREE.MeshBasicMaterial({ map: conTex, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: true, opacity: 0.34 });
+  // camera-facing ribbons (6 cross-sections), rebuilt each frame from each engine's world position
+  const conList = [];
+  const CON_L = 300, CON_S = 6;
+  function addContrails(group, pts) {
+    const arr = [];
+    const uvs = [], idx = [];
+    for (let k = 0; k < CON_S; k++) { const v = k / (CON_S - 1); uvs.push(0, v, 1, v); if (k) { const a = (k - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } }
+    for (const q of pts) {
+      const anchor = new THREE.Object3D(); anchor.position.set(q[0], q[1], q[2]); group.add(anchor);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(CON_S * 6), 3));
+      g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      g.setIndex(idx);
+      const m = new THREE.Mesh(g, conMat); m.frustumCulled = false; scene.add(m);
+      const c = { anchor, group, mesh: m, on: true };
+      conList.push(c); arr.push(c);
+    }
+    group.userData.contrails = arr;
+  }
+  const _ca = new THREE.Vector3(), _cp = new THREE.Vector3(), _cq = new THREE.Vector3(), _cw = new THREE.Vector3(), _cz = new THREE.Vector3();
+  function updateContrails() {
+    for (const c of conList) {
+      const vis = c.on && c.group.visible;
+      c.mesh.visible = vis;
+      if (!vis) continue;
+      c.anchor.getWorldPosition(_cp);
+      _cz.set(0, 0, -1).transformDirection(c.group.matrixWorld); // aft axis
+      const pos = c.mesh.geometry.attributes.position.array;
+      for (let k = 0; k < CON_S; k++) {
+        const t = k / (CON_S - 1), w = 0.25 + 7.5 * Math.pow(t, 0.8);
+        _cq.copy(_cp).addScaledVector(_cz, CON_L * t);
+        _cq.y -= 3.5 * t * t; // the old end sinks a little
+        _ca.copy(camera.position).sub(_cq);
+        _cw.crossVectors(_cz, _ca).normalize().multiplyScalar(w);
+        pos[k * 6] = _cq.x - _cw.x; pos[k * 6 + 1] = _cq.y - _cw.y; pos[k * 6 + 2] = _cq.z - _cw.z;
+        pos[k * 6 + 3] = _cq.x + _cw.x; pos[k * 6 + 4] = _cq.y + _cw.y; pos[k * 6 + 5] = _cq.z + _cw.z;
+      }
+      c.mesh.geometry.attributes.position.needsUpdate = true;
+    }
+  }
+  for (const g of friendlyPool) addContrails(g, NACELLE_X.map((nx) => [nx * B17_VIS, -0.01 * B17_VIS, -0.05 * B17_VIS]));
+  // own-ship trails omitted: from the turret they fan across the whole view
+  if (false) addContrails(ownShip, [[8.3, -2.3, -2.5], [4.3, -2.5, -3.0], [-4.3, -2.5, -3.0], [-8.3, -2.3, -2.5]]);
+
+  let _lastT = performance.now();
+  const _v = new THREE.Vector3();
+  let _odo = null, _hd = 0;
+  function syncMission(opts) {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - _lastT) / 1000);
+    _lastT = now;
+    // --- ground frame from the game's odometer (world units): moves at the box's true ground speed ---
+    const geo = opts.geo || { x: 0, z: 0, rot: 0 };
+    groundFrame.position.set(CAM.x + (geo.x - CAM.x) / EARTH_K, GROUND_Y, CAM.z + (geo.z - CAM.z) / EARTH_K);
+    groundFrame.rotation.y = geo.rot || 0;
+    // --- clouds + flak: stationary in the air → stream aft by the distance flown, swing with the turn ---
+    const odo = opts.odo || 0;
+    let dz = _odo == null ? 0 : odo - _odo;
+    if (dz < 0 || dz > 400) dz = 0; // new mission / big jump
+    _odo = odo;
+    const hd = opts.heading || 0;
+    let dH = hd - _hd; _hd = hd;
+    if (Math.abs(dH) > 0.5) dH = 0;
+    const c = Math.cos(-dH), s = Math.sin(-dH);
+    const rot = (o) => { const x = o.position.x, z = o.position.z; o.position.x = x * c + z * s; o.position.z = -x * s + z * c; };
+    for (const g of cloudClusters) {
+      if (dH) rot(g);
+      g.position.z -= dz;
+      if (g.position.z < -2600 || Math.abs(g.position.x) > 6000 || g.position.z > 9000) resetCloud(g, false);
+    }
+    for (const sp of lowDeck) {
+      if (dH) rot(sp);
+      sp.position.z -= dz;
+      if (sp.position.z < -8000 || Math.abs(sp.position.x) > 14000 || sp.position.z > 16000) resetLow(sp, false);
+      const u = sp.userData.under; if (u) { u.position.x = sp.position.x; u.position.z = sp.position.z; }
+    }
+    if (dH) for (const f of flakPool) { const x = f.x, z = f.z; f.x = x * c + z * s; f.z = -x * s + z * c; }
+    updateFlak(!!opts.flakOn, dt, dz);
+    updateFlakBursts(opts.flakBursts);
+    updateDebris(dz);
+    updateChutes3D(opts.chutes);
+    // sun + sky stay fixed in the world: rotate with −heading in the box frame
+    const sd = sunDir0.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -hd);
+    skyU.uSun.value.copy(sd);
+    sun.position.copy(sd).multiplyScalar(100);
+    skyMesh.position.copy(camera.position);
+    townBombing(opts, dt);
+    // Friendlies
+    const fr = opts.friendlies || [];
+    const bySlot = new Array(friendlyPool.length).fill(null);
+    for (let j = 0; j < fr.length; j++) {
+      const s = fr[j].slot != null ? fr[j].slot : j;
+      if (s >= 0 && s < bySlot.length) bySlot[s] = fr[j];
+    }
+    let i = 0;
+    for (; i < friendlyPool.length; i++) {
+      const g = friendlyPool[i];
+      const f = bySlot[i];
+      if (f && f.blownApart && !f._fxDone) { // 1.3.8: direct 88 mm hit — the Fortress is blown apart
+        f._fxDone = true;
+        const P = new THREE.Vector3(f.x, f.y, f.z);
+        for (let k = 0; k < 4; k++) spawnKillFx(P.clone().add(new THREE.Vector3((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 10)), { vx: 0, vy: -3, vz: -8 });
+        if (window.FGAudio && window.FGAudio.boom) window.FGAudio.boom(f.x, f.y, f.z, true);
+      }
+      if (!f || f.health < 0) { g.visible = false; continue; }
+      g.visible = true;
+      g.position.set(f.x, f.y, f.z);
+      const yaw = f.yaw || 0;
+      const pitch = f.spiraling ? -0.35 - Math.min(0.5, (f.spiralT || 0) * 0.08) : 0;
+      g.rotation.set(0, 0, 0);
+      g.rotation.order = "YXZ";
+      g.rotation.y = yaw;
+      g.rotation.x = -pitch;
+      g.rotation.z = -(f.bank || 0);
+      const engs = g.userData.engines;
+      g.updateMatrixWorld(true);
+      for (let k = 0; k < 4; k++) {
+        const eng = engs[k];
+        const st = f.engines && f.engines[k];
+        const fire = st ? st.fire : 0;
+        const burning = fire > 0.3 || (f.spiraling && k % 2 === 0);
+        eng.fire.visible = burning;
+        if (burning) {
+          const s = (0.9 + fire * 1.3) * (0.85 + Math.random() * 0.3);
+          eng.fire.scale.set(s, s, 1);
+        }
+        const dead = (st && st.out) || (f.spiraling && k % 2 === 0);
+        eng.disc.visible = !dead;
+        eng.blades.visible = !!dead;
+        if (g.userData.contrails) g.userData.contrails[k].on = !dead && !f.spiraling;
+        if (!dead) eng.disc.rotation.z += dt * 31;
+        const smoking = fire > 0.12 || (st && st.out) || f.spiraling;
+        if (smoking) {
+          eng.lastEmit -= dt;
+          if (eng.lastEmit <= 0) { // 1.4.0: a continuous trail (ribbon) instead of spaced puffs
+            eng.anchor.getWorldPosition(_v);
+            const dark = burning || f.spiraling;
+            ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1.0 : 0.6, w1: dark ? (f.spiraling ? 12 : 8) : 5, life: dark ? 3.2 : 2.4, a: dark ? 0.62 : 0.4, col: dark ? [0.13, 0.125, 0.12] : [0.6, 0.6, 0.59], drift: 55 });
+            if (f.spiraling && Math.random() < 0.3) emitSmoke(_v, true, true);
+            eng.lastEmit = 0.05;
+          }
+        }
+      }
+    }
+    updateSmoke(dt);
+    updateRibbons(dt);
+    updateContrails();
+  }
+
+  let turretScene = null;
+  let ready = false;
+  let modelsReady = false;
+  let muzzleLights = [];
+
+  const loader = new GLTFLoader();
+
+  // ===== 1.3.2: twin-gun recoil groups, barrel-tip muzzle flashes, muzzle positions =====
+  const gunGroups = []; // [{ group, rest: Vector3, tipLocal: Vector3 (group space), flash, light }]
+  const flashTex = (() => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 128;
+    const x = c.getContext("2d");
+    x.translate(64, 64);
+    x.globalCompositeOperation = "lighter";
+    // spikes
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2 + (i % 2) * 0.2;
+      const len = i % 2 ? 40 : 60;
+      x.save(); x.rotate(a);
+      const g = x.createLinearGradient(0, 0, len, 0);
+      g.addColorStop(0, "rgba(255,240,200,0.95)");
+      g.addColorStop(0.5, "rgba(255,170,60,0.55)");
+      g.addColorStop(1, "rgba(255,90,10,0)");
+      x.fillStyle = g;
+      x.beginPath(); x.moveTo(0, -6); x.lineTo(len, 0); x.lineTo(0, 6); x.closePath(); x.fill();
+      x.restore();
+    }
+    const core = x.createRadialGradient(0, 0, 0, 0, 0, 30);
+    core.addColorStop(0, "rgba(255,255,240,1)");
+    core.addColorStop(0.35, "rgba(255,210,120,0.85)");
+    core.addColorStop(1, "rgba(255,110,20,0)");
+    x.fillStyle = core;
+    x.beginPath(); x.arc(0, 0, 30, 0, Math.PI * 2); x.fill();
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  // 1.3.9 worn gunmetal: object-space value noise breaks up roughness (oily smears vs dry, rubbed metal)
+  // and the base colour (bluing worn through to grey steel on edges/high spots); barrels + jackets darken
+  // toward heat-blued steel and finally glow dull red at the muzzle end under sustained fire.
+  const gunHeat = { value: 0 };
+  function gunWear(mat, heatK) {
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uHeat = gunHeat; sh.uniforms.uHeatK = { value: heatK };
+      sh.vertexShader = sh.vertexShader.replace("#include <common>", "#include <common>\nvarying vec3 vOP;").replace("#include <begin_vertex>", "#include <begin_vertex>\nvOP = position;");
+      sh.fragmentShader = sh.fragmentShader.replace("#include <common>", `#include <common>
+varying vec3 vOP; uniform float uHeat; uniform float uHeatK;
+float gwH(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float gwN(vec3 p){ vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(gwH(i), gwH(i + vec3(1,0,0)), f.x), mix(gwH(i + vec3(0,1,0)), gwH(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(gwH(i + vec3(0,0,1)), gwH(i + vec3(1,0,1)), f.x), mix(gwH(i + vec3(0,1,1)), gwH(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+        .replace("#include <map_fragment>", `#include <map_fragment>
+float gwA = gwN(vOP * 38.0) * 0.6 + gwN(vOP * 140.0) * 0.4;
+float gwB = gwN(vOP * 9.0 + 3.1);
+diffuseColor.rgb *= 0.78 + 0.42 * gwA;
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.31, 0.32), smoothstep(0.78, 0.95, gwA) * 0.35);
+diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.55, 0.52, 0.62), uHeat * uHeatK * 0.8);`)
+        .replace("#include <roughnessmap_fragment>", `#include <roughnessmap_fragment>
+roughnessFactor = clamp(roughnessFactor * (0.55 + 0.9 * gwB) + 0.08 * gwA, 0.08, 1.0);`)
+        .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) * uHeatK * smoothstep(0.55, 0.95, gwN(vOP * 3.0)) * 0.18;`);
+    };
+    mat.customProgramCacheKey = () => "gunwear" + heatK;
+  }
+  // 3D brass + links: each shot kicks a case out of the bottom of the receiver and a link out beside it
+  const EJ_N = 56, ejPool = [];
+  const caseGeo = new THREE.CylinderGeometry(0.0105, 0.0105, 0.099, 10);
+  const linkGeo = new THREE.BoxGeometry(0.03, 0.006, 0.022);
+  const caseMat = new THREE.MeshPhysicalMaterial({ color: 0xb8964c, metalness: 0.9, roughness: 0.3, clearcoat: 0.3, envMapIntensity: 0.8, emissive: 0x1a1206, emissiveIntensity: 0.15 });
+  const linkMat = new THREE.MeshStandardMaterial({ color: 0x2a2d31, metalness: 0.85, roughness: 0.4, emissive: 0x0a0c0e, emissiveIntensity: 0.2 });
+  for (let i = 0; i < EJ_N; i++) { const m = new THREE.Mesh(i % 2 ? linkGeo : caseGeo, i % 2 ? linkMat : caseMat); m.visible = false; m.frustumCulled = false; scene.add(m); ejPool.push({ m, life: 0, v: new THREE.Vector3(), w: new THREE.Vector3() }); }
+  let ejIdx = 0;
+  const _ejQ = new THREE.Quaternion(), _ejV = new THREE.Vector3();
+  function ejectFrom(gg, sgn) {
+    for (let k = 0; k < 2; k++) {
+      // even slots = cases, odd = links
+      let p = ejPool[ejIdx];
+      if ((ejIdx % 2 === 0) !== (k === 0)) { ejIdx = (ejIdx + 1) % EJ_N; p = ejPool[ejIdx]; }
+      ejIdx = (ejIdx + 1) % EJ_N;
+      _ejV.copy(gg.ejectLocal); gg.group.localToWorld(_ejV);
+      p.m.position.copy(_ejV);
+      camera.getWorldQuaternion(_ejQ);
+      const isLink = p.m.geometry === linkGeo;
+      p.v.set(sgn * (isLink ? 1.1 + Math.random() * 0.7 : 0.2 + Math.random() * 0.3), -(1.6 + Math.random() * 0.9), -(0.4 + Math.random() * 0.5)).applyQuaternion(_ejQ);
+      p.w.set((Math.random() - 0.5) * 50, (Math.random() - 0.5) * 50, (Math.random() - 0.5) * 50);
+      p.m.quaternion.copy(_ejQ);
+      p.life = 0.9;
+      p.m.visible = true;
+    }
+  }
+  let _ejT = 0;
+  function updateEject() {
+    const now = window.__FG_SIMT || 0, dt = Math.min(0.05, Math.max(0, now - _ejT)); _ejT = now;
+    if (dt <= 0) return;
+    for (const p of ejPool) {
+      if (p.life <= 0) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.m.visible = false; continue; }
+      p.v.y -= 9.0 * dt;       // falls
+      p.v.z -= 22 * dt;        // and the slipstream tears it aft
+      p.m.position.addScaledVector(p.v, dt);
+      p.m.rotation.x += p.w.x * dt; p.m.rotation.y += p.w.y * dt; p.m.rotation.z += p.w.z * dt;
+    }
+  }
+  // heat shimmer: a refracting (transmission) sheet above each hot barrel with a scrolling noise normal map
+  const shimmerTex = (() => {
+    const N = 128, c = document.createElement("canvas"); c.width = N; c.height = N; const x = c.getContext("2d"), im = x.createImageData(N, N);
+    const h = (i, j) => { const v = Math.sin(i * 0.19 + Math.sin(j * 0.13) * 2.1) + Math.sin(j * 0.31 + Math.sin(i * 0.07) * 3.0) * 0.8 + Math.sin((i + j) * 0.11) * 0.6; return v; };
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const dx = h(i + 1, j) - h(i - 1, j), dy = h(i, j + 1) - h(i, j - 1), o = (j * N + i) * 4; im.data[o] = 128 + dx * 60; im.data[o + 1] = 128 + dy * 60; im.data[o + 2] = 255; im.data[o + 3] = 255; }
+    x.putImageData(im, 0, 0); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+  })();
+  const shimmers = [];
+  // heat haze: faint wavy rising streaks (additive, very low alpha) over the jackets
+  const hazeTex = (() => {
+    const W = 64, H = 256, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+    x.clearRect(0, 0, W, H); x.lineWidth = 1.2;
+    for (let k = 0; k < 14; k++) { const x0 = 4 + Math.random() * (W - 8), ph = Math.random() * 6, a = 0.25 + Math.random() * 0.4; x.strokeStyle = `rgba(255,255,255,${a})`; x.beginPath(); for (let y = 0; y <= H; y += 4) { const xx = x0 + Math.sin(y * 0.07 + ph) * 3 + Math.sin(y * 0.19 + ph * 2) * 1.5; y ? x.lineTo(xx, y) : x.moveTo(xx, y); } x.stroke(); }
+    const g = x.createLinearGradient(0, 0, W, 0); g.addColorStop(0, "rgba(0,0,0,1)"); g.addColorStop(0.25, "rgba(0,0,0,0)"); g.addColorStop(0.75, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,1)");
+    x.globalCompositeOperation = "destination-out"; x.fillStyle = g; x.fillRect(0, 0, W, H);
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+  })();
+  // 1.3.9 RING SIGHT on the guns (replaces the floating HUD reticle): a ring-and-bead sight on a post clamped
+  // to a bar between the two barrel jackets. The ring's centre is on the sight line (camera axis), i.e. exactly
+  // where the rounds cross at 320 u. Outer ring ≈2.5° radius (a 109's span at ~140 u), a finer inner ring at
+  // ≈1.0°, four short spokes; the centre stays clear. A pale inner hairline keeps it legible on dark ground.
+  const SIGHT_Z = -0.9, SIGHT_R = 0.9 * Math.tan(2.8 * Math.PI / 180);
+  const sightGroup = new THREE.Group();
+  {
+    const steel = new THREE.MeshBasicMaterial({ color: 0x131517 }); // unlit: a crisp dark silhouette, never tinted by the muzzle flash
+    const pale = new THREE.MeshBasicMaterial({ color: 0xe6dcb4, transparent: true, opacity: 0.55, depthWrite: false });
+    const add = (geo, mat, x, y, z, rx, ry, rz) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx || 0, ry || 0, rz || 0); m.renderOrder = 6; sightGroup.add(m); return m; };
+    add(new THREE.TorusGeometry(SIGHT_R, 0.0028, 8, 128), steel, 0, 0, 0);
+    add(new THREE.TorusGeometry(SIGHT_R - 0.0032, 0.0007, 6, 128), pale, 0, 0, 0.0005);
+    const r2 = 0.9 * Math.tan(1.05 * Math.PI / 180);
+    add(new THREE.TorusGeometry(r2, 0.0014, 6, 96), steel, 0, 0, 0);
+    add(new THREE.TorusGeometry(r2 - 0.0017, 0.0005, 6, 96), pale, 0, 0, 0.0005);
+    for (let k = 0; k < 4; k++) { // spokes outer → inner ring, leaving the centre open
+      const a = k * Math.PI / 2, L = SIGHT_R - r2, rm = (SIGHT_R + r2) / 2;
+      add(new THREE.BoxGeometry(0.0022, L, 0.0022), steel, Math.sin(a) * rm, Math.cos(a) * rm, 0, 0, 0, -a);
+    }
+    // V-bracket: two short struts from the ring (4 and 8 o'clock) down to the muzzle ends of the jackets
+    // (where they meet the barrels on screen), so the lower centre stays open and nothing crosses the receivers
+    for (const sx of [-1, 1]) {
+      const ax = sx * SIGHT_R * Math.sin(Math.PI / 3), ay = -SIGHT_R * Math.cos(Math.PI / 3);
+      const bx = sx * 0.9 * Math.tan(3.9 * Math.PI / 180), by = -0.9 * Math.tan(5.6 * Math.PI / 180), L = Math.hypot(bx - ax, by - ay);
+      add(new THREE.SphereGeometry(0.0045, 8, 6), steel, bx, by, 0.004); // clamp
+      add(new THREE.BoxGeometry(0.0035, L, 0.0035), steel, (ax + bx) / 2, (ay + by) / 2, 0.004, 0, 0, Math.atan2(-(bx - ax), by - ay));
+    }
+    add(new THREE.SphereGeometry(0.0022, 8, 6), steel, 0, -SIGHT_R + 0.0005, 0); // bead at 6 o'clock on the ring
+  }
+  sightGroup.position.set(0, 0.02, SIGHT_Z + 0.05); // cancels the anchor's rest offset (y −0.02, z −0.05) → ring centre on the camera axis
+  // 1.4.0: the iron ring sight is removed (floating 2D reflector reticle in game.js instead); sightGroup kept unattached
+  function setupGunGroups() {
+    if (!turretScene) return;
+    scene.updateMatrixWorld(true);
+    const meshes = [];
+    turretScene.traverse((o) => { if (o.isMesh && o.visible) meshes.push(o); });
+    const L = new THREE.Group(), R = new THREE.Group();
+    turretScene.add(L); turretScene.add(R);
+    scene.updateMatrixWorld(true);
+    const bx = new THREE.Box3(), ctr = new THREE.Vector3();
+    for (const o of meshes) {
+      bx.setFromObject(o); bx.getCenter(ctr);
+      turretAnchor.worldToLocal(ctr);
+      (ctr.x < 0 ? L : R).attach(o);
+    }
+    scene.updateMatrixWorld(true);
+    // 1.3.9: the two ammo belts are ~100 small meshes — merge them per gun and per material (link / case /
+    // bullet) into 3 static meshes each, so the full belts cost 6 draw calls on a phone instead of ~108
+    for (const grp of [L, R]) {
+      const buckets = {};
+      grp.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(grp.matrixWorld).invert();
+      grp.traverse((o) => { if (o.isMesh && /^link/i.test(o.name || "") && o.geometry && o.geometry.attributes.normal) { const k = /case/i.test(o.name) ? "case" : /bullet/i.test(o.name) ? "bullet" : "link"; (buckets[k] = buckets[k] || []).push(o); } });
+      for (const k in buckets) {
+        const list = buckets[k]; const pos = [], nor = [];
+        const m4 = new THREE.Matrix4(), n3 = new THREE.Matrix3();
+        for (const o of list) {
+          const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry;
+          m4.multiplyMatrices(inv, o.matrixWorld); n3.getNormalMatrix(m4);
+          const pa = g.attributes.position, na = g.attributes.normal, vv = new THREE.Vector3();
+          for (let i = 0; i < pa.count; i++) { vv.fromBufferAttribute(pa, i).applyMatrix4(m4); pos.push(vv.x, vv.y, vv.z); vv.fromBufferAttribute(na, i).applyMatrix3(n3).normalize(); nor.push(vv.x, vv.y, vv.z); }
+        }
+        const mg = new THREE.BufferGeometry();
+        mg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); mg.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+        const mat = Array.isArray(list[0].material) ? list[0].material[0] : list[0].material;
+        const mm = new THREE.Mesh(mg, mat); mm.name = "Belt_" + k;
+        grp.add(mm);
+        for (const o of list) { o.visible = false; if (o.parent) o.parent.remove(o); }
+      }
+    }
+    scene.updateMatrixWorld(true);
+    const v = new THREE.Vector3();
+    for (const grp of [L, R]) {
+      // Barrel tip = the most-forward vertices (camera looks down -Z in anchor space)
+      let minZ = 1e9;
+      const pts = [];
+      grp.traverse((o) => {
+        if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+        const pa = o.geometry.attributes.position;
+        const step = Math.max(1, Math.floor(pa.count / 4000));
+        for (let i = 0; i < pa.count; i += step) {
+          v.fromBufferAttribute(pa, i);
+          o.localToWorld(v);
+          turretAnchor.worldToLocal(v);
+          pts.push(v.x, v.y, v.z);
+          if (v.z < minZ) minZ = v.z;
+        }
+      });
+      let sx = 0, sy = 0, n = 0;
+      for (let i = 0; i < pts.length; i += 3) {
+        if (pts[i + 2] < minZ + 0.03) { sx += pts[i]; sy += pts[i + 1]; n++; }
+      }
+      const tipA = new THREE.Vector3(n ? sx / n : (grp === L ? -0.3 : 0.3), n ? sy / n : -0.5, minZ < 1e8 ? minZ - 0.02 : -1.6);
+      const tipW = turretAnchor.localToWorld(tipA.clone());
+      const tipLocal = grp.worldToLocal(tipW.clone());
+      const flash = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: flashTex, transparent: true, depthWrite: false, depthTest: false,
+        blending: THREE.AdditiveBlending, opacity: 1,
+      }));
+      flash.renderOrder = 999;
+      flash.position.copy(tipLocal);
+      flash.visible = false;
+      grp.add(flash);
+      const light = new THREE.PointLight(0xff9a40, 0, 3.5, 2);
+      light.position.copy(tipLocal);
+      grp.add(light);
+      muzzleLights.push(light);
+      // eject port = under the receiver's rear half (group space)
+      const rb = new THREE.Box3(); grp.traverse((o) => { if (o.isMesh && /receiver/i.test(o.name || "")) rb.expandByObject(o); });
+      if (rb.isEmpty()) grp.traverse((o) => { if (o.isMesh) rb.expandByObject(o); });
+      const ec = new THREE.Vector3(); rb.getCenter(ec); ec.y = rb.min.y; ec.z = (ec.z + rb.max.z) * 0.5;
+      const ejectLocal = grp.worldToLocal(ec.clone());
+      // shimmer sheet along the jacket, just above it, facing the eye
+      const tb = new THREE.Box3(); grp.traverse((o) => { if (o.isMesh && /jacket/i.test(o.name || "")) tb.expandByObject(o); });
+      let shim = null;
+      if (!tb.isEmpty()) {
+        const sz = new THREE.Vector3(); tb.getSize(sz); const cc = new THREE.Vector3(); tb.getCenter(cc);
+        const mat = new THREE.MeshBasicMaterial({ map: hazeTex, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, color: 0xfff4e0 });
+        shim = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(0.06, sz.x * 2.2), Math.max(0.3, sz.z)), mat);
+        shim.rotation.x = -Math.PI / 2 + 0.25;
+        const wc = cc.clone(); wc.y = tb.max.y + 0.035;
+        shim.position.copy(grp.worldToLocal(wc));
+        shim.visible = false; shim.renderOrder = 5;
+        grp.add(shim); shimmers.push(shim);
+      }
+      gunGroups.push({ group: grp, rest: grp.position.clone(), tipLocal, flash, light, ejectLocal, shim, lastRec: 0, lastF: 0 });
+    }
+    // 1.3.7: pull the twin guns in toward the sight line so the view runs straight down them
+    for (const gg of gunGroups) { const sgn = gg.tipLocal.x + gg.group.position.x < 0 ? 1 : -1; gg.group.position.x += sgn * GUN_INSET; gg.rest.copy(gg.group.position); }
+  }
+  // ===== 1.4.0: TURRET OVERLAY PASS =====
+  // Guns, sight box, sill/ring and dome frame live on layer OVL and are drawn in a second pass after a depth clear,
+  // so they always render on top of our own airframe (no more guns sinking into the fuselage when looking down),
+  // while pitch stays unlimited (straight down, and you can still shoot your own ship).
+  function toOverlay(root) { root.traverse((o) => { o.layers.set(OVL); }); }
+  for (const L of [hemi, sun, fill, turretFill, muzzleStrobe, turretKey, gunSpec, viewRim, viewRim2]) L.layers.enable(OVL);
+  for (const e of ejPool) e.m.layers.set(OVL);
+  // enclosed flexible feed chutes (ribbed, dull) from each gun's feed side, curving down and out of view
+  function addFlexChutes() {
+    const c = document.createElement("canvas"); c.width = 64; c.height = 256; const x = c.getContext("2d");
+    x.fillStyle = "#3a3f36"; x.fillRect(0, 0, 64, 256);
+    for (let yy = 0; yy < 256; yy += 8) { x.fillStyle = "rgba(0,0,0,0.45)"; x.fillRect(0, yy, 64, 2); x.fillStyle = "rgba(255,255,255,0.08)"; x.fillRect(0, yy + 2, 64, 1); }
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(1, 6);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x9a9f94, map: tex, metalness: 0.25, roughness: 0.85, envMapIntensity: 0.2 });
+    for (const gg of gunGroups) {
+      const b = new THREE.Box3(); gg.group.traverse((o) => { if (o.isMesh && /feedchute/i.test(o.name || "")) b.expandByObject(o); });
+      if (b.isEmpty()) continue;
+      const ctr = new THREE.Vector3(); b.getCenter(ctr); gg.group.worldToLocal(ctr);
+      const sg = ctr.x < 0 ? -1 : 1; // outboard side (group space ≈ anchor space, unrotated)
+      const pts = [ctr.clone(), ctr.clone().add(new THREE.Vector3(sg * 0.08, -0.06, 0.05)), ctr.clone().add(new THREE.Vector3(sg * 0.14, -0.26, 0.2)), ctr.clone().add(new THREE.Vector3(sg * 0.12, -0.6, 0.35))];
+      const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, 0.045, 10, false), mat);
+      tube.name = "FlexChute"; gg.group.add(tube);
+    }
+  }
+  // Turret structure fixed to the turret (yaw only): sill + ring, heavy right frame, thin left strut, angled brace,
+  // overhead arch. It pitches opposite to the view (stays level with the ship) for look-up and a little look-down;
+  // past ~8° down it slides away downward so unlimited look-down stays clear.
+  const cage = new THREE.Group();
+  camera.add(cage);
+  const cageTex = (() => { // unrolled sill band: painted green frame, top rail with bolts, placards, brass plate
+    const W = 1024, H = 300, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+    let sd = 11; const rnd = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    x.fillStyle = "#1f3a31"; x.fillRect(0, 0, W, H);
+    for (let i = 0; i < 1800; i++) { const v = rnd(); x.fillStyle = v < 0.5 ? "rgba(0,0,0,0.10)" : "rgba(160,200,180,0.06)"; x.fillRect(rnd() * W, rnd() * H, 1 + rnd() * 5, 1 + rnd() * 2); }
+    // top rail (lighter, worn edge) + shadow line under it
+    const rg = x.createLinearGradient(0, 0, 0, 30); rg.addColorStop(0, "#5d7a6c"); rg.addColorStop(0.35, "#2e4d41"); rg.addColorStop(1, "#1a3129");
+    x.fillStyle = rg; x.fillRect(0, 0, W, 30);
+    x.fillStyle = "rgba(0,0,0,0.55)"; x.fillRect(0, 30, W, 4);
+    for (let i = 0; i < 60; i++) { x.fillStyle = "rgba(190,200,190,0.35)"; x.fillRect(rnd() * W, rnd() * 6, 4 + rnd() * 20, 1); } // edge wear
+    const bolt = (bx, by, r) => { const g = x.createRadialGradient(bx - r * 0.3, by - r * 0.3, 0, bx, by, r); g.addColorStop(0, "#c9cfc6"); g.addColorStop(0.5, "#6f7a72"); g.addColorStop(1, "#1a2420"); x.fillStyle = g; x.beginPath(); x.arc(bx, by, r, 0, Math.PI * 2); x.fill(); };
+    for (let bx = 18; bx < W; bx += 44) bolt(bx, 16, 5);
+    // panel seams
+    x.strokeStyle = "rgba(0,0,0,0.5)"; x.lineWidth = 2;
+    for (const sx of [150, 360, 664, 874]) { x.beginPath(); x.moveTo(sx, 34); x.lineTo(sx, H); x.stroke(); for (let by = 52; by < H; by += 40) bolt(sx + 8, by, 3.5); }
+    // placards (white data cards with typed lines), a round brass plate, a yellow/black warning sticker
+    const card = (px, py, w, h, rot) => {
+      x.save(); x.translate(px, py); x.rotate(rot || 0);
+      x.fillStyle = "rgba(0,0,0,0.35)"; x.fillRect(3, 3, w, h);
+      x.fillStyle = "#e9e7de"; x.fillRect(0, 0, w, h);
+      x.fillStyle = "#b8b4a6"; x.fillRect(0, 0, w, 7);
+      x.fillStyle = "rgba(40,40,60,0.75)";
+      for (let ly = 13; ly < h - 4; ly += 6) { let lx = 5; while (lx < w - 10) { const lw = 6 + rnd() * 22; x.fillRect(lx, ly, Math.min(lw, w - 6 - lx), 1.6); lx += lw + 4; } }
+      x.strokeStyle = "rgba(90,90,100,0.6)"; x.lineWidth = 1; x.strokeRect(0.5, 0.5, w - 1, h - 1);
+      x.restore();
+    };
+    card(560, 40, 150, 58, -0.01); card(716, 38, 118, 64, 0.012); card(250, 42, 120, 54, 0.02); card(880, 46, 92, 50, 0); card(60, 44, 100, 52, -0.015);
+    { const bx = 470, by = 66, r = 24; const g = x.createRadialGradient(bx - 8, by - 8, 2, bx, by, r); g.addColorStop(0, "#f0d58a"); g.addColorStop(0.55, "#b08a3a"); g.addColorStop(1, "#5a4418"); x.fillStyle = g; x.beginPath(); x.arc(bx, by, r, 0, Math.PI * 2); x.fill();
+      x.strokeStyle = "rgba(60,40,10,0.8)"; x.lineWidth = 1.5; x.beginPath(); x.arc(bx, by, r - 5, 0, Math.PI * 2); x.stroke();
+      x.fillStyle = "rgba(70,50,15,0.7)"; for (let k = 0; k < 3; k++) x.fillRect(bx - 12, by - 6 + k * 6, 24, 1.5); }
+    x.save(); x.translate(600, 112); x.rotate(-0.03); x.fillStyle = "#e3c32a"; x.fillRect(0, 0, 120, 34);
+    x.fillStyle = "#111"; x.font = "bold 13px sans-serif"; x.fillText("WATCH YOUR", 8, 14); x.fillText("HEAD!", 30, 29); x.restore();
+    // scuffs lower down
+    for (let i = 0; i < 40; i++) { x.strokeStyle = "rgba(170,190,175,0.12)"; x.lineWidth = 1; const sx = rnd() * W, sy = 120 + rnd() * 170; x.beginPath(); x.moveTo(sx, sy); x.lineTo(sx + (rnd() - 0.5) * 60, sy + (rnd() - 0.5) * 8); x.stroke(); }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+    t.wrapS = THREE.RepeatWrapping; t.repeat.x = -1; t.offset.x = 1; // seen from inside
+    return t;
+  })();
+  const CAGE_R = 0.62, SILL_Y = -0.165, SILL_H = 0.32; // sill top ≈ 13.6° below the eye (bottom ~18 % of a landscape phone)
+  const paint = new THREE.MeshStandardMaterial({ color: 0x2a4a3e, roughness: 0.6, metalness: 0.25, envMapIntensity: 0.4 });
+  const paintDark = new THREE.MeshStandardMaterial({ color: 0x1c2f28, roughness: 0.65, metalness: 0.25, envMapIntensity: 0.35 });
+  const boltMat = new THREE.MeshStandardMaterial({ color: 0x9aa39c, roughness: 0.35, metalness: 0.85, envMapIntensity: 0.6 });
+  {
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(CAGE_R, CAGE_R + 0.02, SILL_H, 64, 1, true, Math.PI - 1.45, 2.9),
+      new THREE.MeshStandardMaterial({ map: cageTex, roughness: 0.62, metalness: 0.2, envMapIntensity: 0.35, side: THREE.BackSide }));
+    band.position.y = SILL_Y - SILL_H / 2; cage.add(band);
+    const lip = new THREE.Mesh(new THREE.TorusGeometry(CAGE_R - 0.005, 0.017, 8, 72, Math.PI * 0.92), paint);
+    lip.rotation.set(-Math.PI / 2, 0, Math.PI * 0.04); lip.position.y = SILL_Y; cage.add(lip);
+    const shelf = new THREE.Mesh(new THREE.RingGeometry(CAGE_R - 0.075, CAGE_R, 72, 1, Math.PI * 0.04, Math.PI * 0.92), paintDark);
+    shelf.rotation.x = -Math.PI / 2; shelf.position.y = SILL_Y - 0.004; cage.add(shelf);
+    // bolt heads along the lip's top
+    const bg = new THREE.CylinderGeometry(0.0055, 0.0055, 0.006, 8);
+    for (let k = 0; k < 34; k++) { const a = Math.PI * (0.06 + 0.88 * k / 33); const b = new THREE.Mesh(bg, boltMat); b.position.set(Math.cos(a) * (CAGE_R - 0.04), SILL_Y + 0.004, -Math.sin(a) * (CAGE_R - 0.04)); cage.add(b); }
+  }
+  const beam = (p0, p1, w, d, mat, bolts) => { // box beam p0 → p1, w across the view, d deep
+    const a = new THREE.Vector3(...p0), b = new THREE.Vector3(...p1), L = a.distanceTo(b);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, L, d), mat);
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    // face the eye: spin about the beam axis so the wide face looks at the origin
+    const mid = m.position.clone(), ax = b.clone().sub(a).normalize();
+    const toEye = mid.clone().negate(); toEye.addScaledVector(ax, -toEye.dot(ax)).normalize();
+    const cur = new THREE.Vector3(0, 0, 1).applyQuaternion(m.quaternion); cur.addScaledVector(ax, -cur.dot(ax)).normalize();
+    const ang = Math.atan2(new THREE.Vector3().crossVectors(cur, toEye).dot(ax), cur.dot(toEye));
+    m.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(ax, ang));
+    cage.add(m);
+    if (bolts) { const bg = new THREE.SphereGeometry(0.0052, 8, 6); for (let k = 1; k <= bolts; k++) { const t = k / (bolts + 1); const bb = new THREE.Mesh(bg, boltMat); bb.position.copy(a).lerp(b, t).addScaledVector(toEye, d * 0.5 + 0.002); bb.scale.set(1, 1, 0.6); cage.add(bb); } }
+    return m;
+  };
+  // heavy frame, right side (dark-green, bolted) — leans out as it climbs
+  beam([0.375, SILL_Y, -0.5], [0.56, 0.62, -0.33], 0.058, 0.04, paint, 7);
+  // thin vertical strut, left
+  beam([-0.385, SILL_Y, -0.505], [-0.47, 0.78, -0.4], 0.022, 0.02, paintDark, 0);
+  // angled brace low on the left (bolted)
+  beam([-0.31, SILL_Y, -0.55], [-0.405, SILL_Y + 0.15, -0.495], 0.02, 0.018, paint, 2);
+  // overhead arch (only seen when looking well up)
+  const arch = new THREE.Mesh(new THREE.TorusGeometry(CAGE_R, 0.012, 8, 64, Math.PI), paint);
+  { arch.position.set(0, SILL_Y, -0.22); arch.scale.set(1, 1.05, 1); cage.add(arch);
+  }
+  toOverlay(cage);
+  const cageE = new THREE.Euler();
+  function updateCage(pitch, hidden) {
+    // past ~22° of look-down the ring has slid fully out of view: hide it so the airframe below reads cleanly
+    cage.visible = !hidden && pitch > -0.38;
+    arch.visible = pitch > -0.12; // only ever seen overhead
+    // level with the ship for look-up and the first ~8° of look-down; past that it slides away downward
+    const p = Math.max(pitch, -0.14);
+    cage.rotation.set(-p, 0, 0);
+    cage.position.y = pitch >= -0.14 ? 0 : -Math.min(0.6, (-0.14 - pitch) * 2.4);
+  }
+  // sight / ammo box on the gun mount (moves with the guns), low and right of centre so the middle stays clear
+  const sightBox = new THREE.Group();
+  {
+    const boxM = new THREE.MeshStandardMaterial({ color: 0x17191a, roughness: 0.55, metalness: 0.45, envMapIntensity: 0.4 });
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.16), boxM); sightBox.add(b);
+    const lens = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.005), new THREE.MeshStandardMaterial({ color: 0x3a6a70, roughness: 0.1, metalness: 0.6, envMapIntensity: 1.0 }));
+    lens.position.set(-0.02, 0.015, 0.081); sightBox.add(lens);
+    const bg = new THREE.SphereGeometry(0.006, 6, 5);
+    for (const [bx, by] of [[-0.09, 0.04], [0.09, 0.04], [-0.09, -0.04], [0.09, -0.04]]) { const q = new THREE.Mesh(bg, boltMat); q.position.set(bx, by, 0.081); sightBox.add(q); }
+    sightBox.position.set(0.27, -0.245, -0.5); sightBox.rotation.set(0.1, -0.4, 0);
+    camera.add(sightBox); toOverlay(sightBox);
+  }
+  const _mw = new THREE.Vector3();
+  const muzzleOut = [{ x: 0, y: 0, z: 0, sx: 0, sy: 0 }, { x: 0, y: 0, z: 0, sx: 0, sy: 0 }];
+  function updateGuns(opts) {
+    const rec = opts.recoilLR || [0, 0];
+    const fl = opts.flashLR || [0, 0];
+    for (let i = 0; i < gunGroups.length; i++) {
+      const gg = gunGroups[i];
+      // barrel + receiver slide straight back along the bore, then run out
+      gg.group.position.set(gg.rest.x, gg.rest.y + rec[i] * 0.004, gg.rest.z + rec[i] * 0.12);
+      gg.group.rotation.set(rec[i] * 0.018, 0, (i ? -1 : 1) * rec[i] * 0.006); // 1.3.9: muzzle climb + a little twist on each kick
+      if (rec[i] > gg.lastRec + 0.4) { // a round just fired on this gun
+        ejectFrom(gg, gg.ejectLocal.x + gg.group.position.x < 0 ? -1 : 1);
+        _mw.copy(gg.tipLocal); gg.group.localToWorld(_mw);
+        emitSmoke(_mw, false, false, { life: 0.42 + Math.random() * 0.2, s0: 0.05, s1: 0.42 + Math.random() * 0.2, a: 0.22 + 0.2 * (opts.heat || 0), vz: -16, color: 0xc4c0b6 });
+      }
+      gg.lastRec = rec[i];
+      const f = fl[i] || 0;
+      gg.flash.visible = f > 0.3;
+      if (gg.flash.visible) {
+        // 1.3.3: small, brief, see-through (≈12–20 CSS px on a phone)
+        const s = (0.13 + Math.random() * 0.05) * (0.6 + 0.4 * f);
+        gg.flash.scale.set(s, s, 1);
+        gg.flash.material.rotation = Math.random() * Math.PI;
+        gg.flash.material.opacity = 0.35 + 0.4 * f;
+      }
+      gg.light.intensity = f * 1.2;
+      if (gg.shim) { // shimmer fades in once the barrels are hot and lingers while they cool
+        const h = opts.heat || 0, on = h > 0.3;
+        gg.shim.visible = on;
+        if (on) { const t = performance.now() * 0.001; gg.shim.material.map.offset.set(Math.sin(t * 1.7 + i) * 0.04, -t * 0.6); gg.shim.material.opacity = 0.16 * Math.min(1, (h - 0.3) / 0.5); }
+      }
+    }
+    gunHeat.value += ((opts.heat || 0) - gunHeat.value) * 0.08;
+    updateEject();
+    camera.updateMatrixWorld(true);
+    let strobeI = fl[1] > fl[0] ? 1 : 0;
+    for (let i = 0; i < gunGroups.length && i < 2; i++) {
+      const gg = gunGroups[i];
+      _mw.copy(gg.tipLocal);
+      gg.group.localToWorld(_mw);
+      muzzleOut[i].x = _mw.x; muzzleOut[i].y = _mw.y; muzzleOut[i].z = _mw.z;
+      if (i === strobeI) { muzzleStrobe.position.copy(_mw); camera.worldToLocal(muzzleStrobe.position); muzzleStrobe.position.z += 0.15; } // 1.4.0: the flash light sits AT the firing muzzle
+      _mw.project(camera);
+      muzzleOut[i].sx = (_mw.x + 1) * 0.5 * window.innerWidth;
+      muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
+    }
+  }
+
+  function cloneFighter(kind) {
+    const src = prototypes[kind] || prototypes["109"];
+    if (!src) return null;
+    const mesh = src.clone(true);
+    mesh.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = false;
+        o.receiveShadow = false;
+        if (o.material) {
+          o.material = o.material.clone();
+          if ("envMapIntensity" in o.material) o.material.envMapIntensity = 0.8;
+        }
+      }
+    });
+    // World-ish readable scale (mesh span ~4.6–4.8u ≈ phone 35ft×~25). NOT 7–20× face-huggers.
+    mesh.scale.setScalar(kind === "110" ? 2.45 : kind === "190" ? 2.15 : 2.0);
+    // contact-ish blob under the fighter (grounds 3D vs photo sky)
+    if (!mesh.userData.blob) {
+      const c = document.createElement("canvas");
+      c.width = 64; c.height = 64;
+      const cx = c.getContext("2d");
+      const g = cx.createRadialGradient(32, 32, 6, 32, 32, 30);
+      g.addColorStop(0, "rgba(18,14,10,0.40)");
+      g.addColorStop(1, "rgba(18,14,10,0)");
+      cx.fillStyle = g;
+      cx.fillRect(0, 0, 64, 64);
+      const tex = new THREE.CanvasTexture(c);
+      const blob = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.1, 1.25),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.5, fog: true })
+      );
+      blob.rotation.x = -Math.PI / 2;
+      blob.position.y = -0.42;
+      blob.userData.isShadow = true;
+      blob.visible = false;
+      mesh.add(blob);
+      mesh.userData.blob = blob;
+    }
+    // 1.3.9 LOD: remember each material's own look so the crossfade / small-size darkening can
+    // be applied and undone every frame; add a constant-pixel-width dark outline hull (fades out
+    // once the model is bigger than ~25 px on screen).
+    const fmats = [], olMeshes = [];
+    mesh.traverse((o) => {
+      if (!o.isMesh || !o.material || o.userData.isShadow || o.userData.isOutline) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        m.userData.op0 = m.opacity; m.userData.tr0 = m.transparent;
+        fmats.push({ m, op: m.opacity, tr: m.transparent, col: m.color ? m.color.clone() : null, env: m.envMapIntensity, emi: m.emissiveIntensity });
+      }
+      const nm = ((o.name || "") + " " + mats.map((x) => x.name || "").join(" ")).toLowerCase();
+      if (o.visible && !nm.includes("disc") && !mats.some((x) => x.transparent && x.opacity < 0.5)) olMeshes.push(o);
+    });
+    const olMat = new THREE.ShaderMaterial({
+      uniforms: { uW: { value: 0.6 }, uPPR: { value: 900 }, uOp: { value: 0 }, uC: { value: new THREE.Color(0x121310) } },
+      vertexShader: "uniform float uW; uniform float uPPR; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vec3 n = normalize(normalMatrix * normal); mv.xyz += n * (uW * max(0.5, -mv.z) / uPPR); gl_Position = projectionMatrix * mv; }",
+      fragmentShader: "uniform vec3 uC; uniform float uOp; void main(){ gl_FragColor = vec4(uC, uOp);\n#include <colorspace_fragment>\n}",
+      side: THREE.BackSide, transparent: true, depthWrite: false,
+    });
+    for (const o of olMeshes) {
+      if (!o.geometry.attributes.normal) continue;
+      const ol = new THREE.Mesh(o.geometry, olMat);
+      ol.userData.isOutline = true; ol.userData.noHit = true;
+      ol.visible = false; ol.renderOrder = 1;
+      o.add(ol);
+    }
+    mesh.userData.fmats = fmats; mesh.userData.olMat = olMat; mesh.userData.olMeshes = olMeshes;
+    mesh.visible = false;
+    scene.add(mesh);
+    return mesh;
+  }
+
+  // Outline: collect meshes first so we never traverse into newly added outlines
+  function addOutline(root, color = 0x0a0a08, scale = 1.035) {
+    const meshes = [];
+    root.traverse((o) => {
+      if (!o.isMesh || !o.geometry || o.userData.isOutline) return;
+      const n = (o.name || "").toLowerCase();
+      // Never outline prop discs / glass — BackSide scale makes a black sky blob
+      if (n.includes("prop") || n.includes("disc") || n.includes("glass") || n.includes("canopy") || n.includes("spinner")) return;
+      meshes.push(o);
+    });
+    for (const o of meshes) {
+      const ol = new THREE.Mesh(
+        o.geometry,
+        new THREE.MeshBasicMaterial({ color, side: THREE.BackSide })
+      );
+      ol.userData.isOutline = true;
+      ol.scale.set(scale, scale, scale);
+      o.add(ol);
+    }
+  }
+
+
+  function toPhong(mat, opts = {}) {
+    if (!mat) return mat;
+    const color = mat.color ? mat.color.clone() : new THREE.Color(0x888888);
+    const map = mat.map || null;
+    const phong = new THREE.MeshPhongMaterial({
+      color,
+      map,
+      shininess: opts.shininess != null ? opts.shininess : 55,
+      specular: new THREE.Color(opts.specular != null ? opts.specular : 0x555555),
+      transparent: !!mat.transparent,
+      opacity: mat.opacity != null ? mat.opacity : 1,
+      side: mat.side != null ? mat.side : THREE.FrontSide,
+      depthWrite: mat.depthWrite !== false,
+      emissive: mat.emissive ? mat.emissive.clone() : new THREE.Color(0x000000),
+      emissiveIntensity: mat.emissiveIntensity || 0,
+    });
+    if (map) {
+      phong.map.colorSpace = THREE.SRGBColorSpace;
+      phong.map.anisotropy = 4;
+      phong.map.needsUpdate = true;
+    }
+    return phong;
+  }
+
+  function convertTreeToPhong(root, opts = {}) {
+    root.traverse((o) => {
+      if (!o.isMesh || !o.material) return;
+      if (o.userData.isOutline) return;
+      if (Array.isArray(o.material)) {
+        o.material = o.material.map((m) => toPhong(m, opts));
+      } else {
+        o.material = toPhong(o.material, opts);
+      }
+    });
+  }
+
+    function hashName(n) {
+    let h = 0;
+    for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) | 0;
+    return h;
+  }
+
+  async function loadModels() {
+    // XHR (not fetch) so file:///android_asset GLBs load on WebView
+    const load = (url) =>
+      new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url, true);
+        xhr.responseType = "arraybuffer";
+        xhr.onload = () => {
+          if (xhr.status === 0 || (xhr.status >= 200 && xhr.status < 300)) {
+            const path = url.replace(/[^/]+$/, "");
+            try {
+              loader.parse(xhr.response, path, resolve, reject);
+            } catch (e) {
+              reject(e);
+            }
+          } else {
+            reject(new Error("XHR " + xhr.status + " " + url));
+          }
+        };
+        xhr.onerror = () => reject(new Error("XHR error " + url));
+        xhr.send();
+      });
+    try {
+      const [turretGltf, bf, fw] = await Promise.all([
+        load("assets/models/turret_interior.glb").then(g => { console.log("[World3D] turret ok"); return g; }),
+        load("assets/models/fighter_bf109.glb").then(g => { console.log("[World3D] bf109 ok"); return g; }),
+        load("assets/models/fighter_fw190.glb").then(g => { console.log("[World3D] fw190 ok"); return g; }),
+      ]);
+
+      turretScene = turretGltf.scene;
+      // Push assembly forward so receivers/belts stay in front of near-plane;
+      // slight tip so jacket TOP (holes) faces camera, not edge-on bore view only.
+      turretScene.rotation.set(0.035, 0, 0); // 1.3.7: bores parallel to the sight line → barrels vanish at the reticle (0.10 tip pointed them ~5° high)
+      turretScene.position.set(0, GUN_Y, GUN_Z);
+      turretScene.scale.setScalar(1.0);
+      turretScene.traverse((o) => {
+        if (!o.isMesh || !o.material) return;
+        const n = (o.name || "").toLowerCase();
+        // Hide non-gun clutter + stiff ammo-link belt (yellow chain). Keep receivers/jackets/feed.
+        // Brass eject is screen-space particles — Link*Case/Bullet read as cardboard chains.
+        // 1.3.1: NON-obstructive — keep only the twin .50s themselves (no struts, ammo cans,
+        // crossbar, ring gear, dome ring, feed chutes, spade grips, cradles).
+        const base = n.replace(/-?1$/, "").replace(/-1_|1_/, "_");
+        // 1.3.9: the full Sperry twin-.50 kit back in view — charging handles, spade grips, feed chutes/covers,
+        // trunnions and the linked belts running into the feed (ammo cans / floor / dome ring stay hidden)
+        const keep = /^(barrel|jacket|jacketcap|hider|muzzle|bore|receiver|rectop|buffer|buffercap|sideplate|charge|chargeknob|spade|feedchute|feedcover|trunnion|trunblock)$/.test(base); // 1.4.0: open link belts gone — enclosed flexible chutes instead
+        if (!keep) {
+          o.visible = false;
+          return;
+        }
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const gun = /receiver|rectop|feed|buffer|jacket|barrel|muzzle|hider|charge|sideplate|trunnion|bore|link|trun/.test(n);
+        const steel = gun || /cool|ringgear|cross/.test(n);
+        o.material = mats.map((src) => {
+          // Dark blued steel for guns
+          const color = src.color ? src.color.clone() : new THREE.Color(steel ? 0x2a3038 : 0x3a4228);
+          if (steel && !src.map) color.setHex(0x2c323a);
+          const opts = {
+            color,
+            map: src.map || null,
+            metalness: steel ? 0.92 : 0.20,
+            roughness: steel ? 0.32 : 0.60,
+            envMapIntensity: steel ? 0.35 : 0.12,
+            emissive: new THREE.Color(steel ? 0x0c1014 : 0x080a06),
+            emissiveIntensity: steel ? 0.08 : 0.03,
+          };
+          if (src.normalMap) opts.normalMap = src.normalMap;
+          if (src.roughnessMap) opts.roughnessMap = src.roughnessMap;
+          const mat = steel ? new THREE.MeshPhysicalMaterial(Object.assign(opts, { clearcoat: 0.45, clearcoatRoughness: 0.22 })) : new THREE.MeshStandardMaterial(opts);
+          if (steel) gunWear(mat, /jacket|barrel|muzzle|hider|bore/.test(n) ? 1 : 0);
+          if (mat.map) {
+            mat.map.colorSpace = THREE.SRGBColorSpace;
+            mat.map.anisotropy = 8;
+            mat.map.needsUpdate = true;
+          }
+          if (/link/.test(n) && !/case/.test(n) && !/bullet/.test(n)) {
+            mat.color.setHex(0x6a5420);
+            mat.metalness = 0.78;
+            mat.roughness = 0.40;
+            mat.map = null;
+          }
+          if (/ammo/.test(n) && !/link/.test(n)) {
+            mat.color.setHex(0x2e3a22);
+            mat.metalness = 0.18;
+            mat.roughness = 0.62;
+          }
+          if (/spade|rubber/.test(n)) {
+            mat.color.setHex(0x0c0c0c);
+            mat.metalness = 0.05;
+            mat.roughness = 0.92;
+          }
+          if (/feedchute|feedcover/.test(n)) { // 1.4.0: dull painted sheet steel, not chrome
+            mat.color.setHex(0x2b2e2b);
+            mat.metalness = 0.35;
+            mat.roughness = 0.82;
+            mat.envMapIntensity = 0.2;
+            if (mat.clearcoat != null) mat.clearcoat = 0;
+          }
+          if (/receiver|rectop|buffer|trunn|sideplate|charge/.test(n)) {
+            mat.color.setHex(0x3a424c);
+            mat.metalness = 0.9;
+            mat.roughness = 0.28;
+            mat.envMapIntensity = 0.55;
+            mat.map = null;
+            mat.emissive = new THREE.Color(0x10151c);
+            mat.emissiveIntensity = 0.08;
+            if (mat.clearcoat != null) { mat.clearcoat = 0.7; mat.clearcoatRoughness = 0.18; }
+          }
+          if (/jacket/.test(n) && !/cap/.test(n)) {
+            // 1.4.0: dark PARKERIZED jackets (matte grey-black phosphate) like the photos; the real geometry
+            // perforations still read because the inner faces are darker still
+            mat.color.setHex(0x3d403f);
+            mat.metalness = 0.5;
+            mat.roughness = 0.7;
+            mat.envMapIntensity = 0.3;
+            if (mat.clearcoat != null) { mat.clearcoat = 0.08; mat.clearcoatRoughness = 0.6; }
+            mat.transparent = false;
+            mat.side = THREE.DoubleSide;
+            mat.map = null;
+            mat.emissive = new THREE.Color(0x141a22);
+            mat.emissiveIntensity = 0.09;
+            // wear grit — slightly uneven finish
+            mat.roughness = 0.66 + (Math.abs(hashName(n)) % 10) * 0.012;
+          }
+          if (/case/.test(n)) {
+            mat.color.setHex(0xe0b84a);
+            mat.metalness = 0.95;
+            mat.roughness = 0.22;
+            mat.envMapIntensity = 0.6;
+            mat.map = null;
+            mat.emissive = new THREE.Color(0x3a2a08);
+            mat.emissiveIntensity = 0.12;
+          }
+          if (/bullet/.test(n)) {
+            mat.color.setHex(0xb07038);
+            mat.metalness = 0.9;
+            mat.roughness = 0.28;
+            mat.map = null;
+          }
+          return mat;
+        });
+        if (o.material.length === 1) o.material = o.material[0];
+      });
+      turretAnchor.add(turretScene);
+
+      setupGunGroups();
+      addFlexChutes();
+      toOverlay(turretAnchor);
+      for (const l of muzzleLights) l.layers.enable(0); // the flash also lights the airframe around the muzzles
+
+      prototypes["109"] = bf.scene;
+      prototypes["190"] = fw.scene;
+      prototypes["110"] = bf.scene;
+
+      function punchFighterMats(root, paint) {
+        root.traverse((o) => {
+          if (!o.isMesh || !o.material || o.userData.isOutline) return;
+          const n = (o.name || "").toLowerCase();
+          const srcs = Array.isArray(o.material) ? o.material : [o.material];
+          const out = srcs.map((src) => {
+            const col = src.color ? src.color.clone() : new THREE.Color(paint);
+            col.lerp(new THREE.Color(paint), 0.34);
+            const opts = {
+              color: col,
+              map: src.map || null,
+              metalness: 0.3,
+              roughness: 0.46,
+              envMapIntensity: 0.45,
+              // 1.3.2: faint sky-fill only; form comes from the sun + hemisphere now
+              emissive: new THREE.Color(0x1a2834),
+              emissiveIntensity: 0.04,
+            };
+            if (n.includes("glass") || n.includes("canopy")) {
+              opts.color = new THREE.Color(0x6a90a8);
+              opts.transparent = true;
+              opts.opacity = 0.42;
+              opts.metalness = 0.06;
+              opts.roughness = 0.12;
+              opts.emissive = new THREE.Color(0x102028);
+              opts.emissiveIntensity = 0.16;
+            } else if (n.includes("prop") || n.includes("disc")) {
+              opts.color = new THREE.Color(0xa8a090);
+              opts.transparent = true;
+              opts.opacity = 0.10;
+              opts.metalness = 0.04;
+              opts.roughness = 0.9;
+              opts.depthWrite = false;
+              opts.emissiveIntensity = 0.03;
+            } else if (n.includes("spin")) {
+              opts.color = new THREE.Color(0x6a1010);
+              opts.metalness = 0.42;
+              opts.roughness = 0.34;
+              opts.emissive = new THREE.Color(0x2a0808);
+              opts.emissiveIntensity = 0.10;
+            } else if (n.includes("yellow") || n.includes("nose") || n.includes("band")) {
+              opts.color = new THREE.Color(0xe8b820);
+              opts.metalness = 0.28;
+              opts.roughness = 0.38;
+              opts.emissive = new THREE.Color(0x4a3208);
+              opts.emissiveIntensity = 0.16;
+            } else if (n.includes("cross") || n.includes("balken") || n.includes("hinomaru") || n.includes("mark")) {
+              opts.emissiveIntensity = Math.max(opts.emissiveIntensity || 0, 0.08);
+            }
+            const mat = new THREE.MeshStandardMaterial(opts);
+            if (mat.map) {
+              mat.map.colorSpace = THREE.SRGBColorSpace;
+              mat.map.anisotropy = 4;
+              mat.map.needsUpdate = true;
+            }
+            return mat;
+          });
+          o.material = out.length === 1 ? out[0] : out;
+        });
+      }
+
+      for (const key of ["109", "190"]) {
+        if (!prototypes[key]) continue;
+        prototypes[key].traverse((o) => {
+          const n = (o.name || "").toLowerCase();
+          if (/wheel|gear|strut|tyre|tire|landing|leg|axle|hubcap|backwheel/.test(n)) {
+            o.visible = false;
+          }
+          // glued-on spinner cones sit off the nose after recook — hide
+          if (n === "spinner" || n.startsWith("spinner")) {
+            o.visible = false;
+          }
+          // hide any leftover solid prop blades on 190 (keep PropDisc only)
+          if (key === "190" && /^prop\d/i.test(o.name) && !n.includes("disc") && !n.includes("hub")) {
+            o.visible = false;
+          }
+        });
+      }
+      punchFighterMats(prototypes["109"], 0x3a3e30);
+      punchFighterMats(prototypes["190"], 0x6e7668);
+      // Bake mesh nose (+X authored) → local +Z so sync basis (Z=velocity) flies nose-first.
+      // Without this, fighters present wing/belly and read as parked cardboard.
+      function bakeNoseToZ(root) {
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+        root.traverse((o) => {
+          if (!o.isMesh || !o.geometry) return;
+          o.geometry = o.geometry.clone();
+          o.geometry.applyQuaternion(q);
+          o.geometry.computeVertexNormals();
+        });
+      }
+      for (const key of ["109", "190"]) {
+        if (prototypes[key]) bakeNoseToZ(prototypes[key]);
+      }
+      // Force 190 Luftwaffe: strip Zero/hinomaru albedo, RLM grey-green, keep yellow band + crosses
+      if (prototypes["190"]) {
+        prototypes["190"].traverse((o) => {
+          if (!o.isMesh || !o.material) return;
+          const n = (o.name || "").toLowerCase();
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          const out = mats.map((m) => {
+            if (!m) return m;
+            const mn = ((m.name || "") + " " + n).toLowerCase();
+            if (mn.includes("prop") || mn.includes("disc")) return m;
+            if (mn.includes("yellow") || mn.includes("balken") || mn.includes("kreuz") || mn.includes("cross")) return m;
+            // Body / Zero mats → solid RLM 02/71 grey-green (no hinomaru map)
+            if (m.map) { m.map = null; m.needsUpdate = true; }
+            if (m.color) {
+              if (mn.includes("canopy") || mn.includes("glass")) m.color.setHex(0x6a90a8);
+              else m.color.setHex(0x6e7668); // cooler Luftwaffe grey, not Zero olive
+            }
+            if ("metalness" in m) m.metalness = 0.22;
+            if ("roughness" in m) m.roughness = 0.55;
+            return m;
+          });
+          o.material = out.length === 1 ? out[0] : out;
+        });
+      }
+      // NO cel outline — it reads as a toy against the photo sky.
+      // Rim comes from cool fill + slight emissive in punchFighterMats.
+
+      for (let i = 0; i < 44; i++) {
+        const mesh = cloneFighter("109");
+        fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
+      }
+      modelsReady = true;
+      console.log("[World3D] models ready");
+    } catch (e) {
+      console.warn("[World3D] model load failed", e && (e.message || e.stack || String(e)), e);
+      // procedural fallback fighters already may be absent — build simple ones
+      buildFallbackFighters();
+      buildFallbackTurret();
+      modelsReady = true;
+    }
+  }
+
+  function buildFallbackTurret() {
+    const g = new THREE.Group();
+    const steel = new THREE.MeshStandardMaterial({ color: 0x4a4c44, metalness: 0.85, roughness: 0.4 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x1a1c16, metalness: 0.8, roughness: 0.45 });
+    const olive = new THREE.MeshStandardMaterial({ color: 0x3a4228, metalness: 0.5, roughness: 0.55 });
+    // ring
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.05, 8, 40), dark);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = -0.55;
+    g.add(ring);
+    // guns
+    for (const sx of [-0.28, 0.28]) {
+      const rec = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.45), dark);
+      rec.position.set(sx, 0.02, 0.1);
+      g.add(rec);
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 1.0, 10), steel);
+      bar.rotation.x = Math.PI / 2;
+      bar.position.set(sx, 0.02, -0.5);
+      g.add(bar);
+    }
+    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.7, 12), olive);
+    ped.position.set(0, -0.2, 0.2);
+    g.add(ped);
+    g.position.set(0, -0.4, 0.2);
+    turretAnchor.add(g);
+    turretScene = g;
+  }
+
+  function buildFallbackFighters() {
+    function make(kind) {
+      const g = new THREE.Group();
+      const col = kind === "190" ? 0x4a5238 : 0x7a6848;
+      const mat = new THREE.MeshStandardMaterial({ color: col, metalness: 0.35, roughness: 0.5 });
+      const dark = new THREE.MeshStandardMaterial({ color: 0x2a2818, metalness: 0.4, roughness: 0.45 });
+      const fus = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 1.6, 6, 12), mat);
+      fus.rotation.z = Math.PI / 2;
+      g.add(fus);
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.06, 3.2), mat);
+      g.add(wing);
+      const nose = new THREE.Mesh(
+        new THREE.ConeGeometry(0.22, 0.5, 10),
+        new THREE.MeshStandardMaterial({ color: 0xb8860b, metalness: 0.4, roughness: 0.4 })
+      );
+      nose.rotation.z = -Math.PI / 2;
+      nose.position.x = -1.1;
+      g.add(nose);
+      const can = new THREE.Mesh(
+        new THREE.SphereGeometry(0.18, 10, 8),
+        new THREE.MeshStandardMaterial({ color: 0xa8d0e8, metalness: 0.1, roughness: 0.15, transparent: true, opacity: 0.7 })
+      );
+      can.position.set(-0.1, 0.18, 0);
+      can.scale.set(1.4, 0.9, 0.7);
+      g.add(can);
+      const vstab = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.55, 0.05), dark);
+      vstab.position.set(0.95, 0.25, 0);
+      g.add(vstab);
+      // cross
+      const kw = new THREE.MeshBasicMaterial({ color: 0xe8e8e0 });
+      const kb = new THREE.MeshBasicMaterial({ color: 0x111110 });
+      for (const z of [-1.0, 1.0]) {
+        const k = new THREE.Group();
+        k.add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.08, 0.35), kw));
+        k.add(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.35, 0.08), kw));
+        k.add(new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.04, 0.22), kb));
+        k.add(new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.22, 0.04), kb));
+        k.position.set(0.05, 0.04, z);
+        g.add(k);
+      }
+      g.scale.setScalar(2.1);
+      return g;
+    }
+    prototypes["109"] = make("109");
+    prototypes["190"] = make("190");
+    prototypes["110"] = make("109");
+    for (let i = 0; i < 44; i++) {
+      const mesh = cloneFighter("109");
+      fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
+    }
+  }
+
+    function applySkyTexture(image) {
+    if (!image) return;
+    // Use Three.js background shader (equirect). Avoid SphereGeometry UV poles —
+    // looking near the nadir on a UV sky sphere causes kaleidoscope/mirror at horizon.
+    const bg = new THREE.Texture(image);
+    bg.colorSpace = THREE.SRGBColorSpace;
+    bg.mapping = THREE.EquirectangularReflectionMapping;
+    bg.minFilter = THREE.LinearMipmapLinearFilter;
+    bg.magFilter = THREE.LinearFilter;
+    bg.generateMipmaps = true;
+    bg.anisotropy = 8;
+    bg.needsUpdate = true;
+    void bg; // 1.3.6: the procedural sky dome replaces the painted equirect (bluer, sharper, rotates with heading)
+    // Dim studio env so Standard metals have something to catch — NOT the sky (was washing guns)
+    const envC = document.createElement("canvas");
+    envC.width = 64; envC.height = 32;
+    const ex = envC.getContext("2d");
+    const eg = ex.createLinearGradient(0, 0, 0, 32);
+    eg.addColorStop(0, "#c8d4e0");
+    eg.addColorStop(0.45, "#8a9098");
+    eg.addColorStop(1, "#3a3428");
+    ex.fillStyle = eg;
+    ex.fillRect(0, 0, 64, 32);
+    const envTex = new THREE.CanvasTexture(envC);
+    envTex.mapping = THREE.EquirectangularReflectionMapping;
+    envTex.colorSpace = THREE.SRGBColorSpace;
+    envTex.needsUpdate = true;
+    scene.environment = envTex;
+    scene.fog = new THREE.Fog(SKY_HORIZON.getHex(), 900, 12000);
+    haze.visible = false; // 1.3.1: farmland + fog own the horizon now
+  }
+
+  // 1.3.9: pixel-ratio cap raised 1.5 → 2.0 (sharper far fighters / thin tracers on phones); if the
+  // first ~2 s of flying average slower than 22 ms/frame it drops back to 1.5 once, for good.
+  let prCap = 2.0, prT = 0, prN = 0, prSum = 0, prDone = false;
+  function prWatch() {
+    const now = performance.now();
+    if (prDone || window.__FG_PR) { prT = now; return; }
+    if (prT) { const dt = now - prT; if (dt < 250) { prSum += dt; prN++; } }
+    prT = now;
+    if (prN >= 120) {
+      prDone = true;
+      if (prSum / prN > 22 && (window.devicePixelRatio || 1) > 1.5) { prCap = 1.5; resize(); }
+    }
+  }
+  function resize() {
+    const w = window.innerWidth,
+      h = window.innerHeight;
+    // 1.4.0-web: also a pixel budget (~3.2 MP drawn) so big desktop windows / 4K screens stay smooth; phones are under it
+    const budget = Math.sqrt(3.2e6 / Math.max(1, w * h));
+    renderer.setPixelRatio(window.__FG_PR || Math.max(0.75, Math.min(window.devicePixelRatio || 1, prCap, budget)));
+    renderer.setSize(w, h, false);
+    camera.aspect = w / Math.max(1, h);
+    camera.updateProjectionMatrix();
+  }
+
+  function ensureKind(slot, kind) {
+    const k = kind === "110" ? "109" : kind;
+    if (slot.kind === k && slot.mesh) return;
+    if (slot.mesh) scene.remove(slot.mesh);
+    slot.mesh = cloneFighter(k);
+    slot.kind = k;
+    if (kind === "110" && slot.mesh) slot.mesh.scale.setScalar(2.45);
+  }
+
+  // 1.3.3: kill blast + tumbling debris for bandits
+  const _spinQ = new THREE.Quaternion();
+  const debrisMat = new THREE.MeshStandardMaterial({ color: 0x3a3d34, roughness: 0.7, metalness: 0.4 });
+  const debrisGeo = [new THREE.BoxGeometry(1.2, 0.12, 0.6), new THREE.BoxGeometry(0.5, 0.4, 0.5), new THREE.BoxGeometry(1.8, 0.1, 0.35)];
+  const debris = [];
+  for (let i = 0; i < 40; i++) {
+    const m = new THREE.Mesh(debrisGeo[i % 3], debrisMat);
+    m.visible = false; scene.add(m);
+    debris.push({ m, life: 0, v: new THREE.Vector3(), w: new THREE.Vector3() });
+  }
+  let debrisIdx = 0;
+  const blasts = [];
+  for (let i = 0; i < 6; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    s.visible = false; scene.add(s);
+    blasts.push({ s, life: 0 });
+  }
+  let blastIdx = 0, _dbT = performance.now();
+  function spawnKillFx(pos, e) {
+    const b = blasts[blastIdx]; blastIdx = (blastIdx + 1) % blasts.length;
+    b.s.position.copy(pos); b.life = 0.45; b.s.visible = true;
+    for (let i = 0; i < 9; i++) {
+      const d = debris[debrisIdx]; debrisIdx = (debrisIdx + 1) % debris.length;
+      d.m.position.copy(pos);
+      d.v.set((e.vx || 0) * 0.5 + (Math.random() - 0.5) * 40, (e.vy || 0) * 0.3 + Math.random() * 20 - 4, (e.vz || 0) * 0.5 + (Math.random() - 0.5) * 40);
+      d.w.set(Math.random() * 12, Math.random() * 12, Math.random() * 12);
+      d.m.scale.setScalar(0.8 + Math.random() * 1.2);
+      d.life = 2.2 + Math.random();
+      d.m.visible = true;
+    }
+    for (let i = 0; i < 5; i++) emitSmoke(pos, true, true, { life: 3.5, s0: 3, s1: 14, a: 0.75 });
+  }
+  function updateDebris() {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - _dbT) / 1000); _dbT = now;
+    for (const d of debris) {
+      if (d.life <= 0) continue;
+      d.life -= dt;
+      if (d.life <= 0) { d.m.visible = false; continue; }
+      d.v.y -= 18 * dt;
+      d.m.position.addScaledVector(d.v, dt);
+      d.m.rotation.x += d.w.x * dt; d.m.rotation.y += d.w.y * dt; d.m.rotation.z += d.w.z * dt;
+    }
+    for (const b of blasts) {
+      if (b.life <= 0) continue;
+      b.life -= dt;
+      if (b.life <= 0) { b.s.visible = false; continue; }
+      const k = 1 - b.life / 0.45;
+      const s = 6 + k * 16;
+      b.s.scale.set(s, s, 1);
+      b.s.material.opacity = (1 - k) * 0.95;
+    }
+  }
+  const _rollQ = new THREE.Quaternion();
+  const _camFallE = new THREE.Euler();
+  const _zAxis = new THREE.Vector3(0, 0, 1);
+  const _fw = new THREE.Vector3(), _up = new THREE.Vector3(), _rt = new THREE.Vector3(), _m4 = new THREE.Matrix4();
+  // 1.3.9 ONE ANGULAR-SIZE RULE for far fighters. Sizes are in phone device px (CSS px × DPR).
+  //  • the model is drawn at true scale inside LOD_NEAR; between LOD_NEAR and LOD_FAR it crossfades
+  //    (opacity) into a round soft dot; beyond LOD_FAR only the dot is drawn.
+  //  • the dot's diameter is the 109's equivalent-area disc (≈2.4 u) at its true angular size,
+  //    floored at DOT_FLOOR px; below the floor it keeps DOT_FLOOR px and its alpha falls with the
+  //    square of the true size (constant "ink"), so it fades out instead of staying a fixed blob.
+  //  • dot colour = dark airframe mixed toward the fog colour with the scene's own linear fog
+  //    factor, i.e. the same haze curve the mesh gets from the Fog.
+  //  • small models get silhouette darkening + a 0.75 px dark outline, fading out 12→25 px span.
+  const LOD_NEAR = 700, LOD_FAR = 1400, SPECK_MAX = 12000, SPECK_N = 64;
+  const DOT_FLOOR = 1.75, DOT_EQ = 2.4, SPAN = 6.24;
+  const SPECK_FROM = LOD_FAR; // kept for the debug hooks
+  const _dark = new THREE.Color(0x15171a);
+  function devPxPerRad() { return (window.innerHeight || 400) * (window.devicePixelRatio || 1) / (2 * Math.tan(camera.fov * Math.PI / 360)); }
+  function lodMeshW(d) { const t = Math.min(1, Math.max(0, (LOD_FAR - d) / (LOD_FAR - LOD_NEAR))); return t * t * (3 - 2 * t); }
+  function fogF(d) { const f = scene.fog; return f ? Math.min(1, Math.max(0, (d - f.near) / (f.far - f.near))) : 0; }
+  const _tmpC = new THREE.Color();
+  function applyFighterLook(mesh, w, sizeK, dist) {
+    const u = mesh.userData;
+    if (!u.fmats) return;
+    const st = w.toFixed(3) + "|" + sizeK.toFixed(3);
+    if (u._lookSt !== st) {
+      u._lookSt = st;
+      for (const f of u.fmats) {
+        const m = f.m;
+        const tr = f.tr || w < 0.999;
+        if (m.transparent !== tr) { m.transparent = tr; m.needsUpdate = true; }
+        m.opacity = f.op * w;
+        m.depthWrite = !f.tr;
+        if (f.col) m.color.copy(f.col).lerp(_tmpC.copy(_dark).convertSRGBToLinear(), 0.55 * sizeK);
+        if (f.env != null) m.envMapIntensity = f.env * (1 - 0.8 * sizeK);
+        if (f.emi != null) m.emissiveIntensity = f.emi * (1 - sizeK);
+      }
+    }
+    const op = 0.85 * sizeK * w;
+    u.olMat.uniforms.uOp.value = op;
+    const pr = renderer.getPixelRatio(), dpr = window.devicePixelRatio || 1;
+    u.olMat.uniforms.uW.value = Math.max(0.55, 0.75 * pr / dpr); // render px
+    u.olMat.uniforms.uPPR.value = devPxPerRad() * pr / dpr;
+    const on = op > 0.01;
+    if (u._olOn !== on) { u._olOn = on; for (const o of u.olMeshes) for (const c of o.children) if (c.userData.isOutline) c.visible = on; }
+  }
+  const speckList = [];
+  const speckGeo = new THREE.BufferGeometry();
+  speckGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(SPECK_N * 3), 3));
+  speckGeo.setAttribute("aSize", new THREE.BufferAttribute(new Float32Array(SPECK_N), 1));
+  speckGeo.setAttribute("aCol", new THREE.BufferAttribute(new Float32Array(SPECK_N * 4), 4));
+  speckGeo.setDrawRange(0, 0);
+  const speckMat = new THREE.ShaderMaterial({
+    vertexShader: "attribute float aSize; attribute vec4 aCol; varying vec4 vC; void main(){ vC = aCol; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_PointSize = aSize; }",
+    // round, soft-edged: flat core to r≈0.35 then a smooth falloff to the rim
+    fragmentShader: "varying vec4 vC; void main(){ float r = length(gl_PointCoord - 0.5) * 2.0; float a = vC.a * (1.0 - smoothstep(0.35, 1.0, r)); if (a < 0.004) discard; gl_FragColor = vec4(vC.rgb, a);\n#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}",
+    depthTest: true, depthWrite: false, transparent: true,
+  });
+  const specks = new THREE.Points(speckGeo, speckMat);
+  specks.frustumCulled = false;
+  specks.renderOrder = -1; // first of the transparent pass: clouds and smoke blend over the dots
+  scene.add(specks);
+  const _hz = new THREE.Color();
+  const speckStats = [];
+  // ink of the soft profile relative to a hard disc of the same size (∫ profile over the disc)
+  const SOFT_INK = (() => { let s = 0, n = 0; for (let i = 0; i < 200; i++) { const r = (i + 0.5) / 200; const t = Math.min(1, Math.max(0, (r - 0.35) / 0.65)); s += (1 - t * t * (3 - 2 * t)) * r; n += r; } return s / n; })();
+  function eqDiam(e, base, d) { // equivalent-area disc diameter (u) of this fighter as seen from the camera now
+    const A = fighterAreas(e.type);
+    if (!A || e.hx == null || e.ux == null) return DOT_EQ * base / 1.3;
+    const lx = (e.x - camera.position.x) / d, ly = (e.y - camera.position.y) / d, lz = (e.z - camera.position.z) / d;
+    const hx = e.hx, hy = e.hy, hz = e.hz, hl = Math.hypot(hx, hy, hz) || 1;
+    const ux = e.ux, uy = e.uy, uz = e.uz;
+    const sx = uy * hz - uz * hy, sy = uz * hx - ux * hz, sz = ux * hy - uy * hx, sl = Math.hypot(sx, sy, sz) || 1;
+    const area = (A.side * Math.abs(lx * sx + ly * sy + lz * sz) / sl + A.top * Math.abs(lx * ux + ly * uy + lz * uz) + A.front * Math.abs(lx * hx + ly * hy + lz * hz) / hl) * base * base;
+    return 2 * Math.sqrt(area / Math.PI);
+  }
+  function dotFor(d, base, e) {
+    const ppr = devPxPerRad();
+    const trueDev = (e ? eqDiam(e, base, d) : DOT_EQ * base / 1.3) / d * ppr;
+    const D = Math.max(DOT_FLOOR, trueDev);
+    const a = Math.min(1, (trueDev / DOT_FLOOR) ** 2);
+    return { trueDev, D, a };
+  }
+  function updateSpecks(opts) {
+    const pos = speckGeo.attributes.position.array, sz = speckGeo.attributes.aSize.array, col = speckGeo.attributes.aCol.array;
+    const pr = renderer.getPixelRatio(), dpr = window.devicePixelRatio || 1;
+    _hz.copy(scene.fog ? scene.fog.color : SKY_HORIZON).convertSRGBToLinear();
+    const t = performance.now() * 0.001;
+    const sd = skyU.uSun.value;
+    let n = 0;
+    speckStats.length = 0;
+    for (let i = 0; i < speckList.length && n < SPECK_N; i += 3) {
+      const e = speckList[i], d = speckList[i + 1], wDot = speckList[i + 2];
+      if (d > SPECK_MAX) continue;
+      const base = e.type === "190" ? 1.4 : e.type === "110" ? 1.6 : 1.3;
+      const dot = dotFor(d, base, e);
+      // render-px sprite: big enough that the soft disc is really round; alpha compensates so the
+      // integrated darkness equals a hard dot of diameter D·a^(1/2)
+      const want = dot.D * pr / dpr;
+      const S = Math.max(4.0, want / Math.sqrt(SOFT_INK)); // ≥4 render px: the soft disc's coverage no longer depends on sub-pixel position (no far-dot twinkle)
+      let alpha = dot.a * wDot * Math.min(1, (want * want) / (S * S * SOFT_INK));
+      const ff = fogF(d);
+      let r = 0.035, g = 0.037, b = 0.04;
+      // 1.3.9: no dot glint any more. A near-white flash on a 2 px dark dot made it vanish against the sky for a
+      // few frames (read as a pop in the flyby); the 3D model keeps its real specular sun highlights.
+      col[n * 4] = r + (_hz.r - r) * ff; col[n * 4 + 1] = g + (_hz.g - g) * ff; col[n * 4 + 2] = b + (_hz.b - b) * ff; col[n * 4 + 3] = alpha;
+      pos[n * 3] = e.x; pos[n * 3 + 1] = e.y; pos[n * 3 + 2] = e.z;
+      sz[n] = S;
+      speckStats.push({ id: e.id, d: Math.round(d), devPx: +dot.D.toFixed(2), trueDev: +dot.trueDev.toFixed(2), a: +alpha.toFixed(3), wDot: +wDot.toFixed(3), fog: +ff.toFixed(3) });
+      n++;
+    }
+    speckGeo.setDrawRange(0, n);
+    speckGeo.attributes.position.needsUpdate = true; speckGeo.attributes.aSize.needsUpdate = true; speckGeo.attributes.aCol.needsUpdate = true;
+    speckList.length = 0;
+  }
+  const slotOf = new Map();
+  const slotUsed = new Array(64).fill(false);
+  function sync(enemiesArr, gunnerState, opts = {}) {
+    const shake = gunnerState.shake || 0;
+    const recoil = gunnerState.recoil || 0;
+    // Cycle 136: MotA-hard fire shake on the GL camera
+    const sx = (Math.sin(performance.now() * 0.097) * 0.095 + Math.sin(performance.now() * 0.171) * 0.048) * shake;
+    const sy = (Math.cos(performance.now() * 0.113) * 0.072 + Math.sin(performance.now() * 0.203) * 0.038) * shake;
+    const FALL = opts.fall;
+    if (FALL && FALL.eye) camera.position.set(FALL.eye.x + sx, FALL.eye.y + sy, FALL.eye.z);
+    else camera.position.set(CAM.x + sx, CAM.y + sy + recoil * 0.07, CAM.z);
+    const yaw = gunnerState.yaw;
+    const pitch = gunnerState.pitch;
+    const look = new THREE.Vector3(
+      Math.sin(yaw) * Math.cos(pitch),
+      Math.sin(pitch),
+      Math.cos(yaw) * Math.cos(pitch)
+    );
+    if (opts.fov && Math.abs(camera.fov - opts.fov) > 0.01) {
+      camera.fov = opts.fov;
+      camera.updateProjectionMatrix();
+    }
+    // 1.3.5: explicit yaw/pitch Euler (YXZ) — no lookAt/up-vector singularity at ±90° pitch;
+    // same basis as game.js lookBasis (forward = look, right = (−cos yaw, 0, sin yaw)).
+    void look;
+    camera.rotation.order = "YXZ";
+    camera.rotation.set(pitch, yaw + Math.PI, 0);
+    // 1.3.3: airframe roll about the longitudinal axis (world +Z); own B-17 rolls with it
+    if (FALL && FALL.phase === "fall" && FALL.ship) { // riding the spinning ship down
+      _rollQ.setFromEuler(_camFallE.set(FALL.ship.pd || 0, FALL.ship.yaw || 0, -(FALL.ship.roll || 0), "YXZ"));
+    } else _rollQ.setFromAxisAngle(_zAxis, -(opts.roll || 0));
+    camera.quaternion.premultiply(_rollQ);
+    if (ownShip) updateOwnShip(opts);
+    { // 1.3.8: under our own canopy
+      const inChute = !!(FALL && FALL.phase === "chute");
+      turretAnchor.visible = !inChute;
+      updateCage(pitch, inChute); sightBox.visible = !inChute;
+      ownChute.visible = inChute;
+      if (inChute) {
+        ownChute.position.copy(camera.position);
+        ownChute.rotation.set(0, 0, -(FALL.sway || 0) * 0.8);
+        const open = (FALL.chuteT || 0) > 1.3;
+        ownChute.userData.dome.visible = open; ownChute.userData.streamer.visible = !open && (FALL.chuteT || 0) > 0.5;
+        if (open) { const k = Math.min(1, ((FALL.chuteT || 0) - 1.3) / 1.0); ownChute.userData.dome.scale.set(2.9 * (0.25 + 0.75 * k), 1.9 * (1.6 - 0.6 * k), 2.9 * (0.25 + 0.75 * k)); }
+      }
+    }
+
+    // 1.3.2: whole mount only trembles slightly; per-barrel recoil is in updateGuns
+    turretAnchor.position.z = -0.05 + recoil * 0.015;
+    turretAnchor.position.y = -0.02 - recoil * 0.006;
+    turretAnchor.rotation.x = -recoil * 0.004;
+    turretAnchor.rotation.z = sx * 0.25;
+
+    const muzzle = opts.muzzle || 0;
+    // warm interior kick on fire (subtle — the flash itself is at the barrel tips)
+    muzzleStrobe.intensity = muzzle * 1.6; // 1.4.0: 6 → 1.6 (it lit the whole jacket + sight box orange)
+    turretFill.intensity = 0.45 + muzzle * 0.7; // 1.4.0: 3 → 0.7 (the kick turned the sill and sight box orange)
+    turretFill.color.setHex(muzzle > 0.08 ? 0xffa060 : 0xffe8c8);
+    updateGuns(opts);
+
+    // Rotate sky with yaw so equirect feels locked to world… actually sky sphere is world-fixed — good.
+    // Equirect background doesn't rotate with camera look — Three.js scene.background equirect is view-dependent correctly.
+
+    syncMission(opts);
+
+    // 1.3.2: each bandit keeps its own mesh for life (no mesh reshuffle → no attitude snaps)
+    const live = new Set();
+    const shown = (e) => e.alive || e.flash > 0 || (e.wreckT || 0) > 0;
+    for (const e of enemiesArr) {
+      if (!shown(e)) continue;
+      if (e.id) live.add(e.id);
+    }
+    for (const [id, si] of slotOf) if (!live.has(id)) { slotOf.delete(id); slotUsed[si] = false; }
+    for (const e of enemiesArr) {
+      if (!shown(e)) continue;
+      let si = slotOf.get(e.id);
+      if (si == null) {
+        si = slotUsed.indexOf(false);
+        if (si < 0 || si >= fighterPool.length) continue;
+        slotUsed[si] = true;
+        slotOf.set(e.id, si);
+        if (fighterPool[si].mesh) { const fm = fighterPool[si].mesh; fm.userData._q = null; for (const d of fm.userData.decals || []) fm.remove(d); fm.userData.decals = []; }
+      }
+      const slot = fighterPool[si];
+      if (!slot.mesh) continue;
+      ensureKind(slot, e.type || "109");
+      const mesh = slot.mesh;
+      mesh.visible = true;
+      mesh.position.set(e.x, e.y, e.z);
+      // 1.3.3: damage ladder — hits: sparks (2D) → smoke trail → fire → kill: blast + debris,
+      // burning wreck spins into the ground trailing black smoke.
+      if (!slot.fire) {
+        slot.fire = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+        slot.fire.visible = false;
+        scene.add(slot.fire);
+      }
+      const hpFrac = e.maxHp ? Math.max(0, e.hp) / e.maxHp : 1;
+      if (slot.wasAlive && !e.alive) spawnKillFx(mesh.position, e);
+      slot.wasAlive = e.alive;
+      const onFire = !e.alive || hpFrac <= 0.4;
+      slot.fire.visible = onFire;
+      if (onFire) {
+        slot.fire.position.copy(mesh.position);
+        const fs = (e.alive ? 3.0 : 5.5) * (0.75 + Math.random() * 0.5);
+        slot.fire.scale.set(fs, fs, 1);
+        slot.fire.material.opacity = 0.75 + Math.random() * 0.25;
+      }
+      slot.smokeT = (slot.smokeT || 0) - 0.016;
+      // 1.4.0: continuous smoke trails (ribbons) — light grey when hit, thick black when burning / going down
+      if (!e.alive) {
+        if (slot.smokeT <= 0) { ribbonEmit("f" + e.id, mesh.position, { w0: 1.3, w1: 10, life: 3.6, a: 0.78, col: [0.08, 0.075, 0.07] }); if (Math.random() < 0.25) emitSmoke(mesh.position, true, true, { life: 3.0, s0: 2.2, s1: 9, a: 0.5 }); slot.smokeT = 0.035; }
+      } else if (hpFrac <= 0.4) {
+        if (slot.smokeT <= 0) { ribbonEmit("f" + e.id, mesh.position, { w0: 0.9, w1: 7, life: 2.8, a: 0.62, col: [0.14, 0.135, 0.13] }); slot.smokeT = 0.04; }
+      } else if (hpFrac < 0.99) {
+        if (slot.smokeT <= 0) { ribbonEmit("f" + e.id, mesh.position, { w0: 0.55, w1: 4.5, life: 2.2, a: 0.42, col: [0.62, 0.62, 0.6] }); slot.smokeT = 0.045; }
+      }
+      const dist = Math.max(1, mesh.position.distanceTo(camera.position));
+      // 1.3.6: true scale at every range (9.9 m span) — no far boost. Beyond ~1.5 km a live 109 is a
+      // depth-tested speck (see updateSpecks), so it hides behind our own ship, other B-17s and clouds.
+      const base = e.type === "190" ? 1.4 : e.type === "110" ? 1.6 : 1.3;
+      const wMesh = e.alive ? lodMeshW(dist) : 1;
+      if (wMesh <= 0.001) { mesh.visible = false; if (slot.trail) slot.trail.line.visible = false; speckList.push(e, dist, 1); continue; }
+      if (wMesh < 0.999) speckList.push(e, dist, 1 - wMesh);
+      const spanDev = SPAN * (base / 1.3) / dist * devPxPerRad();
+      const sizeK = Math.min(1, Math.max(0, (25 - spanDev) / 13));
+      applyFighterLook(mesh, wMesh, sizeK, dist);
+      slot.lod = { d: Math.round(dist), wMesh: +wMesh.toFixed(3), spanDev: +spanDev.toFixed(1), sizeK: +sizeK.toFixed(2) };
+      mesh.scale.setScalar(base);
+      // Attitude straight from the flight model: nose = h (the air/ground velocity direction),
+      // canopy = u (the lift vector, so the bank is the real coordinated bank). No smoothing lag.
+      if (e.alive && e.ux != null) {
+        _fw.set(e.hx, e.hy, e.hz).normalize();
+        _up.set(e.ux, e.uy, e.uz);
+        _up.addScaledVector(_fw, -_up.dot(_fw)).normalize();
+        _rt.crossVectors(_up, _fw); // up × fwd = +X side (port)
+        // the 109 GLB's nose is local −Z: local X → starboard (−port), Y → up, Z → −nose
+        _m4.makeBasis(_rt.negate(), _up, _fw.clone().negate());
+        mesh.quaternion.setFromRotationMatrix(_m4);
+        mesh.userData._q = mesh.quaternion.clone();
+        mesh.userData._fwd = _fw.clone();
+      } else {
+        const vel = e.hx != null ? new THREE.Vector3(e.hx, e.hy, e.hz) : new THREE.Vector3(e.vx || 0, e.vy || 0, e.vz || 0);
+        let forward;
+        if (vel.lengthSq() > 0.01) forward = vel.normalize();
+        else forward = mesh.userData._fwd ? mesh.userData._fwd.clone() : new THREE.Vector3(0, -0.25, -1).normalize();
+        mesh.userData._fwd = forward.clone();
+        const worldUp = new THREE.Vector3(0, 1, 0);
+        let right = new THREE.Vector3().crossVectors(worldUp, forward);
+        if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+        right.normalize();
+        const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+        const m = new THREE.Matrix4().makeBasis(right.clone().negate(), up, forward.clone().negate());
+        const targetQ = new THREE.Quaternion().setFromRotationMatrix(m);
+        targetQ.premultiply(new THREE.Quaternion().setFromAxisAngle(forward, -(e.bank || 0)));
+        if (!mesh.userData._q) mesh.userData._q = targetQ.clone();
+        mesh.userData._q.slerp(targetQ, 0.25);
+        mesh.quaternion.copy(mesh.userData._q);
+      }
+      if (!e.alive) { // spinning wreck
+        slot.spin = (slot.spin || 0) + 0.016 * 4;
+        mesh.quaternion.multiply(_spinQ.setFromAxisAngle(_zAxis, slot.spin));
+      } else slot.spin = 0;
+      // Live contrail from sim trail (or velocity fallback)
+      const tr = slot.trail;
+      if (tr) {
+        const pts = (e.trail && e.trail.length > 1) ? e.trail : null;
+        const arr = tr.pos;
+        let count = 0;
+        if (pts) {
+          const start = Math.max(0, pts.length - tr.n);
+          for (let i = start; i < pts.length; i++) {
+            arr[count * 3] = pts[i].x;
+            arr[count * 3 + 1] = pts[i].y;
+            arr[count * 3 + 2] = pts[i].z;
+            count++;
+          }
+        } else if (false) {
+          const vx = e.vx || 0, vy = e.vy || 0, vz = e.vz || 0;
+          for (let i = 0; i < 8; i++) {
+            const t = i * 0.55;
+            arr[i * 3] = e.x - vx * t;
+            arr[i * 3 + 1] = e.y - vy * t;
+            arr[i * 3 + 2] = e.z - vz * t;
+            count++;
+          }
+        }
+        tr.line.geometry.attributes.position.needsUpdate = true;
+        tr.line.geometry.setDrawRange(0, count);
+        // 1.3.2: faint, and only for distant fighters (no long lines across the glass)
+        const far = Math.max(0, Math.min(1, (dist - 160) / 120));
+        tr.line.material.opacity = 0.12 * far;
+        tr.line.visible = count > 1 && far > 0.02 && e.alive;
+      }
+
+    }
+    for (let idx = 0; idx < fighterPool.length; idx++) {
+      if (slotUsed[idx]) continue;
+      if (fighterPool[idx].mesh) fighterPool[idx].mesh.visible = false;
+      if (fighterPool[idx].trail) fighterPool[idx].trail.line.visible = false;
+      if (fighterPool[idx].fire) fighterPool[idx].fire.visible = false;
+      fighterPool[idx].wasAlive = false;
+    }
+    updateSpecks(opts);
+    updateDebris();
+  }
+
+  // 1.3.7: TRACERS IN 3D — every tracer (ours, the other gunners', the 109s') is a pair of
+  // camera-facing quads (glow + core) with a constant on-screen width, depth-tested against the
+  // scene so our own airframe, the other Fortresses and the fighters hide what is behind them.
+  // Drawn additively after the clouds (renderOrder), so a stream in front of a cloud still shows.
+  const TR_MAX = 1600;
+  const trPos = new Float32Array(TR_MAX * 8 * 3), trCol = new Float32Array(TR_MAX * 8 * 4);
+  const trGeo = new THREE.BufferGeometry();
+  trGeo.setAttribute("position", new THREE.BufferAttribute(trPos, 3).setUsage(THREE.DynamicDrawUsage));
+  trGeo.setAttribute("aCol", new THREE.BufferAttribute(trCol, 4).setUsage(THREE.DynamicDrawUsage));
+  { const idx = new Uint32Array(TR_MAX * 12); for (let i = 0; i < TR_MAX * 2; i++) { const v = i * 4, o = i * 6; idx[o] = v; idx[o + 1] = v + 1; idx[o + 2] = v + 2; idx[o + 3] = v + 1; idx[o + 4] = v + 3; idx[o + 5] = v + 2; } trGeo.setIndex(new THREE.BufferAttribute(idx, 1)); }
+  trGeo.setDrawRange(0, 0);
+  const trMat = new THREE.ShaderMaterial({
+    vertexShader: "attribute vec4 aCol; varying vec4 vC; void main(){ vC = aCol; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: "varying vec4 vC; void main(){ gl_FragColor = vC; }",
+    // 1.3.7: normal (not additive) blending — additive washed every tracer to white against the bright sky
+    transparent: true, depthTest: true, depthWrite: false, blending: THREE.NormalBlending, side: THREE.DoubleSide,
+  });
+  const trMesh = new THREE.Mesh(trGeo, trMat);
+  trMesh.frustumCulled = false; trMesh.renderOrder = 50;
+  scene.add(trMesh);
+  // kinds: 0 our guns, 1 other B-17 gunners, 2 Bf 109 — [core rgb, glow rgb, core px, glow px, core a, glow a, tail keep]
+  const TR_KIND = [
+    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // 1.3.9: own guns = the box gunners' look
+    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4],
+    [[1.0, 0.42, 0.26], [1.0, 0.14, 0.05], 1.1, 2.8, 0.95, 0.32, 0.3],
+  ];
+  let trBuf = null, trN = 0;
+  const _tf = new THREE.Vector3(), _tc = new THREE.Vector3();
+  const trStats = { drawn: 0 };
+  // 1.3.9: persistence smear — a tracer is a light that the eye integrates over ~60 ms. When the view
+  // swings, the part of that trail already "painted" moved with the old view: rotate each tail about the
+  // eye by the view rotation of the last TR_BLUR seconds (low-passed, so fire-shake jitter averages out).
+  const TR_BLUR = 0.06;
+  const TR_MINPX = 2.2; // CSS px: minimum on-screen streak length (end-on rounds read as dots)
+  const _trQ = new THREE.Quaternion(), _trQprev = new THREE.Quaternion(), _trW = new THREE.Vector3(), _trDq = new THREE.Quaternion(), _trV = new THREE.Vector3();
+  let _trT = 0, _trHave = false;
+  function trSmearRot() {
+    const now = window.__FG_SIMT || 0;
+    camera.getWorldQuaternion(_trQ);
+    const dt = Math.min(0.1, now - _trT);
+    _trT = now;
+    if (_trHave && dt > 1e-4) {
+      // world-frame rotation from the previous camera to the current one → angular velocity (rad/s)
+      _trDq.copy(_trQ).multiply(_trQprev.invert());
+      if (_trDq.w < 0) { _trDq.x = -_trDq.x; _trDq.y = -_trDq.y; _trDq.z = -_trDq.z; _trDq.w = -_trDq.w; }
+      const ang = 2 * Math.acos(Math.min(1, _trDq.w)), sn = Math.sqrt(Math.max(1e-12, 1 - _trDq.w * _trDq.w));
+      _trV.set(_trDq.x / sn, _trDq.y / sn, _trDq.z / sn).multiplyScalar(ang < 1e-6 ? 0 : ang / dt);
+      _trW.lerp(_trV, 0.25);
+    }
+    _trQprev.copy(_trQ); _trHave = true;
+    const w = _trW.length(), a = Math.min(0.35, w * TR_BLUR); // cap ≈ 20°
+    if (a < 1e-5) return null;
+    // tail painted TR_BLUR ago sits where the old view put it: rotate by −ω·τ... expressed in the world: the
+    // point that is now at u was seen τ ago at camera-local R_prev⁻¹u, i.e. it appears now at R_now R_prev⁻¹ u
+    return _trDq.setFromAxisAngle(_trV.copy(_trW).multiplyScalar(1 / w), a);
+  }
+  function buildTracers() {
+    let n = 0;
+    const smear = trSmearRot();
+    trStats.smearDeg = smear ? +(2 * Math.acos(Math.min(1, smear.w)) * 180 / Math.PI).toFixed(2) : 0;
+    if (trBuf && trN) {
+      camera.getWorldPosition(_tc); camera.getWorldDirection(_tf);
+      const cx = _tc.x, cy = _tc.y, cz = _tc.z, fx = _tf.x, fy = _tf.y, fz = _tf.z;
+      const pxPerRad = (window.innerHeight || 400) / (2 * Math.tan(camera.fov * Math.PI / 360));
+      const NEAR = 0.6;
+      for (let i = 0; i < trN && n < TR_MAX * 2; i++) {
+        const o = i * 8;
+        let hx = trBuf[o], hy = trBuf[o + 1], hz = trBuf[o + 2], tx = trBuf[o + 3], ty = trBuf[o + 4], tz = trBuf[o + 5];
+        const K = TR_KIND[trBuf[o + 6] | 0] || TR_KIND[1], A = trBuf[o + 7];
+        if (smear) { _trV.set(tx - _tc.x, ty - _tc.y, tz - _tc.z).applyQuaternion(smear); tx = _tc.x + _trV.x; ty = _tc.y + _trV.y; tz = _tc.z + _trV.z; }
+        let dh = (hx - cx) * fx + (hy - cy) * fy + (hz - cz) * fz, dtl = (tx - cx) * fx + (ty - cy) * fy + (tz - cz) * fz;
+        if (dh < NEAR && dtl < NEAR) continue;
+        if (dh < NEAR) { const k = (NEAR - dh) / (dtl - dh); hx += (tx - hx) * k; hy += (ty - hy) * k; hz += (tz - hz) * k; dh = NEAR; }
+        else if (dtl < NEAR) { const k = (NEAR - dtl) / (dh - dtl); tx += (hx - tx) * k; ty += (hy - ty) * k; tz += (hz - tz) * k; dtl = NEAR; }
+        // 1.3.9: a round seen end-on (our own stream from behind, a 109's stream coming at us) projects to
+        // ~0 px and vanished; the burning tracer base faces the gunner, so it must read as a bright dot.
+        // Give every streak at least TR_MINPX of screen length, laid along its (tiny) screen motion.
+        {
+          const hl = Math.hypot(hx - cx, hy - cy, hz - cz) || 1, tl = Math.hypot(tx - cx, ty - cy, tz - cz) || 1;
+          let ux = (hx - cx) / hl - (tx - cx) / tl, uy = (hy - cy) / hl - (ty - cy) / tl, uz = (hz - cz) / hl - (tz - cz) / tl;
+          const ul = Math.hypot(ux, uy, uz), sep = ul * pxPerRad;
+          if (sep < TR_MINPX) {
+            if (ul > 1e-9) { ux /= ul; uy /= ul; uz /= ul; }
+            else { const rx = -(hz - cz), rz = hx - cx, rl = Math.hypot(rx, rz) || 1; ux = rx / rl; uy = 0; uz = rz / rl; } // horizontal ⟂ view ray
+            const L = TR_MINPX / pxPerRad * hl;
+            tx = hx - ux * L; ty = hy - uy * L; tz = hz - uz * L;
+            dtl = (tx - cx) * fx + (ty - cy) * fy + (tz - cz) * fz;
+          }
+        }
+        const sx = hx - tx, sy = hy - ty, sz = hz - tz;
+        const mx = (hx + tx) * 0.5 - cx, my = (hy + ty) * 0.5 - cy, mz = (hz + tz) * 0.5 - cz;
+        let px = sy * mz - sz * my, py = sz * mx - sx * mz, pz = sx * my - sy * mx;
+        const pl = Math.hypot(px, py, pz); if (pl < 1e-6) { px = 0; py = 1; pz = 0; } else { px /= pl; py /= pl; pz /= pl; }
+        for (let layer = 0; layer < 2; layer++) {
+          const wpx = layer ? K[2] : K[3], rgb = layer ? K[0] : K[1], a = (layer ? K[4] : K[5]) * A, keep = layer ? K[6] : 0;
+          const wh = 0.5 * wpx * dh / pxPerRad, wt = 0.5 * wpx * dtl / pxPerRad;
+          const v = n * 4, p3 = v * 3, c4 = v * 4;
+          trPos[p3] = hx - px * wh; trPos[p3 + 1] = hy - py * wh; trPos[p3 + 2] = hz - pz * wh;
+          trPos[p3 + 3] = hx + px * wh; trPos[p3 + 4] = hy + py * wh; trPos[p3 + 5] = hz + pz * wh;
+          trPos[p3 + 6] = tx - px * wt; trPos[p3 + 7] = ty - py * wt; trPos[p3 + 8] = tz - pz * wt;
+          trPos[p3 + 9] = tx + px * wt; trPos[p3 + 10] = ty + py * wt; trPos[p3 + 11] = tz + pz * wt;
+          for (let k = 0; k < 4; k++) { const q = c4 + k * 4; trCol[q] = rgb[0]; trCol[q + 1] = rgb[1]; trCol[q + 2] = rgb[2]; trCol[q + 3] = k < 2 ? a : a * keep; }
+          n++;
+        }
+      }
+    }
+    trStats.drawn = n >> 1;
+    trGeo.setDrawRange(0, n * 6);
+    trGeo.attributes.position.needsUpdate = true; trGeo.attributes.aCol.needsUpdate = true;
+  }
+  function setTracers(buf, count) { trBuf = buf; trN = count; }
+
+  function render() {
+    prWatch();
+    buildTracers();
+    camera.layers.set(0);
+    renderer.render(scene, camera);
+    // 1.4.0: the turret (guns, sight box, sill, dome frame) in its own pass on top of the airframe
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    camera.layers.set(OVL);
+    renderer.render(scene, camera);
+    camera.layers.set(0);
+    renderer.autoClear = true;
+  }
+
+  ready = true;
+  const loading = loadModels();
+
+  return {
+    get _smokeDbg() { const v = smokePool.filter((p) => p.life > 0); return { n: v.length, sample: v.slice(0, 3).map((p) => ({ x: +p.sp.position.x.toFixed(1), y: +p.sp.position.y.toFixed(1), z: +p.sp.position.z.toFixed(1), o: +p.sp.material.opacity.toFixed(2), s: +p.sp.scale.x.toFixed(2) })) }; },
+    get ready() {
+      return ready;
+    },
+    get modelsReady() {
+      return modelsReady;
+    },
+    resize,
+    sync,
+    render,
+    applySkyTexture,
+    loading,
+    renderer,
+    scene,
+    camera,
+    muzzles: muzzleOut,
+    _gunGroups: gunGroups,
+    rayShip, addHole, clearDamage, rayFighter, addFighterHole, fighterBoundR, fighterDecalInfo, fighterMeshDump,
+    decalInfo: (which) => { const g = shipGroup(which); if (!g) return []; g.updateMatrixWorld(true); return (g.userData.decals || []).map((m) => { const p = new THREE.Vector3(); m.getWorldPosition(p); const n = new THREE.Vector3(0, 0, 1).applyQuaternion(m.getWorldQuaternion(new THREE.Quaternion())); return { x: p.x, y: p.y, z: p.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x }; }); },
+    get flakStats() { return Object.assign({}, flakStats); },
+    _ownShip: ownShip,
+    get speckStats() { return speckStats.slice(); },
+    lodOf: (id) => { const i = slotOf.get(id); return i == null || !fighterPool[i] ? null : fighterPool[i].lod || null; },
+    get pixelRatio() { return renderer.getPixelRatio(); },
+    LOD: { LOD_NEAR, LOD_FAR, DOT_FLOOR, DOT_EQ }, fighterAreas,
+    setTracers,
+    get tracerStats() { return Object.assign({}, trStats); },
+    // debug: tint OUR tracers (kind 0) for identification stills; null restores
+    tracerTint: (rgb) => { if (!TR_KIND._k0) TR_KIND._k0 = [TR_KIND[0][0], TR_KIND[0][1]]; if (rgb) { TR_KIND[0][0] = rgb; TR_KIND[0][1] = rgb.map((v) => v * 0.7); } else { TR_KIND[0][0] = TR_KIND._k0[0]; TR_KIND[0][1] = TR_KIND._k0[1]; } return true; },
+    get townInfo() { const v = new THREE.Vector3(); town.getWorldPosition(v); return { x: v.x, y: v.y, z: v.z, smoke: impactSmoke.filter((p) => p.life > 0).length }; },
+  };
+}
+
+// Attach for non-module consumers
+window.createWorld3D = createWorld3D;
+window.THREE_NS = THREE;
