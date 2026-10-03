@@ -38090,9 +38090,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const g = new Group();
       g.name = "P51D";
       g.userData.procedural = true;
-      const nmf = (o) => new MeshStandardMaterial(Object.assign({ color: 13223868, metalness: 0.55, roughness: 0.36, emissive: 2763302, emissiveIntensity: 0.35 }, o || {}));
-      const M = nmf(), Mdark = nmf({ color: 5592911, metalness: 0.4, roughness: 0.5, emissive: 657930 }), Mred = nmf({ color: 11544608, metalness: 0.3, roughness: 0.45, emissive: 3803142, emissiveIntensity: 0.5 });
-      const Mglass = new MeshStandardMaterial({ color: 9417928, metalness: 0.2, roughness: 0.08, transparent: true, opacity: 0.55, emissive: 1714740, emissiveIntensity: 0.3 });
+      const nmf = (o) => new MeshStandardMaterial(Object.assign({ color: 14211282, metalness: 0.12, roughness: 0.5, emissive: 11842734, emissiveIntensity: 0.5, envMapIntensity: 0.3 }, o || {}));
+      const M = nmf(), Mdark = nmf({ color: 5592911, metalness: 0.2, roughness: 0.55, emissive: 657930, emissiveIntensity: 0.3 }), Mred = nmf({ color: 14725152, metalness: 0.1, roughness: 0.5, emissive: 6967304, emissiveIntensity: 0.4 }), Mod = nmf({ color: 6055478, metalness: 0.1, roughness: 0.6, emissive: 2106892, emissiveIntensity: 0.4 });
+      const Mglass = new MeshStandardMaterial({ color: 11064554, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.38, depthWrite: false, emissive: 2771548, emissiveIntensity: 0.5 });
       const add = (geo, mat, name, x, y, z) => {
         const m = new Mesh(geo, mat);
         m.name = name || "";
@@ -38167,7 +38167,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         const geo = new ExtrudeGeometry(f, { depth: 0.07, bevelEnabled: false });
         geo.rotateY(-Math.PI / 2);
         geo.translate(-0.035, 0, 0);
-        const fin = new Mesh(geo, Mred);
+        const fin = new Mesh(geo, M);
         fin.name = "fin";
         fin.position.set(0, 0.16, 0);
         g.add(fin);
@@ -38175,8 +38175,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const can = add(new SphereGeometry(0.5, 16, 12), Mglass, "canopy_glass", 0, 0.42, 0.12);
       can.scale.set(0.34, 0.3, 0.98);
       add(new BoxGeometry(0.1, 0.06, 0.4), M, "windscreen_frame", 0, 0.5, -0.5);
-      const spin = add(new ConeGeometry(0.2, 0.52, 14), Mred, "spinner", 0, 0.03, -2.5);
+      const spin = add(new ConeGeometry(0.2, 0.52, 14), M, "spinner", 0, 0.03, -2.5);
       spin.rotation.x = -Math.PI / 2;
+      add(new CylinderGeometry(0.31, 0.31, 0.09, 16, 1, true), Mred, "nose_band", 0, 0.03, -2.12).rotation.x = Math.PI / 2;
+      add(new BoxGeometry(0.3, 0.025, 0.95), Mod, "antiglare_panel", 0, 0.45, -1.2).rotation.x = -0.1;
       for (let k = 0; k < 4; k++) {
         const bl = add(new BoxGeometry(0.1, 1.5, 0.025), Mdark, "propblade" + k, 0, 0.03, -2.58);
         bl.rotation.z = k * Math.PI / 4 + 0.35;
@@ -38293,6 +38295,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const src = prototypes[kind] || prototypes["109"];
       if (!src) return null;
       const mesh = src.clone(true);
+      mesh.userData.isP51 = kind === "p51";
       mesh.traverse((o) => {
         if (o.isMesh) {
           o.castShadow = false;
@@ -38963,12 +38966,13 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
           }
           m.opacity = f.op * w;
           m.depthWrite = !f.tr;
-          if (f.col) m.color.copy(f.col).lerp(_tmpC.copy(_dark).convertSRGBToLinear(), 0.55 * sizeK);
+          if (f.col) m.color.copy(f.col).lerp(_tmpC.copy(_dark).convertSRGBToLinear(), (u.isP51 ? 0.06 : 0.55) * sizeK);
           if (f.env != null) m.envMapIntensity = f.env * (1 - 0.8 * sizeK);
-          if (f.emi != null) m.emissiveIntensity = f.emi * (1 - sizeK);
+          if (f.emi != null) m.emissiveIntensity = f.emi * (1 - (u.isP51 ? 0.1 : 1) * sizeK);
         }
       }
-      const op = 0.85 * sizeK * w;
+      const op = (u.isP51 ? 0.45 : 0.85) * sizeK * w;
+      if (u.isP51) u.olMat.uniforms.uC.value.setHex(6975088);
       u.olMat.uniforms.uOp.value = op;
       const pr = renderer.getPixelRatio(), dpr = window.devicePixelRatio || 1;
       u.olMat.uniforms.uW.value = Math.max(0.55, 0.75 * pr / dpr);
@@ -39064,9 +39068,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         const ff = fogF(d);
         let r = 0.035, g = 0.037, b = 0.04;
         if (e.type === "p51") {
-          r = 0.66;
-          g = 0.7;
-          b = 0.76;
+          r = 0.9;
+          g = 0.92;
+          b = 0.95;
         }
         col[n * 4] = r + (_hz.r - r) * ff;
         col[n * 4 + 1] = g + (_hz.g - g) * ff;

@@ -3193,9 +3193,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   // Native units like the 109 GLB (it is drawn at ×1.3): span 5.8, length 5.0. Nose = local −Z, up = +Y, starboard = +X.
   function buildP51Model() {
     const g = new THREE.Group(); g.name = "P51D"; g.userData.procedural = true;
-    const nmf = (o) => new THREE.MeshStandardMaterial(Object.assign({ color: 0xc9c7bc, metalness: 0.55, roughness: 0.36, emissive: 0x2a2a26, emissiveIntensity: 0.35 }, o || {}));
-    const M = nmf(), Mdark = nmf({ color: 0x55574f, metalness: 0.4, roughness: 0.5, emissive: 0x0a0a0a }), Mred = nmf({ color: 0xb02820, metalness: 0.3, roughness: 0.45, emissive: 0x3a0806, emissiveIntensity: 0.5 });
-    const Mglass = new THREE.MeshStandardMaterial({ color: 0x8fb4c8, metalness: 0.2, roughness: 0.08, transparent: true, opacity: 0.55, emissive: 0x1a2a34, emissiveIntensity: 0.3 });
+    // 1.5.2 fix: bright natural-metal silver. Low metalness (no env map in the scene → high metalness renders near-black) + a self-lit emissive floor.
+    const nmf = (o) => new THREE.MeshStandardMaterial(Object.assign({ color: 0xd8d8d2, metalness: 0.12, roughness: 0.5, emissive: 0xb4b4ae, emissiveIntensity: 0.5, envMapIntensity: 0.3 }, o || {}));
+    const M = nmf(), Mdark = nmf({ color: 0x55574f, metalness: 0.2, roughness: 0.55, emissive: 0x0a0a0a, emissiveIntensity: 0.3 }), Mred = nmf({ color: 0xe0b020, metalness: 0.1, roughness: 0.5, emissive: 0x6a5008, emissiveIntensity: 0.4 }), Mod = nmf({ color: 0x5c6636, metalness: 0.1, roughness: 0.6, emissive: 0x20260c, emissiveIntensity: 0.4 });
+    const Mglass = new THREE.MeshStandardMaterial({ color: 0xa8d4ea, metalness: 0.0, roughness: 0.05, transparent: true, opacity: 0.38, depthWrite: false, emissive: 0x2a4a5c, emissiveIntensity: 0.5 });
     const add = (geo, mat, name, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.name = name || ""; m.position.set(x || 0, y || 0, z || 0); g.add(m); return m; };
     // fuselage loft: sections along z (nose −z → tail +z); each {z, w (half width), t (top), b (bottom), y (centre)}
     function loft(secs, seg) {
@@ -3233,13 +3234,15 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const geo = new THREE.ExtrudeGeometry(f, { depth: 0.07, bevelEnabled: false });
       geo.rotateY(-Math.PI / 2); // extrude axis → x; shape x → z, shape y → y
       geo.translate(-0.035, 0, 0);
-      const fin = new THREE.Mesh(geo, Mred); fin.name = "fin"; fin.position.set(0, 0.16, 0); g.add(fin);
+      const fin = new THREE.Mesh(geo, M); fin.name = "fin"; fin.position.set(0, 0.16, 0); g.add(fin);
     }
     // bubble canopy (D-model): a tall teardrop on a low rear deck
     const can = add(new THREE.SphereGeometry(0.5, 16, 12), Mglass, "canopy_glass", 0, 0.42, 0.12); can.scale.set(0.34, 0.3, 0.98);
     add(new THREE.BoxGeometry(0.1, 0.06, 0.4), M, "windscreen_frame", 0, 0.5, -0.5);
     // spinner (red marker), four-blade prop, small blur disc
-    const spin = add(new THREE.ConeGeometry(0.2, 0.52, 14), Mred, "spinner", 0, 0.03, -2.5); spin.rotation.x = -Math.PI / 2;
+    const spin = add(new THREE.ConeGeometry(0.2, 0.52, 14), M, "spinner", 0, 0.03, -2.5); spin.rotation.x = -Math.PI / 2;
+    add(new THREE.CylinderGeometry(0.31, 0.31, 0.09, 16, 1, true), Mred, "nose_band", 0, 0.03, -2.12).rotation.x = Math.PI / 2; // small yellow squadron nose band
+    add(new THREE.BoxGeometry(0.3, 0.025, 0.95), Mod, "antiglare_panel", 0, 0.45, -1.2).rotation.x = -0.1; // olive-drab anti-glare panel ahead of the windscreen
     for (let k = 0; k < 4; k++) { const bl = add(new THREE.BoxGeometry(0.1, 1.5, 0.025), Mdark, "propblade" + k, 0, 0.03, -2.58); bl.rotation.z = k * Math.PI / 4 + 0.35; bl.scale.set(1, 1, 1); }
     // wing guns (3 per side), exhaust stacks
     for (const sd of [1, -1]) {
@@ -3305,6 +3308,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const src = prototypes[kind] || prototypes["109"];
     if (!src) return null;
     const mesh = src.clone(true);
+    mesh.userData.isP51 = (kind === "p51");
     mesh.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = false;
@@ -3975,12 +3979,13 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         if (m.transparent !== tr) { m.transparent = tr; m.needsUpdate = true; }
         m.opacity = f.op * w;
         m.depthWrite = !f.tr;
-        if (f.col) m.color.copy(f.col).lerp(_tmpC.copy(_dark).convertSRGBToLinear(), 0.55 * sizeK);
+        if (f.col) m.color.copy(f.col).lerp(_tmpC.copy(_dark).convertSRGBToLinear(), (u.isP51 ? 0.06 : 0.55) * sizeK); // P-51s stay silver at range
         if (f.env != null) m.envMapIntensity = f.env * (1 - 0.8 * sizeK);
-        if (f.emi != null) m.emissiveIntensity = f.emi * (1 - sizeK);
+        if (f.emi != null) m.emissiveIntensity = f.emi * (1 - (u.isP51 ? 0.1 : 1) * sizeK);
       }
     }
-    const op = 0.85 * sizeK * w;
+    const op = (u.isP51 ? 0.45 : 0.85) * sizeK * w;
+    if (u.isP51) u.olMat.uniforms.uC.value.setHex(0x6a6e70);
     u.olMat.uniforms.uOp.value = op;
     const pr = renderer.getPixelRatio(), dpr = window.devicePixelRatio || 1;
     u.olMat.uniforms.uW.value = Math.max(0.55, 0.75 * pr / dpr); // render px
@@ -4059,7 +4064,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       let alpha = dot.a * wDot * Math.min(1, (want * want) / (S * S * SOFT_INK));
       const ff = fogF(d);
       let r = 0.035, g = 0.037, b = 0.04;
-      if (e.type === "p51") { r = 0.66; g = 0.7; b = 0.76; } // 1.5.2: friendly specks are silver, Germans stay dark
+      if (e.type === "p51") { r = 0.9; g = 0.92; b = 0.95; } // 1.5.2: friendly specks are silver, Germans stay dark
       // 1.3.9: no dot glint any more. A near-white flash on a 2 px dark dot made it vanish against the sky for a
       // few frames (read as a pop in the flyby); the 3D model keeps its real specular sun highlights.
       col[n * 4] = r + (_hz.r - r) * ff; col[n * 4 + 1] = g + (_hz.g - g) * ff; col[n * 4 + 2] = b + (_hz.b - b) * ff; col[n * 4 + 3] = alpha;
