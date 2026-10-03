@@ -193,6 +193,16 @@
     thump(G, t, big ? 60 : 80, 22, big ? 1.4 : 0.9, (big ? 1.3 : 0.9) * near, pan, lp);
     noiseHit(G, t, big ? 1.6 : 1.1, 260, 0.5, 1.3 * near, pan, lp, 0.01);
   }
+  // 1.5.2: WGr.21 rocket launch — ignition thump, then a rushing hiss that sweeps up and fades as it flies off
+  function sRocket(G, t, dist, pan) {
+    const ctx = G.ctx, near = 1 / (1 + dist / 260);
+    thump(G, t, 85, 32, 0.35, 0.9 * near, pan, 900);
+    noiseHit(G, t, 0.09, 1400, 0.8, 0.5 * near, pan, 4500);
+    const s = ctx.createBufferSource(); s.buffer = G.noise; s.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 2.2; bp.frequency.setValueAtTime(700, t); bp.frequency.exponentialRampToValueAtTime(2600, t + 0.5); bp.frequency.exponentialRampToValueAtTime(900, t + 1.6);
+    const e = ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(0.55 * near + 0.02, t + 0.08); e.gain.setValueAtTime(0.55 * near + 0.02, t + 0.7); e.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);
+    s.connect(bp); bp.connect(e); e.connect(out(G, t, 0.5, pan)); s.start(t); s.stop(t + 1.9);
+  }
   function sFlak(G, t, dist, pan) { // the "crump": dull boom, then a short crackle of fragments
     const near = 1 / (1 + dist / 220);
     if (dist < 90) { thump(G, t, 120, 35, 0.5, 1.2 * (1 - dist / 90) + 0.3, pan, 2500); noiseHit(G, t, 0.12, 1800, 0.7, 0.9 * (1 - dist / 90), pan, 5000); } // close: a hard, sharp WHAM
@@ -373,6 +383,7 @@
     hitOwn(kind) { if (!ok()) return; sHitOwn(G, ctx.currentTime, kind || "mg"); count("hitOwn"); },
     enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d > 1200) return; sEnemyGun(G, ctx.currentTime + q.d / 230 * 0.3, q.d, q.pan); count("enemyGun"); },
     boom(x, y, z, big) { if (!ok()) return; const q = panOf(x, y, z); sBoom(G, ctx.currentTime + Math.min(1.5, q.d / 230), q.d, q.pan, big); count("boom"); },
+    rocket(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); sRocket(G, ctx.currentTime + Math.min(1.5, q.d / 340), q.d, q.pan); count("rocket"); },
     flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); sFlak(G, ctx.currentTime + Math.min(2, q.d / 230), q.d, q.pan); count("flak"); },
     fallStart(cause) { if (!ok()) return; sFallStart(G, ctx.currentTime); count("fall"); },
     bell() { if (!ok()) return; sBell(G, ctx.currentTime); count("bell"); },

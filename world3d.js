@@ -184,7 +184,7 @@ export function createWorld3D(canvas) {
 
   // Fighter pool
   const fighterPool = [];
-  const prototypes = { "109": null, "190": null, "110": null };
+  const prototypes = { "109": null, "190": null, "110": null, "p51": null };
 
   function makeTrail() {
     const geo = new THREE.BufferGeometry();
@@ -402,7 +402,7 @@ export function createWorld3D(canvas) {
     if (metal) { const ag = new THREE.Mesh(new THREE.BoxGeometry(0.05 * S, 0.004 * S, 0.1 * S), new THREE.MeshStandardMaterial({ color: 0x3f4730, roughness: 0.7, metalness: 0.1 })); ag.position.set(0, 0.047 * S, 0.29 * S); ag.rotation.x = 0.28; g.add(ag); } // anti-glare panel
     const top = new THREE.Mesh(new THREE.SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM); top.position.set(0, 0.049 * S, 0.165 * S); g.add(top);
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.022 * S, 8, 6), dark); ball.position.set(0, -0.05 * S, -0.02 * S); g.add(ball);
-    const tailG = new THREE.Mesh(new THREE.BoxGeometry(0.018 * S, 0.02 * S, 0.035 * S), glassM); tailG.position.set(0, 0.004 * S, -0.405 * S); g.add(tailG);
+    const tailG = new THREE.Mesh(new THREE.BoxGeometry(0.018 * S, 0.02 * S, 0.035 * S), glassM); tailG.position.set(0, 0.004 * S, -0.405 * S); tailG.userData.tailPart = true; g.add(tailG);
     for (const sd of [-1, 1]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(0.05 * S, 0.018 * S), dark); w.position.set(sd * 0.0405 * S, 0.012 * S, -0.1 * S); w.rotation.y = sd * Math.PI / 2; g.add(w); }
     // fuselage codes + insignia on both sides
     { const ct = b17CodeTex(k, metal), cm = new THREE.MeshStandardMaterial({ map: ct, transparent: true, alphaTest: 0.1, roughness: 0.6, metalness: metal ? 0.6 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
@@ -413,23 +413,23 @@ export function createWorld3D(canvas) {
     const wg = new THREE.ExtrudeGeometry(wingShape, { depth: 0.016 * S, bevelEnabled: true, bevelThickness: 0.003 * S, bevelSize: 0.003 * S, bevelSegments: 1 });
     wg.rotateX(Math.PI / 2); wg.translate(0, 0.0, 0.0); // shape (x, y) → (x, z) ; extrude depth → −y
     for (const side of [-1, 1]) {
-      const w = new THREE.Mesh(wg, skin); w.scale.x = side; w.position.set(0, -0.018 * S, 0.0); w.rotation.z = side * 0.075; g.add(w);
-      const star = new THREE.Mesh(new THREE.CircleGeometry(0.028 * S, 10), b17Star); star.rotation.x = -Math.PI / 2; star.position.set(side * 0.38 * S, (-0.015 + 0.38 * 0.075 + 0.0015) * S, 0.05 * S); star.rotation.y = 0; if (side > 0) g.add(star);
+      const w = new THREE.Mesh(wg, skin); w.scale.x = side; w.position.set(0, -0.018 * S, 0.0); w.rotation.z = side * 0.075; w.userData.wingSide = side; g.add(w);
+      const star = new THREE.Mesh(new THREE.CircleGeometry(0.028 * S, 10), b17Star); star.rotation.x = -Math.PI / 2; star.position.set(side * 0.38 * S, (-0.015 + 0.38 * 0.075 + 0.0015) * S, 0.05 * S); star.rotation.y = 0; if (side > 0) { star.userData.wingSide = 1; g.add(star); }
     }
     // stabilizers: tapered, rounded tips
     { const sh = new THREE.Shape(); sh.moveTo(0, -0.3 * S); sh.lineTo(0.2 * S, -0.365 * S); sh.quadraticCurveTo(0.225 * S, -0.37 * S, 0.22 * S, -0.39 * S); sh.lineTo(0.02 * S, -0.415 * S); sh.lineTo(0, -0.415 * S); sh.closePath();
       const sg = new THREE.ExtrudeGeometry(sh, { depth: 0.009 * S, bevelEnabled: false }); sg.rotateX(Math.PI / 2);
-      for (const side of [-1, 1]) { const st = new THREE.Mesh(sg, skin); st.scale.x = side; st.position.y = 0.012 * S; g.add(st); } }
+      for (const side of [-1, 1]) { const st = new THREE.Mesh(sg, skin); st.scale.x = side; st.position.y = 0.012 * S; st.userData.tailPart = true; g.add(st); } }
     { // swept, tapered B-17 fin (dorsal fillet → tall rounded rudder) + tail markings both sides
       const sh = new THREE.Shape();
       sh.moveTo(-0.415 * S, 0); sh.lineTo(-0.15 * S, 0); sh.quadraticCurveTo(-0.26 * S, 0.03 * S, -0.3 * S, 0.075 * S);
       sh.lineTo(-0.35 * S, 0.19 * S); sh.quadraticCurveTo(-0.38 * S, 0.205 * S, -0.41 * S, 0.195 * S); sh.lineTo(-0.425 * S, 0.1 * S); sh.closePath();
       const fg = new THREE.ExtrudeGeometry(sh, { depth: 0.01 * S, bevelEnabled: false });
       fg.translate(0, 0, -0.005 * S);
-      const fin = new THREE.Mesh(fg, skin); fin.rotation.y = -Math.PI / 2; fin.position.set(0, 0.03 * S, 0); g.add(fin);
+      const fin = new THREE.Mesh(fg, skin); fin.rotation.y = -Math.PI / 2; fin.position.set(0, 0.03 * S, 0); fin.userData.tailPart = true; g.add(fin);
       const tt = b17TailTex(k, metal), tm = new THREE.MeshStandardMaterial({ map: tt, transparent: true, alphaTest: 0.08, roughness: 0.6, metalness: metal ? 0.5 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
       g.userData.hazeMats.push({ m: tm, col: tm.color.clone() });
-      for (const sd of [-1, 1]) { const d = new THREE.Mesh(new THREE.PlaneGeometry(0.06 * S, 0.075 * S), tm); d.position.set(sd * 0.0056 * S, 0.03 * S + 0.13 * S, -0.383 * S); d.rotation.y = sd * Math.PI / 2; g.add(d); }
+      for (const sd of [-1, 1]) { const d = new THREE.Mesh(new THREE.PlaneGeometry(0.06 * S, 0.075 * S), tm); d.position.set(sd * 0.0056 * S, 0.03 * S + 0.13 * S, -0.383 * S); d.rotation.y = sd * Math.PI / 2; d.userData.tailPart = true; g.add(d); }
     }
     // Four nacelles with cowl rings + engine anchors
     const engines = [];
@@ -469,6 +469,45 @@ export function createWorld3D(canvas) {
       if (q.m.envMapIntensity != null && q.env == null) q.env = q.m.envMapIntensity;
       if (q.env != null) q.m.envMapIntensity = q.env * (1 - h);
     }
+  }
+  // ===== 1.5.2 B-17 DEATH VARIETY (AI Fortresses): a wing folds off at the root, or the tail tears away — the piece falls
+  // separately (tumbling, burning, trailing black smoke) while the airframe rolls toward the missing side and spirals down =====
+  function detachB17(g, f) {
+    const S = B17_VIS, isWing = f.deathKind === "wing", side = f.deathSide > 0 ? 1 : -1;
+    g.updateMatrixWorld(true);
+    const grp = new THREE.Group(); grp.position.copy(g.position); grp.quaternion.copy(g.quaternion); scene.add(grp);
+    const moved = [];
+    for (const c of g.children.slice()) {
+      if (c.isSprite) continue;
+      const u = c.userData;
+      const on = isWing ? (u.wingSide === side || (u.wingSide == null && !u.tailPart && c.position.x * side > 0.075 * S && c.position.z > -0.3 * S)) : !!u.tailPart;
+      if (!on) continue;
+      moved.push({ c, p: c.position.clone(), q: c.quaternion.clone(), sc: c.scale.clone() });
+      grp.add(c);
+    }
+    const mk = (x, y, z, sx, sy) => { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 })); sp.position.set(x, y, z); sp.scale.set(sx, sy, 1); grp.add(sp); return sp; };
+    const sprites = isWing ? [mk(side * 1.8, 0.4, 0.0, 3.2, 4.2), mk(side * 5.2, 0.3, 0.1, 2.4, 3.2)] : [mk(0, 0.2, -0.38 * S, 2.6, 3.4)];
+    grp.userData = { moved, sprites, side, isWing, t: 0, vx: (f.vx || 0) + (isWing ? side * 9 : (Math.random() - 0.5) * 8), vy: (f.vy || 0) + (isWing ? 2.5 : 4), vz: (f.vz || 0) + (isWing ? -4 : -10), wx: (Math.random() - 0.5) * 0.9, wy: (Math.random() - 0.5) * 0.9, wz: isWing ? side * (1.4 + Math.random()) : 1.2 + Math.random() * 1.6, lastP: null };
+    g.userData.det = grp;
+    const P = new THREE.Vector3(isWing ? side * 1.5 : 0, 0, isWing ? 0 : -0.38 * S).applyMatrix4(g.matrixWorld);
+    spawnDebris(P.x, P.y, P.z, 70, 0.7); spawnDebris(P.x, P.y, P.z, 25, 1.2);
+    emitSmoke(P, true, true);
+    if (window.FGAudio && window.FGAudio.boom) window.FGAudio.boom(P.x, P.y, P.z, true);
+  }
+  function restoreB17(g) {
+    const grp = g.userData.det; if (!grp) return;
+    for (const m of grp.userData.moved) { g.add(m.c); m.c.position.copy(m.p); m.c.quaternion.copy(m.q); m.c.scale.copy(m.sc); }
+    scene.remove(grp); g.userData.det = null;
+  }
+  function updateDetB17(g, f, dt, idx) {
+    const grp = g.userData.det, u = grp.userData;
+    u.t += dt; u.vy -= 7 * dt; u.vy = Math.max(u.vy, -60); u.vx *= Math.pow(0.85, dt); u.vz += (-83 - u.vz) * Math.min(1, 0.25 * dt);
+    grp.position.x += u.vx * dt; grp.position.y += u.vy * dt; grp.position.z += u.vz * dt;
+    grp.rotateX(u.wx * dt); grp.rotateY(u.wy * dt); grp.rotateZ(u.wz * dt);
+    for (const sp of u.sprites) { sp.visible = u.t < 16; if (sp.visible) { const k = (0.8 + Math.random() * 0.3); sp.material.opacity = 0.55 + Math.random() * 0.4; sp.scale.x = sp.scale.x * 0.98 + 0.02 * 3 * k; } }
+    _v.set(u.isWing ? u.side * 4.5 : 0, 0.2, u.isWing ? 0 : -0.38 * B17_VIS); grp.localToWorld(_v);
+    if (u.t < 24) ribbonEmit("wing" + idx + "_" + (f.id != null ? f.id : ""), _v, { w0: 1.2, w1: 11, life: 3.6, a: 0.66, col: [0.12, 0.115, 0.11], drift: 55 });
+    if (u.isWing && u.t < 26) { _v.set(u.side * 1.2, 0.3, 0.0); g.localToWorld(_v); ribbonEmit("stub" + idx + "_" + (f.id != null ? f.id : ""), _v, { w0: 1.2, w1: 13, life: 3.6, a: 0.7, col: [0.11, 0.105, 0.1], drift: 55 }); } // the stub of the fuselage burns
   }
   const friendlyPool = [];
   for (let i = 0; i < 18; i++) friendlyPool.push(buildB17());
@@ -683,13 +722,18 @@ export function createWorld3D(canvas) {
     plan.push([-13.35, -1.35]);
     for (const x of xs) plan.push([-x, TE(x)]);
     for (const x of xs.slice().reverse()) plan.push([x, TE(x)]);
-    add(wingGeo(plan, 0.7, 0.24, 0), od);
+    { // 1.5.2: two half-wings (so one can tear off at the root in a wing-fold death); same planform as the one-piece wing
+      const portP = [[13.35, -1.35]]; for (const x of xs) portP.push([x, LE(x)]); portP.push([0, LE(1.0)], [0, TE(1.0)]); for (const x of xs.slice().reverse()) portP.push([x, TE(x)]);
+      const stbdP = portP.map(([x, z]) => [-x, z]).reverse();
+      const wp = add(wingGeo(portP, 0.7, 0.24, 0), od); wp.userData.wingSide = 1;
+      const ws = add(wingGeo(stbdP, 0.7, 0.24, 0), od); ws.userData.wingSide = -1;
+    }
     for (const sd of [1, -1]) { // de-icer boots along the leading edge
       const bp = [];
       const bx = [12.6, 8.3, 4.3, 1.4];
       for (const x of bx) bp.push([sd * x, LE(x) + 0.03]);
       for (const x of bx.slice().reverse()) bp.push([sd * x, LE(x) - 0.38]);
-      add(wingGeo(bp, 0.74, 0.28, 0.005), boot);
+      const bm = add(wingGeo(bp, 0.74, 0.28, 0.005), boot); bm.userData.wingSide = sd;
     }
     { // national insignia — upper port wing (as on the real B-17G)
       const c = document.createElement("canvas"); c.width = c.height = 128;
@@ -704,7 +748,7 @@ export function createWorld3D(canvas) {
       ins.rotation.z = Math.PI; // star points forward
       const ax = 10.2, th = 0.7 + (0.24 - 0.7) * (ax / 13);
       ins.position.set(ax, WY(ax) + th * 0.5 + 0.015, (LE(ax) + TE(ax)) * 0.5);
-      ownShip.add(ins);
+      ins.userData.wingSide = 1; ownShip.add(ins);
     }
     // --- tail (1.4.0 rebuild): bare-metal stabilizers with RED tips; a thicker, tapered B-17G fin at the right
     // height (tip ≈ 3.1u / 12 ft above the tail cone, y ≈ 2.0), long low dorsal fillet, rudder hinge + trim-tab lines.
@@ -1052,24 +1096,28 @@ export function createWorld3D(canvas) {
   })();
   const bombMesh = new THREE.InstancedMesh(bombGeo, new THREE.MeshStandardMaterial({ color: 0x3e4130, roughness: 0.7, metalness: 0.2 }), BOMB_N);
   bombMesh.count = 0; bombMesh.frustumCulled = false; scene.add(bombMesh);
+  const BOMB_G = 4.9; // 1.5.2: a stick reaches the ground (≈1,400 u below) ~24 s after release — where the town is when it arrives
+  const _tw = new THREE.Vector3();
   const bombs = []; const bombStats = { live: 0, dropped: 0 };
   const _bm = new THREE.Matrix4(), _bq = new THREE.Quaternion(), _bs = new THREE.Vector3(1.3, 1.3, 1.3), _bp = new THREE.Vector3(), _be = new THREE.Euler();
   function dropBombs(list) {
     for (const st of list) {
       for (let k = 0; k < st.n && bombs.length < BOMB_N; k++) { // a stick: one after another, ~0.12 s apart, out of alternate sides of the bay
-        bombs.push({ x0: st.x + (k % 2 ? 0.28 : -0.28), y0: st.y + (k % 3) * 0.12, z0: st.z + (st.own ? 0 : 0.3), t: -(st.delay + k * 0.12), yawJ: (Math.random() - 0.5) * 0.1, rollS: (Math.random() - 0.5) * 1.2, lead: st.lead });
+        bombs.push({ x0: st.x + (k % 2 ? 0.28 : -0.28), y0: st.y + (k % 3) * 0.12, z0: st.z + (st.own ? 0 : 0.3), t: -(st.delay + k * 0.12), yawJ: (Math.random() - 0.5) * 0.1, rollS: (Math.random() - 0.5) * 1.2, lead: st.lead, own: !!st.own });
         bombStats.dropped++;
       }
     }
   }
   function updateBombs(dt) {
     let n = 0;
-    for (let i = bombs.length - 1; i >= 0; i--) { const b = bombs[i]; b.t += dt; if (b.t > 14) bombs.splice(i, 1); }
+    for (let i = bombs.length - 1; i >= 0; i--) { const b = bombs[i]; b.t += dt; if (b.t > 26 || b.landed) bombs.splice(i, 1); }
     for (const b of bombs) {
       if (b.t < 0 || n >= BOMB_N) continue;
       const t = b.t;
-      _bp.set(b.x0, b.y0 - 0.5 * 6.5 * t * t, b.z0 - 0.5 * 1.1 * t * t - 0.02 * t * t * t);
-      const vy = -6.5 * t, vz = -1.1 * t - 0.06 * t * t;
+      _bp.set(b.x0, b.y0 - 0.5 * BOMB_G * t * t, b.z0 - 0.5 * 1.1 * t * t - 0.02 * t * t * t);
+      town.getWorldPosition(_tw);
+      if (_bp.y <= _tw.y + 0.5) { b.landed = true; (bombStats.land || (bombStats.land = [])).push({ dx: Math.round(_bp.x - _tw.x), dz: Math.round(_bp.z - _tw.z), t: +t.toFixed(1), own: !!b.own, lead: !!b.lead }); continue; }
+      const vy = -BOMB_G * t, vz = -1.1 * t - 0.06 * t * t;
       const pitch = Math.atan2(-vy, 83 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05; // nose down as the fall steepens
       _be.set(pitch, b.yawJ, b.rollS * t * 0.3, "YXZ"); _bq.setFromEuler(_be);
       _bm.compose(_bp, _bq, _bs); bombMesh.setMatrixAt(n++, _bm);
@@ -1079,7 +1127,7 @@ export function createWorld3D(canvas) {
   // ===== 1.4.1: OUR OWN B-17 GOING DOWN, seen from the chute =====
   // Big wing-root and engine fires, a thick black smoke trail left in the air mass, and ~6.5 s after we get out
   // the tail tears off (fin + stabilizer thrown clear, tumbling, with a burst of debris and its own smoke).
-  const wreck = { fires: [], srcs: [], tail: null, parts: [], emit: 0, on: false, last: [null, null, null] };
+  const wreck = { fires: [], srcs: [], tail: null, parts: [], emit: 0, on: false, last: [null, null, null], wing: null, wingHid: [], wingSide: 0 };
   {
     // four fire sources (wing roots, inboard engines), each a flame on top of the wing plus a streaming tongue aft
     // and a glow under the wing; the smoke comes from the top flame
@@ -1135,7 +1183,10 @@ export function createWorld3D(canvas) {
     const S = FALL && FALL.ship;
     const on = !!(S && (FALL.phase === "chute" || (FALL.phase === "fall" && (S.burn || 0) > 0)));
     if (!S) { // back to normal: re-attach the tail, clear the pieces
-      if (wreck.on || wreck.tail) {
+      if (wreck.on || wreck.tail || wreck.wing) {
+        for (const q of wreck.wingHid) q.visible = true;
+        wreck.wingHid.length = 0; if (wreck.wing) scene.remove(wreck.wing); wreck.wing = null; wreck.wingSide = 0;
+        for (const E of ownEngines) E.gone = false;
         for (const q of wreck.parts) q.orig.visible = true;
         if (wreck.tail) scene.remove(wreck.tail);
         wreck.tail = null; wreck.parts.length = 0;
@@ -1157,6 +1208,40 @@ export function createWorld3D(canvas) {
         wreck.srcs[i].getWorldPosition(_ov);
         wpTrail(i, _ov, 3.0, { _dt: dtE, life: 10, s0: 4.6, s1: 26 + burn * 8, a: 0.8, col: i ? 0x151311 : 0x0e0d0c });
       }
+    }
+    if (S.wingOff && !wreck.wing) { // 1.5.2: a wing folds at the root and tears away
+      const side = S.wingOff > 0 ? 1 : -1; wreck.wingSide = side;
+      const wgp = new THREE.Group(); wgp.position.copy(ownShip.position); wgp.quaternion.copy(ownShip.quaternion);
+      const sphC = (o) => { if (o.geometry) { if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere(); return { x: o.geometry.boundingSphere.center.x * (o.scale.x || 1) + o.position.x, z: o.geometry.boundingSphere.center.z + o.position.z }; } return { x: o.position.x, z: o.position.z }; };
+      for (const o of ownShip.children) {
+        if (!o.visible || o.isSprite || o.userData.part === "fin" || o.userData.part === "stab") continue;
+        if (!(o.isMesh || o.isGroup)) continue;
+        let on = o.userData.wingSide === side;
+        if (!on && o.userData.wingSide == null) { const c = sphC(o); on = c.x * side > 1.9 && c.z > -8.5 && c.z < 7 && (!o.geometry || !o.geometry.boundingSphere || o.geometry.boundingSphere.radius < 9); }
+        if (!on) continue;
+        const c2 = o.clone(); wgp.add(c2); o.visible = false; wreck.wingHid.push(o);
+      }
+      for (let i = 0; i < 4; i++) { if ((ownEngines[i].disc.position.x) * side > 0) { ownEngines[i].gone = true; ownEngines[i].disc.visible = false; ownEngines[i].blades.visible = false; ownEngines[i].fire.visible = false; } }
+      const wf = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 })); wf.position.set(side * 3.0, 0.7, -0.6); wf.scale.set(5, 6.5, 1); wgp.add(wf);
+      const wf2 = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.8 })); wf2.position.set(side * 8, 0.5, -0.9); wf2.scale.set(3.5, 4.5, 1); wgp.add(wf2);
+      wgp.userData = { vx: side * 13 + (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 3, vz: -9, wx: (Math.random() - 0.5) * 0.8, wy: (Math.random() - 0.5) * 1.0, wz: side * (1.6 + Math.random() * 1.2), fire: wf, fire2: wf2, t: 0, lastP: null, lastQ: null };
+      scene.add(wgp); wreck.wing = wgp;
+      _ov.set(side * 1.6, -2, -1.2).applyMatrix4(ownShip.matrixWorld);
+      spawnDebris(_ov.x, _ov.y, _ov.z, 90, 0.7); spawnDebris(_ov.x, _ov.y, _ov.z, 40, 1.2);
+      emitSmoke(_ov, true, true);
+    }
+    if (wreck.wing) { // the severed wing: tumbles away on fire, trailing black smoke; the stub on the fuselage burns too
+      const T = wreck.wing, u = T.userData, dt = Math.min(0.05, rdt), side = wreck.wingSide;
+      u.t += dt; u.vy -= 7.5 * dt; u.vy = Math.max(u.vy, -62); u.vx *= Math.pow(0.8, dt); u.vz += (-83 - u.vz) * Math.min(1, 0.3 * dt);
+      T.position.x += u.vx * dt; T.position.y += u.vy * dt; T.position.z += u.vz * dt;
+      T.rotateX(u.wx * dt); T.rotateY(u.wy * dt); T.rotateZ(u.wz * dt);
+      u.fire.visible = u.t < 16; u.fire2.visible = u.t < 12;
+      if (u.fire.visible) { u.fire.material.opacity = 0.6 + Math.random() * 0.35; const k = 5 + Math.random() * 1.4; u.fire.scale.set(k, k * 1.3, 1); }
+      if (u.fire2.visible) u.fire2.material.opacity = 0.5 + Math.random() * 0.4;
+      _ov.set(side * 4, 0.3, -0.8).applyMatrix4(T.matrixWorld);
+      if (u.t < 26) { const Lp = u.lastP; if (!Lp || Lp.distanceTo(_ov) > 2.6) { wpEmit(_ov, { life: 8, s0: 2.4, s1: 16, a: 0.72, col: 0x131110 }); u.lastP = _ov.clone(); } }
+      _ov.set(side * 1.3, -0.4, -1.4).applyMatrix4(ownShip.matrixWorld); // fuselage stub
+      if (u.t < 30) { const Lq = u.lastQ; if (!Lq || Lq.distanceTo(_ov) > 3) { wpEmit(_ov, { life: 9, s0: 3, s1: 20, a: 0.75, col: 0x0e0d0c }); u.lastQ = _ov.clone(); } }
     }
     if (S.tailOff && !wreck.tail) { // the tail comes off
       const tg = new THREE.Group();
@@ -1200,6 +1285,7 @@ export function createWorld3D(canvas) {
     const engs = (opts.own && opts.own.engines) || [];
     for (let i = 0; i < 4; i++) {
       const E = ownEngines[i], st = engs[i] || { fire: 0, out: false };
+      if (E.gone) { E.disc.visible = false; E.blades.visible = false; E.fire.visible = false; if (ownShip.userData.contrails) ownShip.userData.contrails[i].on = false; continue; }
       const out = !!st.out;
       E.disc.visible = !out;
       E.blades.visible = out;
@@ -1932,8 +2018,8 @@ export function createWorld3D(canvas) {
   // 1.3.6 TARGET: a small German town with a railway depot (local units: 1 = 10 world u ≈ 15 m).
   // Rail yard (12 tracks, wagons), engine shed, roundhouse + turntable, station, a river with a
   // bridge, streets with gabled roofs, a church, a few sheds/works along the yard.
-  const TOWN_Z = 1680;          // ground-frame local z: under the box ≈ 21 s after release (world z = geo.z + K·TOWN_Z)
-  const TOWN_X = 300;            // ≈2.2 km to port of our track: seen ahead-left past the cockpit on the run-in
+  const TOWN_Z = 1633;          // ground-frame local z: 25 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
+  const TOWN_X = 0;              // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
   const town = new THREE.Group();
   town.position.set(TOWN_X, 0.05, TOWN_Z);
   town.scale.set(1.5, 1.5, 1.5); // a readable town from 5 km (≈1.4 km across)
@@ -2150,7 +2236,7 @@ export function createWorld3D(canvas) {
     }
     const post = opts.post || 0;
     if (opts.bombsAway && _bombPlan.oursT < 0) { _bombPlan.oursT = post; _bombPlan.ours = Math.max(1, opts.dropped || 15) * 5; }
-    if (_bombPlan.oursT >= 0 && post > 4 && _bombPlan.ours > 0) {
+    if (_bombPlan.oursT >= 0 && post > 24 && _bombPlan.ours > 0) {
       const n = Math.min(_bombPlan.ours, Math.ceil(dt * 12));
       for (let k = 0; k < n; k++) { const [x, z] = yardPt((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 50); bombBurst(x, z, true); }
       _bombPlan.ours -= n;
@@ -2574,6 +2660,7 @@ export function createWorld3D(canvas) {
     if (dH) for (const f of flakPool) { const x = f.x, z = f.z; f.x = x * c + z * s; f.z = -x * s + z * c; }
     updateFlak(!!opts.flakOn, dt, dz);
     updateFlakBursts(opts.flakBursts);
+    updateRockets(opts.rockets);
     updateDebris(dz);
     updateChutes3D(opts.chutes);
     // sun + sky stay fixed in the world: rotate with −heading in the box frame
@@ -2599,7 +2686,8 @@ export function createWorld3D(canvas) {
         for (let k = 0; k < 4; k++) spawnKillFx(P.clone().add(new THREE.Vector3((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 10)), { vx: 0, vy: -3, vz: -8 });
         if (window.FGAudio && window.FGAudio.boom) window.FGAudio.boom(f.x, f.y, f.z, true);
       }
-      if (!f || f.health < 0) { g.visible = false; continue; }
+      if (!f || f.health < 0) { if (g.userData.det) restoreB17(g); g.visible = false; continue; }
+      if (g.userData.det && !(f.deathKind === "wing" || f.deathKind === "tail")) restoreB17(g);
       g.visible = true;
       g.position.set(f.x, f.y, f.z);
       const yaw = f.yaw || 0;
@@ -2616,6 +2704,7 @@ export function createWorld3D(canvas) {
       }
       const engs = g.userData.engines;
       g.updateMatrixWorld(true);
+      if ((f.deathKind === "wing" || f.deathKind === "tail") && f.spiraling) { if (!g.userData.det) detachB17(g, f); updateDetB17(g, f, dt, i); }
       for (let k = 0; k < 4; k++) {
         const eng = engs[k];
         const st = f.engines && f.engines[k];
@@ -3100,6 +3189,118 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     }
   }
 
+  // ===== 1.5.2 P-51D Mustang — procedural model (no free GLB with a usable licence/format was available) =====
+  // Native units like the 109 GLB (it is drawn at ×1.3): span 5.8, length 5.0. Nose = local −Z, up = +Y, starboard = +X.
+  function buildP51Model() {
+    const g = new THREE.Group(); g.name = "P51D"; g.userData.procedural = true;
+    const nmf = (o) => new THREE.MeshStandardMaterial(Object.assign({ color: 0xc9c7bc, metalness: 0.55, roughness: 0.36, emissive: 0x2a2a26, emissiveIntensity: 0.35 }, o || {}));
+    const M = nmf(), Mdark = nmf({ color: 0x55574f, metalness: 0.4, roughness: 0.5, emissive: 0x0a0a0a }), Mred = nmf({ color: 0xb02820, metalness: 0.3, roughness: 0.45, emissive: 0x3a0806, emissiveIntensity: 0.5 });
+    const Mglass = new THREE.MeshStandardMaterial({ color: 0x8fb4c8, metalness: 0.2, roughness: 0.08, transparent: true, opacity: 0.55, emissive: 0x1a2a34, emissiveIntensity: 0.3 });
+    const add = (geo, mat, name, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.name = name || ""; m.position.set(x || 0, y || 0, z || 0); g.add(m); return m; };
+    // fuselage loft: sections along z (nose −z → tail +z); each {z, w (half width), t (top), b (bottom), y (centre)}
+    function loft(secs, seg) {
+      const pos = [], idx = [];
+      for (const s of secs) for (let i = 0; i < seg; i++) { const a = i / seg * Math.PI * 2, c = Math.cos(a), sn = Math.sin(a); pos.push(s.w * c, s.y + (sn > 0 ? s.t : s.b) * sn, s.z); }
+      for (let k = 0; k < secs.length - 1; k++) for (let i = 0; i < seg; i++) { const a = k * seg + i, b = k * seg + (i + 1) % seg, c = (k + 1) * seg + i, d = (k + 1) * seg + (i + 1) % seg; idx.push(a, c, b, b, c, d); }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx); geo.computeVertexNormals(); return geo;
+    }
+    const fus = loft([
+      { z: -2.30, w: 0.05, t: 0.05, b: 0.05, y: 0 }, { z: -2.12, w: 0.30, t: 0.27, b: 0.26, y: 0.02 }, { z: -1.75, w: 0.40, t: 0.36, b: 0.34, y: 0.04 },
+      { z: -1.2, w: 0.44, t: 0.42, b: 0.30, y: 0.06 }, { z: -0.6, w: 0.43, t: 0.44, b: 0.32, y: 0.08 }, { z: 0.1, w: 0.40, t: 0.40, b: 0.30, y: 0.07 },
+      { z: 0.8, w: 0.33, t: 0.30, b: 0.24, y: 0.06 }, { z: 1.5, w: 0.22, t: 0.22, b: 0.17, y: 0.07 }, { z: 2.1, w: 0.11, t: 0.14, b: 0.10, y: 0.09 }, { z: 2.52, w: 0.04, t: 0.07, b: 0.05, y: 0.10 },
+    ], 14);
+    add(fus, M, "fuselage");
+    // wing: straight taper, squared-off tips, laminar-flow thin section; slight dihedral
+    function prism(x0, x1, le0, te0, le1, te1, t0, t1, y0, y1) { // x0 root → x1 tip, z of leading/trailing edge at each end
+      const v = [[x0, y0 + t0, le0], [x0, y0 + t0, te0], [x1, y1 + t1, te1], [x1, y1 + t1, le1], [x0, y0 - t0, le0], [x0, y0 - t0, te0], [x1, y1 - t1, te1], [x1, y1 - t1, le1]];
+      const pos = []; for (const q of v) pos.push(...q);
+      const idx = [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2];
+      const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx); geo.computeVertexNormals(); return geo;
+    }
+    for (const sd of [1, -1]) {
+      add(prism(sd * 0.3, sd * 2.9, -0.62, 0.62, -0.18, 0.28, 0.065, 0.025, -0.12, -0.04), M, sd > 0 ? "wing_r" : "wing_l");
+      add(prism(sd * 0.1, sd * 1.0, 1.58, 2.18, 1.7, 2.1, 0.03, 0.02, 0.1, 0.1), M, "tailplane");
+    }
+    // wing-root fairing + belly radiator scoop (the P-51's signature chin under the aft cockpit)
+    add(new THREE.BoxGeometry(0.46, 0.2, 0.9), M, "radiator", 0, -0.33, 0.55);
+    add(new THREE.BoxGeometry(0.34, 0.12, 0.14), Mdark, "radiator_inlet", 0, -0.30, 0.09);
+    add(new THREE.BoxGeometry(0.34, 0.12, 0.5), M, "chin_scoop", 0, -0.30, -1.55);
+    // vertical fin with dorsal fillet (big), rudder
+    {
+      const s = new THREE.Shape(); s.moveTo(0, 0); s.lineTo(0.35, 0); s.lineTo(1.0, 0.82); s.lineTo(1.18, 0.82); s.lineTo(1.12, 0); s.lineTo(1.5, 0); s.lineTo(0, 0);
+      // profile in (z, y): fillet starts at z=0.35 on the spine and sweeps up to the fin tip near z≈2.28
+      const f = new THREE.Shape(); f.moveTo(0.35, 0.0); f.lineTo(1.55, 0.14); f.lineTo(2.0, 0.93); f.lineTo(2.34, 0.93); f.lineTo(2.44, 0.1); f.lineTo(2.38, 0.0); f.lineTo(0.35, 0.0);
+      const geo = new THREE.ExtrudeGeometry(f, { depth: 0.07, bevelEnabled: false });
+      geo.rotateY(-Math.PI / 2); // extrude axis → x; shape x → z, shape y → y
+      geo.translate(-0.035, 0, 0);
+      const fin = new THREE.Mesh(geo, Mred); fin.name = "fin"; fin.position.set(0, 0.16, 0); g.add(fin);
+    }
+    // bubble canopy (D-model): a tall teardrop on a low rear deck
+    const can = add(new THREE.SphereGeometry(0.5, 16, 12), Mglass, "canopy_glass", 0, 0.42, 0.12); can.scale.set(0.34, 0.3, 0.98);
+    add(new THREE.BoxGeometry(0.1, 0.06, 0.4), M, "windscreen_frame", 0, 0.5, -0.5);
+    // spinner (red marker), four-blade prop, small blur disc
+    const spin = add(new THREE.ConeGeometry(0.2, 0.52, 14), Mred, "spinner", 0, 0.03, -2.5); spin.rotation.x = -Math.PI / 2;
+    for (let k = 0; k < 4; k++) { const bl = add(new THREE.BoxGeometry(0.1, 1.5, 0.025), Mdark, "propblade" + k, 0, 0.03, -2.58); bl.rotation.z = k * Math.PI / 4 + 0.35; bl.scale.set(1, 1, 1); }
+    // wing guns (3 per side), exhaust stacks
+    for (const sd of [1, -1]) {
+      for (let k = 0; k < 3; k++) add(new THREE.CylinderGeometry(0.018, 0.018, 0.5, 6), Mdark, "gun", sd * (1.0 + k * 0.18), -0.1, -0.7).rotation.x = Math.PI / 2;
+      for (let k = 0; k < 6; k++) add(new THREE.BoxGeometry(0.05, 0.06, 0.12), Mdark, "exhaust", sd * 0.4, 0.12, -1.6 + k * 0.2);
+    }
+    // markings: US star-and-bar roundels (wing top port / underside starboard, fuselage sides), invasion stripes
+    function tex(draw, w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; }
+    const roundelTex = tex((cx, w, h) => {
+      cx.clearRect(0, 0, w, h); const c = w * 0.5 - 2, R = w * 0.5 - 2;
+      const bar = (rr, col) => { cx.fillStyle = col; cx.fillRect(w * 0.5 + R * 0.55, h * 0.5 - R * 0.17 - rr, R * 0.72 + rr, R * 0.34 + rr * 2); cx.fillRect(w * 0.5 - R * 1.27 - rr, h * 0.5 - R * 0.17 - rr, R * 0.72 + rr, R * 0.34 + rr * 2); };
+      cx.fillStyle = "#f2f2ec"; cx.beginPath(); cx.arc(w / 2, h / 2, R * 0.55 + 1, 0, 6.2832); cx.fill();
+      cx.fillStyle = "#1c3a82"; cx.beginPath(); cx.arc(w / 2, h / 2, R * 0.5, 0, 6.2832); cx.fill();
+      bar(3, "#1c3a82"); bar(0, "#f2f2ec");
+      cx.fillStyle = "#f6f6f0"; cx.beginPath();
+      for (let i = 0; i < 10; i++) { const r = i % 2 ? R * 0.2 : R * 0.45, a = -Math.PI / 2 + i * Math.PI / 5; cx.lineTo(w / 2 + Math.cos(a) * r, h / 2 + Math.sin(a) * r); } cx.closePath(); cx.fill();
+    }, 256, 256);
+    const stripeTex = (vert) => tex((cx, w, h) => { const n = 5; for (let i = 0; i < n; i++) { cx.fillStyle = i % 2 ? "#14140f" : "#f1f1ea"; if (vert) cx.fillRect(i * w / n, 0, w / n + 1, h); else cx.fillRect(0, i * h / n, w, h / n + 1); } }, 160, 160);
+    const decalMat = (t) => new THREE.MeshStandardMaterial({ map: t, transparent: true, roughness: 0.6, metalness: 0.1, emissive: 0x303030, emissiveIntensity: 0.25, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide });
+    const decal = (w, h, mat, x, y, z, rx, ry) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); m.position.set(x, y, z); m.rotation.set(rx || 0, ry || 0, 0); m.userData.decal = true; m.userData.noHit = true; g.add(m); return m; };
+    const RM = decalMat(roundelTex), SMh = decalMat(stripeTex(false)), SMv = decalMat(stripeTex(true));
+    decal(0.78, 0.78, RM, -1.8, -0.022, 0.05, -Math.PI / 2, 0);      // port wing, top
+    decal(0.78, 0.78, RM, 1.8, -0.122, 0.05, Math.PI / 2, 0);        // starboard wing, underside
+    decal(0.52, 0.52, RM, 0.327, 0.08, 0.9, 0, Math.PI / 2);         // fuselage sides
+    decal(0.52, 0.52, RM, -0.327, 0.08, 0.9, 0, -Math.PI / 2);
+    for (const sd of [1, -1]) {                                       // invasion stripes: spanwise bands over the inner wings, vertical bands round the aft fuselage
+      decal(0.7, 0.9, SMh, sd * 1.0, -0.04, 0.02, -Math.PI / 2, 0);
+      decal(0.6, 0.34, SMv, sd * 0.2, 0.09, 1.62, 0, sd * Math.PI / 2).scale.set(1, 1, 1);
+    }
+    return g;
+  }
+
+  // ===== 1.5.2 WGr.21 rockets: a dark tube, a hot flare, and a thick white smoke ribbon that hangs in the air =====
+  const rktPool = [];
+  for (let i = 0; i < 20; i++) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 2.6, 8), new THREE.MeshStandardMaterial({ color: 0x4a4d40, metalness: 0.4, roughness: 0.5 }));
+    body.userData.noHit = true; g.add(body);
+    const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, color: 0xffd890, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95 }));
+    fl.position.y = -1.5; fl.scale.set(3.6, 3.6, 1); g.add(fl);
+    g.visible = false; scene.add(g);
+    rktPool.push({ g, fl, id: -1 });
+  }
+  const _rkUp = new THREE.Vector3(0, 1, 0), _rkD = new THREE.Vector3(), _rkP = new THREE.Vector3();
+  function updateRockets(list) {
+    list = list || [];
+    const ids = new Set(); for (const r of list) ids.add(r.id);
+    for (const P of rktPool) if (P.id >= 0 && !ids.has(P.id)) { P.id = -1; P.g.visible = false; }
+    for (const r of list) {
+      let P = rktPool.find((q) => q.id === r.id) || rktPool.find((q) => q.id < 0);
+      if (!P) continue;
+      P.id = r.id; P.g.visible = true;
+      P.g.position.set(r.x, r.y, r.z);
+      _rkD.set(r.vx, r.vy, r.vz + 83.4).normalize();
+      P.g.quaternion.setFromUnitVectors(_rkUp, _rkD);
+      const f = 3.2 + Math.random() * 1.4; P.fl.scale.set(f, f, 1);
+      _rkP.set(r.x, r.y, r.z);
+      ribbonEmit("rk" + r.id, _rkP, { w0: 0.9, w1: 6.5, life: 4.2, a: 0.85, col: [0.93, 0.93, 0.9], drift: 83.4 });
+    }
+  }
+
   function cloneFighter(kind) {
     const src = prototypes[kind] || prototypes["109"];
     if (!src) return null;
@@ -3116,7 +3317,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     });
     // World-ish readable scale (mesh span ~4.6–4.8u ≈ phone 35ft×~25). NOT 7–20× face-huggers.
     mesh.scale.setScalar(kind === "110" ? 2.45 : kind === "190" ? 2.15 : 2.0);
-    if (kind === "p51") { // 1.5.0: no P-51 model — the 109 mesh painted natural metal (spec: 0xC5C2B4, metalness 0.55, roughness 0.38)
+    if (kind === "p51" && !src.userData.procedural) { // 1.5.0: no P-51 model (1.5.2: the procedural P-51D model skips this) — the 109 mesh painted natural metal (spec: 0xC5C2B4, metalness 0.55, roughness 0.38)
       mesh.traverse((o) => {
         if (!o.isMesh || !o.material) return;
         const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -3404,6 +3605,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       prototypes["109"] = bf.scene;
       prototypes["190"] = fw.scene;
       prototypes["110"] = bf.scene;
+      prototypes["p51"] = buildP51Model();
 
       function punchFighterMats(root, paint) {
         root.traverse((o) => {
@@ -3615,6 +3817,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     prototypes["109"] = make("109");
     prototypes["190"] = make("190");
     prototypes["110"] = make("109");
+    prototypes["p51"] = buildP51Model();
     for (let i = 0; i < 56; i++) {
       const mesh = cloneFighter("109");
       fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
@@ -3856,6 +4059,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       let alpha = dot.a * wDot * Math.min(1, (want * want) / (S * S * SOFT_INK));
       const ff = fogF(d);
       let r = 0.035, g = 0.037, b = 0.04;
+      if (e.type === "p51") { r = 0.66; g = 0.7; b = 0.76; } // 1.5.2: friendly specks are silver, Germans stay dark
       // 1.3.9: no dot glint any more. A near-white flash on a 2 px dark dot made it vanish against the sky for a
       // few frames (read as a pop in the flyby); the 3D model keeps its real specular sun highlights.
       col[n * 4] = r + (_hz.r - r) * ff; col[n * 4 + 1] = g + (_hz.g - g) * ff; col[n * 4 + 2] = b + (_hz.b - b) * ff; col[n * 4 + 3] = alpha;
@@ -4220,9 +4424,33 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   }
   function setTracers(buf, count) { trBuf = buf; trN = count; }
 
+  // 1.5.2 FLICKER FIX (root cause: ONE depth range for everything — near 0.05 / far 70,000 gives a 24-bit depth buffer ~2 u of
+  // resolution at the 1,400 u ground, so the town's roads/rails/roofs/yard/shadow layers (all < 1 u apart) z-fought and crawled
+  // frame to frame). The sky + Earth (ground, town, bomb smoke) now draw first in their own pass with near 30 / far 80,000
+  // (≈400× finer at the ground), then depth is cleared and the aircraft/clouds/flak draw with near 0.05 / far 14,000.
+  const FARL = 2; let _farTag = 0, _frameN = 0;
+  function tagFar() { earth.traverse((o) => { o.layers.set(FARL); }); skyMesh.layers.set(FARL); for (const L of [hemi, sun, fill, key2]) L.layers.enable(FARL); }
   function render() {
     prWatch();
     buildTracers();
+    if (!window.__FG_NO2PASS) {
+      if (_frameN++ % 30 === 0) tagFar();
+      camera.near = 30; camera.far = 80000; camera.updateProjectionMatrix();
+      camera.layers.set(FARL);
+      renderer.render(scene, camera);
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      camera.near = 0.05; camera.far = 30000; camera.updateProjectionMatrix();
+      camera.layers.set(0);
+      renderer.render(scene, camera);
+      renderer.clearDepth();
+      camera.layers.set(OVL);
+      renderer.render(scene, camera);
+      camera.layers.set(0);
+      renderer.autoClear = true;
+      camera.far = 70000; camera.updateProjectionMatrix();
+      return;
+    }
     camera.layers.set(0);
     renderer.render(scene, camera);
     // 1.4.0: the turret (guns, sight box, sill, dome frame) in its own pass on top of the airframe
@@ -4261,9 +4489,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     _ownShip: ownShip,
     get speckStats() { return speckStats.slice(); },
     dropBombs,
-    get bombStats() { return Object.assign({}, bombStats); },
+    get bombStats() { return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) }); },
     get glintStats() { return { n: glStats.n, max: glStats.max }; },
-    get wreckStats() { return { puffs: wpStats.live, fires: wreck.fires.filter((f) => f.visible).length, tail: !!wreck.tail }; },
+    get wreckStats() { return { puffs: wpStats.live, fires: wreck.fires.filter((f) => f.visible).length, tail: !!wreck.tail, wing: !!wreck.wing, wingSide: wreck.wingSide, aiDet: friendlyPool.filter((g) => g.userData.det).map((g) => g.userData.det.userData.isWing ? "wing" : "tail") }; },
     lodOf: (id) => { const i = slotOf.get(id); return i == null || !fighterPool[i] ? null : fighterPool[i].lod || null; },
     get pixelRatio() { return renderer.getPixelRatio(); },
     LOD: { LOD_NEAR, LOD_FAR, DOT_FLOOR, DOT_EQ }, fighterAreas,

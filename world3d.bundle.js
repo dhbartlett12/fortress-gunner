@@ -33330,7 +33330,7 @@
     camera.add(viewRim2T);
     viewRim2.target = viewRim2T;
     const fighterPool = [];
-    const prototypes = { "109": null, "190": null, "110": null };
+    const prototypes = { "109": null, "190": null, "110": null, "p51": null };
     function makeTrail() {
       const geo = new BufferGeometry();
       const n = 22;
@@ -33692,6 +33692,7 @@
       g.add(ball);
       const tailG = new Mesh(new BoxGeometry(0.018 * S, 0.02 * S, 0.035 * S), glassM);
       tailG.position.set(0, 4e-3 * S, -0.405 * S);
+      tailG.userData.tailPart = true;
       g.add(tailG);
       for (const sd of [-1, 1]) {
         const w = new Mesh(new PlaneGeometry(0.05 * S, 0.018 * S), dark);
@@ -33728,12 +33729,16 @@
         w.scale.x = side;
         w.position.set(0, -0.018 * S, 0);
         w.rotation.z = side * 0.075;
+        w.userData.wingSide = side;
         g.add(w);
         const star = new Mesh(new CircleGeometry(0.028 * S, 10), b17Star);
         star.rotation.x = -Math.PI / 2;
         star.position.set(side * 0.38 * S, (-0.015 + 0.38 * 0.075 + 15e-4) * S, 0.05 * S);
         star.rotation.y = 0;
-        if (side > 0) g.add(star);
+        if (side > 0) {
+          star.userData.wingSide = 1;
+          g.add(star);
+        }
       }
       {
         const sh = new Shape();
@@ -33749,6 +33754,7 @@
           const st = new Mesh(sg, skin);
           st.scale.x = side;
           st.position.y = 0.012 * S;
+          st.userData.tailPart = true;
           g.add(st);
         }
       }
@@ -33766,6 +33772,7 @@
         const fin = new Mesh(fg, skin);
         fin.rotation.y = -Math.PI / 2;
         fin.position.set(0, 0.03 * S, 0);
+        fin.userData.tailPart = true;
         g.add(fin);
         const tt = b17TailTex(k, metal), tm = new MeshStandardMaterial({ map: tt, transparent: true, alphaTest: 0.08, roughness: 0.6, metalness: metal ? 0.5 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
         g.userData.hazeMats.push({ m: tm, col: tm.color.clone() });
@@ -33773,6 +33780,7 @@
           const d = new Mesh(new PlaneGeometry(0.06 * S, 0.075 * S), tm);
           d.position.set(sd * 56e-4 * S, 0.03 * S + 0.13 * S, -0.383 * S);
           d.rotation.y = sd * Math.PI / 2;
+          d.userData.tailPart = true;
           g.add(d);
         }
       }
@@ -33827,6 +33835,80 @@
         if (q.m.emissive) q.m.emissive.copy(_hzC).multiplyScalar(h * 0.62);
         if (q.m.envMapIntensity != null && q.env == null) q.env = q.m.envMapIntensity;
         if (q.env != null) q.m.envMapIntensity = q.env * (1 - h);
+      }
+    }
+    function detachB17(g, f) {
+      const S = B17_VIS, isWing = f.deathKind === "wing", side = f.deathSide > 0 ? 1 : -1;
+      g.updateMatrixWorld(true);
+      const grp = new Group();
+      grp.position.copy(g.position);
+      grp.quaternion.copy(g.quaternion);
+      scene.add(grp);
+      const moved = [];
+      for (const c of g.children.slice()) {
+        if (c.isSprite) continue;
+        const u = c.userData;
+        const on = isWing ? u.wingSide === side || u.wingSide == null && !u.tailPart && c.position.x * side > 0.075 * S && c.position.z > -0.3 * S : !!u.tailPart;
+        if (!on) continue;
+        moved.push({ c, p: c.position.clone(), q: c.quaternion.clone(), sc: c.scale.clone() });
+        grp.add(c);
+      }
+      const mk = (x, y, z, sx, sy) => {
+        const sp = new Sprite(new SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.9 }));
+        sp.position.set(x, y, z);
+        sp.scale.set(sx, sy, 1);
+        grp.add(sp);
+        return sp;
+      };
+      const sprites = isWing ? [mk(side * 1.8, 0.4, 0, 3.2, 4.2), mk(side * 5.2, 0.3, 0.1, 2.4, 3.2)] : [mk(0, 0.2, -0.38 * S, 2.6, 3.4)];
+      grp.userData = { moved, sprites, side, isWing, t: 0, vx: (f.vx || 0) + (isWing ? side * 9 : (Math.random() - 0.5) * 8), vy: (f.vy || 0) + (isWing ? 2.5 : 4), vz: (f.vz || 0) + (isWing ? -4 : -10), wx: (Math.random() - 0.5) * 0.9, wy: (Math.random() - 0.5) * 0.9, wz: isWing ? side * (1.4 + Math.random()) : 1.2 + Math.random() * 1.6, lastP: null };
+      g.userData.det = grp;
+      const P = new Vector3(isWing ? side * 1.5 : 0, 0, isWing ? 0 : -0.38 * S).applyMatrix4(g.matrixWorld);
+      spawnDebris(P.x, P.y, P.z, 70, 0.7);
+      spawnDebris(P.x, P.y, P.z, 25, 1.2);
+      emitSmoke(P, true, true);
+      if (window.FGAudio && window.FGAudio.boom) window.FGAudio.boom(P.x, P.y, P.z, true);
+    }
+    function restoreB17(g) {
+      const grp = g.userData.det;
+      if (!grp) return;
+      for (const m of grp.userData.moved) {
+        g.add(m.c);
+        m.c.position.copy(m.p);
+        m.c.quaternion.copy(m.q);
+        m.c.scale.copy(m.sc);
+      }
+      scene.remove(grp);
+      g.userData.det = null;
+    }
+    function updateDetB17(g, f, dt, idx) {
+      const grp = g.userData.det, u = grp.userData;
+      u.t += dt;
+      u.vy -= 7 * dt;
+      u.vy = Math.max(u.vy, -60);
+      u.vx *= Math.pow(0.85, dt);
+      u.vz += (-83 - u.vz) * Math.min(1, 0.25 * dt);
+      grp.position.x += u.vx * dt;
+      grp.position.y += u.vy * dt;
+      grp.position.z += u.vz * dt;
+      grp.rotateX(u.wx * dt);
+      grp.rotateY(u.wy * dt);
+      grp.rotateZ(u.wz * dt);
+      for (const sp of u.sprites) {
+        sp.visible = u.t < 16;
+        if (sp.visible) {
+          const k = 0.8 + Math.random() * 0.3;
+          sp.material.opacity = 0.55 + Math.random() * 0.4;
+          sp.scale.x = sp.scale.x * 0.98 + 0.02 * 3 * k;
+        }
+      }
+      _v.set(u.isWing ? u.side * 4.5 : 0, 0.2, u.isWing ? 0 : -0.38 * B17_VIS);
+      grp.localToWorld(_v);
+      if (u.t < 24) ribbonEmit("wing" + idx + "_" + (f.id != null ? f.id : ""), _v, { w0: 1.2, w1: 11, life: 3.6, a: 0.66, col: [0.12, 0.115, 0.11], drift: 55 });
+      if (u.isWing && u.t < 26) {
+        _v.set(u.side * 1.2, 0.3, 0);
+        g.localToWorld(_v);
+        ribbonEmit("stub" + idx + "_" + (f.id != null ? f.id : ""), _v, { w0: 1.2, w1: 13, life: 3.6, a: 0.7, col: [0.11, 0.105, 0.1], drift: 55 });
       }
     }
     const friendlyPool = [];
@@ -34176,13 +34258,24 @@
       plan.push([-13.35, -1.35]);
       for (const x of xs) plan.push([-x, TE(x)]);
       for (const x of xs.slice().reverse()) plan.push([x, TE(x)]);
-      add(wingGeo(plan, 0.7, 0.24, 0), od);
+      {
+        const portP = [[13.35, -1.35]];
+        for (const x of xs) portP.push([x, LE(x)]);
+        portP.push([0, LE(1)], [0, TE(1)]);
+        for (const x of xs.slice().reverse()) portP.push([x, TE(x)]);
+        const stbdP = portP.map(([x, z]) => [-x, z]).reverse();
+        const wp = add(wingGeo(portP, 0.7, 0.24, 0), od);
+        wp.userData.wingSide = 1;
+        const ws = add(wingGeo(stbdP, 0.7, 0.24, 0), od);
+        ws.userData.wingSide = -1;
+      }
       for (const sd of [1, -1]) {
         const bp = [];
         const bx = [12.6, 8.3, 4.3, 1.4];
         for (const x of bx) bp.push([sd * x, LE(x) + 0.03]);
         for (const x of bx.slice().reverse()) bp.push([sd * x, LE(x) - 0.38]);
-        add(wingGeo(bp, 0.74, 0.28, 5e-3), boot);
+        const bm = add(wingGeo(bp, 0.74, 0.28, 5e-3), boot);
+        bm.userData.wingSide = sd;
       }
       {
         const c = document.createElement("canvas");
@@ -34208,6 +34301,7 @@
         ins.rotation.z = Math.PI;
         const ax = 10.2, th = 0.7 + (0.24 - 0.7) * (ax / 13);
         ins.position.set(ax, WY(ax) + th * 0.5 + 0.015, (LE(ax) + TE(ax)) * 0.5);
+        ins.userData.wingSide = 1;
         ownShip.add(ins);
       }
       const stabCut = makeCutMap(-5.9, 5.9, -13.6, -10.4, 512, 160);
@@ -34900,13 +34994,15 @@
     bombMesh.count = 0;
     bombMesh.frustumCulled = false;
     scene.add(bombMesh);
+    const BOMB_G = 4.9;
+    const _tw = new Vector3();
     const bombs = [];
     const bombStats = { live: 0, dropped: 0 };
     const _bm = new Matrix4(), _bq = new Quaternion(), _bs = new Vector3(1.3, 1.3, 1.3), _bp = new Vector3(), _be = new Euler();
     function dropBombs(list) {
       for (const st of list) {
         for (let k = 0; k < st.n && bombs.length < BOMB_N; k++) {
-          bombs.push({ x0: st.x + (k % 2 ? 0.28 : -0.28), y0: st.y + k % 3 * 0.12, z0: st.z + (st.own ? 0 : 0.3), t: -(st.delay + k * 0.12), yawJ: (Math.random() - 0.5) * 0.1, rollS: (Math.random() - 0.5) * 1.2, lead: st.lead });
+          bombs.push({ x0: st.x + (k % 2 ? 0.28 : -0.28), y0: st.y + k % 3 * 0.12, z0: st.z + (st.own ? 0 : 0.3), t: -(st.delay + k * 0.12), yawJ: (Math.random() - 0.5) * 0.1, rollS: (Math.random() - 0.5) * 1.2, lead: st.lead, own: !!st.own });
           bombStats.dropped++;
         }
       }
@@ -34916,13 +35012,19 @@
       for (let i = bombs.length - 1; i >= 0; i--) {
         const b = bombs[i];
         b.t += dt;
-        if (b.t > 14) bombs.splice(i, 1);
+        if (b.t > 26 || b.landed) bombs.splice(i, 1);
       }
       for (const b of bombs) {
         if (b.t < 0 || n >= BOMB_N) continue;
         const t = b.t;
-        _bp.set(b.x0, b.y0 - 0.5 * 6.5 * t * t, b.z0 - 0.5 * 1.1 * t * t - 0.02 * t * t * t);
-        const vy = -6.5 * t, vz = -1.1 * t - 0.06 * t * t;
+        _bp.set(b.x0, b.y0 - 0.5 * BOMB_G * t * t, b.z0 - 0.5 * 1.1 * t * t - 0.02 * t * t * t);
+        town.getWorldPosition(_tw);
+        if (_bp.y <= _tw.y + 0.5) {
+          b.landed = true;
+          (bombStats.land || (bombStats.land = [])).push({ dx: Math.round(_bp.x - _tw.x), dz: Math.round(_bp.z - _tw.z), t: +t.toFixed(1), own: !!b.own, lead: !!b.lead });
+          continue;
+        }
+        const vy = -BOMB_G * t, vz = -1.1 * t - 0.06 * t * t;
         const pitch = Math.atan2(-vy, 83 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05;
         _be.set(pitch, b.yawJ, b.rollS * t * 0.3, "YXZ");
         _bq.setFromEuler(_be);
@@ -34933,7 +35035,7 @@
       bombMesh.instanceMatrix.needsUpdate = true;
       bombStats.live = n;
     }
-    const wreck = { fires: [], srcs: [], tail: null, parts: [], emit: 0, on: false, last: [null, null, null] };
+    const wreck = { fires: [], srcs: [], tail: null, parts: [], emit: 0, on: false, last: [null, null, null], wing: null, wingHid: [], wingSide: 0 };
     {
       const srcDef = [[1.9, -0.7, 1], [-1.9, -0.9, 0.9], [4.3, 0.6, 0.85], [-4.3, 0.4, 0.75]];
       for (const [x, zOff, s] of srcDef) {
@@ -35041,7 +35143,13 @@
       const S = FALL && FALL.ship;
       const on = !!(S && (FALL.phase === "chute" || FALL.phase === "fall" && (S.burn || 0) > 0));
       if (!S) {
-        if (wreck.on || wreck.tail) {
+        if (wreck.on || wreck.tail || wreck.wing) {
+          for (const q of wreck.wingHid) q.visible = true;
+          wreck.wingHid.length = 0;
+          if (wreck.wing) scene.remove(wreck.wing);
+          wreck.wing = null;
+          wreck.wingSide = 0;
+          for (const E of ownEngines) E.gone = false;
           for (const q of wreck.parts) q.orig.visible = true;
           if (wreck.tail) scene.remove(wreck.tail);
           wreck.tail = null;
@@ -35068,6 +35176,95 @@
         for (let i = 0; i < 2; i++) {
           wreck.srcs[i].getWorldPosition(_ov);
           wpTrail(i, _ov, 3, { _dt: dtE, life: 10, s0: 4.6, s1: 26 + burn * 8, a: 0.8, col: i ? 1381137 : 920844 });
+        }
+      }
+      if (S.wingOff && !wreck.wing) {
+        const side = S.wingOff > 0 ? 1 : -1;
+        wreck.wingSide = side;
+        const wgp = new Group();
+        wgp.position.copy(ownShip.position);
+        wgp.quaternion.copy(ownShip.quaternion);
+        const sphC = (o) => {
+          if (o.geometry) {
+            if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+            return { x: o.geometry.boundingSphere.center.x * (o.scale.x || 1) + o.position.x, z: o.geometry.boundingSphere.center.z + o.position.z };
+          }
+          return { x: o.position.x, z: o.position.z };
+        };
+        for (const o of ownShip.children) {
+          if (!o.visible || o.isSprite || o.userData.part === "fin" || o.userData.part === "stab") continue;
+          if (!(o.isMesh || o.isGroup)) continue;
+          let on2 = o.userData.wingSide === side;
+          if (!on2 && o.userData.wingSide == null) {
+            const c = sphC(o);
+            on2 = c.x * side > 1.9 && c.z > -8.5 && c.z < 7 && (!o.geometry || !o.geometry.boundingSphere || o.geometry.boundingSphere.radius < 9);
+          }
+          if (!on2) continue;
+          const c2 = o.clone();
+          wgp.add(c2);
+          o.visible = false;
+          wreck.wingHid.push(o);
+        }
+        for (let i = 0; i < 4; i++) {
+          if (ownEngines[i].disc.position.x * side > 0) {
+            ownEngines[i].gone = true;
+            ownEngines[i].disc.visible = false;
+            ownEngines[i].blades.visible = false;
+            ownEngines[i].fire.visible = false;
+          }
+        }
+        const wf = new Sprite(new SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.9 }));
+        wf.position.set(side * 3, 0.7, -0.6);
+        wf.scale.set(5, 6.5, 1);
+        wgp.add(wf);
+        const wf2 = new Sprite(new SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.8 }));
+        wf2.position.set(side * 8, 0.5, -0.9);
+        wf2.scale.set(3.5, 4.5, 1);
+        wgp.add(wf2);
+        wgp.userData = { vx: side * 13 + (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 3, vz: -9, wx: (Math.random() - 0.5) * 0.8, wy: (Math.random() - 0.5) * 1, wz: side * (1.6 + Math.random() * 1.2), fire: wf, fire2: wf2, t: 0, lastP: null, lastQ: null };
+        scene.add(wgp);
+        wreck.wing = wgp;
+        _ov.set(side * 1.6, -2, -1.2).applyMatrix4(ownShip.matrixWorld);
+        spawnDebris(_ov.x, _ov.y, _ov.z, 90, 0.7);
+        spawnDebris(_ov.x, _ov.y, _ov.z, 40, 1.2);
+        emitSmoke(_ov, true, true);
+      }
+      if (wreck.wing) {
+        const T = wreck.wing, u = T.userData, dt = Math.min(0.05, rdt), side = wreck.wingSide;
+        u.t += dt;
+        u.vy -= 7.5 * dt;
+        u.vy = Math.max(u.vy, -62);
+        u.vx *= Math.pow(0.8, dt);
+        u.vz += (-83 - u.vz) * Math.min(1, 0.3 * dt);
+        T.position.x += u.vx * dt;
+        T.position.y += u.vy * dt;
+        T.position.z += u.vz * dt;
+        T.rotateX(u.wx * dt);
+        T.rotateY(u.wy * dt);
+        T.rotateZ(u.wz * dt);
+        u.fire.visible = u.t < 16;
+        u.fire2.visible = u.t < 12;
+        if (u.fire.visible) {
+          u.fire.material.opacity = 0.6 + Math.random() * 0.35;
+          const k = 5 + Math.random() * 1.4;
+          u.fire.scale.set(k, k * 1.3, 1);
+        }
+        if (u.fire2.visible) u.fire2.material.opacity = 0.5 + Math.random() * 0.4;
+        _ov.set(side * 4, 0.3, -0.8).applyMatrix4(T.matrixWorld);
+        if (u.t < 26) {
+          const Lp = u.lastP;
+          if (!Lp || Lp.distanceTo(_ov) > 2.6) {
+            wpEmit(_ov, { life: 8, s0: 2.4, s1: 16, a: 0.72, col: 1249552 });
+            u.lastP = _ov.clone();
+          }
+        }
+        _ov.set(side * 1.3, -0.4, -1.4).applyMatrix4(ownShip.matrixWorld);
+        if (u.t < 30) {
+          const Lq = u.lastQ;
+          if (!Lq || Lq.distanceTo(_ov) > 3) {
+            wpEmit(_ov, { life: 9, s0: 3, s1: 20, a: 0.75, col: 920844 });
+            u.lastQ = _ov.clone();
+          }
         }
       }
       if (S.tailOff && !wreck.tail) {
@@ -35145,6 +35342,13 @@
       const engs = opts.own && opts.own.engines || [];
       for (let i = 0; i < 4; i++) {
         const E = ownEngines[i], st = engs[i] || { fire: 0, out: false };
+        if (E.gone) {
+          E.disc.visible = false;
+          E.blades.visible = false;
+          E.fire.visible = false;
+          if (ownShip.userData.contrails) ownShip.userData.contrails[i].on = false;
+          continue;
+        }
         const out = !!st.out;
         E.disc.visible = !out;
         E.blades.visible = out;
@@ -36159,8 +36363,8 @@
     );
     ground.rotation.x = -Math.PI / 2;
     groundFrame.add(ground);
-    const TOWN_Z = 1680;
-    const TOWN_X = 300;
+    const TOWN_Z = 1633;
+    const TOWN_X = 0;
     const town = new Group();
     town.position.set(TOWN_X, 0.05, TOWN_Z);
     town.scale.set(1.5, 1.5, 1.5);
@@ -36470,7 +36674,7 @@
         _bombPlan.oursT = post;
         _bombPlan.ours = Math.max(1, opts.dropped || 15) * 5;
       }
-      if (_bombPlan.oursT >= 0 && post > 4 && _bombPlan.ours > 0) {
+      if (_bombPlan.oursT >= 0 && post > 24 && _bombPlan.ours > 0) {
         const n = Math.min(_bombPlan.ours, Math.ceil(dt * 12));
         for (let k = 0; k < n; k++) {
           const [x, z] = yardPt((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 50);
@@ -37080,6 +37284,7 @@
       }
       updateFlak(!!opts.flakOn, dt, dz);
       updateFlakBursts(opts.flakBursts);
+      updateRockets(opts.rockets);
       updateDebris(dz);
       updateChutes3D(opts.chutes);
       const sd = sunDir0.clone().applyAxisAngle(new Vector3(0, 1, 0), -hd);
@@ -37104,9 +37309,11 @@
           if (window.FGAudio && window.FGAudio.boom) window.FGAudio.boom(f.x, f.y, f.z, true);
         }
         if (!f || f.health < 0) {
+          if (g.userData.det) restoreB17(g);
           g.visible = false;
           continue;
         }
+        if (g.userData.det && !(f.deathKind === "wing" || f.deathKind === "tail")) restoreB17(g);
         g.visible = true;
         g.position.set(f.x, f.y, f.z);
         const yaw = f.yaw || 0;
@@ -37126,6 +37333,10 @@
         }
         const engs = g.userData.engines;
         g.updateMatrixWorld(true);
+        if ((f.deathKind === "wing" || f.deathKind === "tail") && f.spiraling) {
+          if (!g.userData.det) detachB17(g, f);
+          updateDetB17(g, f, dt, i);
+        }
         for (let k = 0; k < 4; k++) {
           const eng = engs[k];
           const st = f.engines && f.engines[k];
@@ -37875,6 +38086,209 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
       }
     }
+    function buildP51Model() {
+      const g = new Group();
+      g.name = "P51D";
+      g.userData.procedural = true;
+      const nmf = (o) => new MeshStandardMaterial(Object.assign({ color: 13223868, metalness: 0.55, roughness: 0.36, emissive: 2763302, emissiveIntensity: 0.35 }, o || {}));
+      const M = nmf(), Mdark = nmf({ color: 5592911, metalness: 0.4, roughness: 0.5, emissive: 657930 }), Mred = nmf({ color: 11544608, metalness: 0.3, roughness: 0.45, emissive: 3803142, emissiveIntensity: 0.5 });
+      const Mglass = new MeshStandardMaterial({ color: 9417928, metalness: 0.2, roughness: 0.08, transparent: true, opacity: 0.55, emissive: 1714740, emissiveIntensity: 0.3 });
+      const add = (geo, mat, name, x, y, z) => {
+        const m = new Mesh(geo, mat);
+        m.name = name || "";
+        m.position.set(x || 0, y || 0, z || 0);
+        g.add(m);
+        return m;
+      };
+      function loft(secs, seg) {
+        const pos = [], idx = [];
+        for (const s of secs) for (let i = 0; i < seg; i++) {
+          const a = i / seg * Math.PI * 2, c = Math.cos(a), sn = Math.sin(a);
+          pos.push(s.w * c, s.y + (sn > 0 ? s.t : s.b) * sn, s.z);
+        }
+        for (let k = 0; k < secs.length - 1; k++) for (let i = 0; i < seg; i++) {
+          const a = k * seg + i, b = k * seg + (i + 1) % seg, c = (k + 1) * seg + i, d = (k + 1) * seg + (i + 1) % seg;
+          idx.push(a, c, b, b, c, d);
+        }
+        const geo = new BufferGeometry();
+        geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
+        geo.setIndex(idx);
+        geo.computeVertexNormals();
+        return geo;
+      }
+      const fus = loft([
+        { z: -2.3, w: 0.05, t: 0.05, b: 0.05, y: 0 },
+        { z: -2.12, w: 0.3, t: 0.27, b: 0.26, y: 0.02 },
+        { z: -1.75, w: 0.4, t: 0.36, b: 0.34, y: 0.04 },
+        { z: -1.2, w: 0.44, t: 0.42, b: 0.3, y: 0.06 },
+        { z: -0.6, w: 0.43, t: 0.44, b: 0.32, y: 0.08 },
+        { z: 0.1, w: 0.4, t: 0.4, b: 0.3, y: 0.07 },
+        { z: 0.8, w: 0.33, t: 0.3, b: 0.24, y: 0.06 },
+        { z: 1.5, w: 0.22, t: 0.22, b: 0.17, y: 0.07 },
+        { z: 2.1, w: 0.11, t: 0.14, b: 0.1, y: 0.09 },
+        { z: 2.52, w: 0.04, t: 0.07, b: 0.05, y: 0.1 }
+      ], 14);
+      add(fus, M, "fuselage");
+      function prism(x0, x1, le0, te0, le1, te1, t0, t1, y0, y1) {
+        const v = [[x0, y0 + t0, le0], [x0, y0 + t0, te0], [x1, y1 + t1, te1], [x1, y1 + t1, le1], [x0, y0 - t0, le0], [x0, y0 - t0, te0], [x1, y1 - t1, te1], [x1, y1 - t1, le1]];
+        const pos = [];
+        for (const q of v) pos.push(...q);
+        const idx = [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2];
+        const geo = new BufferGeometry();
+        geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
+        geo.setIndex(idx);
+        geo.computeVertexNormals();
+        return geo;
+      }
+      for (const sd of [1, -1]) {
+        add(prism(sd * 0.3, sd * 2.9, -0.62, 0.62, -0.18, 0.28, 0.065, 0.025, -0.12, -0.04), M, sd > 0 ? "wing_r" : "wing_l");
+        add(prism(sd * 0.1, sd * 1, 1.58, 2.18, 1.7, 2.1, 0.03, 0.02, 0.1, 0.1), M, "tailplane");
+      }
+      add(new BoxGeometry(0.46, 0.2, 0.9), M, "radiator", 0, -0.33, 0.55);
+      add(new BoxGeometry(0.34, 0.12, 0.14), Mdark, "radiator_inlet", 0, -0.3, 0.09);
+      add(new BoxGeometry(0.34, 0.12, 0.5), M, "chin_scoop", 0, -0.3, -1.55);
+      {
+        const s = new Shape();
+        s.moveTo(0, 0);
+        s.lineTo(0.35, 0);
+        s.lineTo(1, 0.82);
+        s.lineTo(1.18, 0.82);
+        s.lineTo(1.12, 0);
+        s.lineTo(1.5, 0);
+        s.lineTo(0, 0);
+        const f = new Shape();
+        f.moveTo(0.35, 0);
+        f.lineTo(1.55, 0.14);
+        f.lineTo(2, 0.93);
+        f.lineTo(2.34, 0.93);
+        f.lineTo(2.44, 0.1);
+        f.lineTo(2.38, 0);
+        f.lineTo(0.35, 0);
+        const geo = new ExtrudeGeometry(f, { depth: 0.07, bevelEnabled: false });
+        geo.rotateY(-Math.PI / 2);
+        geo.translate(-0.035, 0, 0);
+        const fin = new Mesh(geo, Mred);
+        fin.name = "fin";
+        fin.position.set(0, 0.16, 0);
+        g.add(fin);
+      }
+      const can = add(new SphereGeometry(0.5, 16, 12), Mglass, "canopy_glass", 0, 0.42, 0.12);
+      can.scale.set(0.34, 0.3, 0.98);
+      add(new BoxGeometry(0.1, 0.06, 0.4), M, "windscreen_frame", 0, 0.5, -0.5);
+      const spin = add(new ConeGeometry(0.2, 0.52, 14), Mred, "spinner", 0, 0.03, -2.5);
+      spin.rotation.x = -Math.PI / 2;
+      for (let k = 0; k < 4; k++) {
+        const bl = add(new BoxGeometry(0.1, 1.5, 0.025), Mdark, "propblade" + k, 0, 0.03, -2.58);
+        bl.rotation.z = k * Math.PI / 4 + 0.35;
+        bl.scale.set(1, 1, 1);
+      }
+      for (const sd of [1, -1]) {
+        for (let k = 0; k < 3; k++) add(new CylinderGeometry(0.018, 0.018, 0.5, 6), Mdark, "gun", sd * (1 + k * 0.18), -0.1, -0.7).rotation.x = Math.PI / 2;
+        for (let k = 0; k < 6; k++) add(new BoxGeometry(0.05, 0.06, 0.12), Mdark, "exhaust", sd * 0.4, 0.12, -1.6 + k * 0.2);
+      }
+      function tex(draw, w, h) {
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        draw(c.getContext("2d"), w, h);
+        const t = new CanvasTexture(c);
+        t.colorSpace = SRGBColorSpace;
+        t.anisotropy = 4;
+        return t;
+      }
+      const roundelTex = tex((cx, w, h) => {
+        cx.clearRect(0, 0, w, h);
+        const c = w * 0.5 - 2, R = w * 0.5 - 2;
+        const bar = (rr, col) => {
+          cx.fillStyle = col;
+          cx.fillRect(w * 0.5 + R * 0.55, h * 0.5 - R * 0.17 - rr, R * 0.72 + rr, R * 0.34 + rr * 2);
+          cx.fillRect(w * 0.5 - R * 1.27 - rr, h * 0.5 - R * 0.17 - rr, R * 0.72 + rr, R * 0.34 + rr * 2);
+        };
+        cx.fillStyle = "#f2f2ec";
+        cx.beginPath();
+        cx.arc(w / 2, h / 2, R * 0.55 + 1, 0, 6.2832);
+        cx.fill();
+        cx.fillStyle = "#1c3a82";
+        cx.beginPath();
+        cx.arc(w / 2, h / 2, R * 0.5, 0, 6.2832);
+        cx.fill();
+        bar(3, "#1c3a82");
+        bar(0, "#f2f2ec");
+        cx.fillStyle = "#f6f6f0";
+        cx.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const r = i % 2 ? R * 0.2 : R * 0.45, a = -Math.PI / 2 + i * Math.PI / 5;
+          cx.lineTo(w / 2 + Math.cos(a) * r, h / 2 + Math.sin(a) * r);
+        }
+        cx.closePath();
+        cx.fill();
+      }, 256, 256);
+      const stripeTex = (vert) => tex((cx, w, h) => {
+        const n = 5;
+        for (let i = 0; i < n; i++) {
+          cx.fillStyle = i % 2 ? "#14140f" : "#f1f1ea";
+          if (vert) cx.fillRect(i * w / n, 0, w / n + 1, h);
+          else cx.fillRect(0, i * h / n, w, h / n + 1);
+        }
+      }, 160, 160);
+      const decalMat = (t) => new MeshStandardMaterial({ map: t, transparent: true, roughness: 0.6, metalness: 0.1, emissive: 3158064, emissiveIntensity: 0.25, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: DoubleSide });
+      const decal = (w, h, mat, x, y, z, rx, ry) => {
+        const m = new Mesh(new PlaneGeometry(w, h), mat);
+        m.position.set(x, y, z);
+        m.rotation.set(rx || 0, ry || 0, 0);
+        m.userData.decal = true;
+        m.userData.noHit = true;
+        g.add(m);
+        return m;
+      };
+      const RM = decalMat(roundelTex), SMh = decalMat(stripeTex(false)), SMv = decalMat(stripeTex(true));
+      decal(0.78, 0.78, RM, -1.8, -0.022, 0.05, -Math.PI / 2, 0);
+      decal(0.78, 0.78, RM, 1.8, -0.122, 0.05, Math.PI / 2, 0);
+      decal(0.52, 0.52, RM, 0.327, 0.08, 0.9, 0, Math.PI / 2);
+      decal(0.52, 0.52, RM, -0.327, 0.08, 0.9, 0, -Math.PI / 2);
+      for (const sd of [1, -1]) {
+        decal(0.7, 0.9, SMh, sd * 1, -0.04, 0.02, -Math.PI / 2, 0);
+        decal(0.6, 0.34, SMv, sd * 0.2, 0.09, 1.62, 0, sd * Math.PI / 2).scale.set(1, 1, 1);
+      }
+      return g;
+    }
+    const rktPool = [];
+    for (let i = 0; i < 20; i++) {
+      const g = new Group();
+      const body = new Mesh(new CylinderGeometry(0.2, 0.2, 2.6, 8), new MeshStandardMaterial({ color: 4869440, metalness: 0.4, roughness: 0.5 }));
+      body.userData.noHit = true;
+      g.add(body);
+      const fl = new Sprite(new SpriteMaterial({ map: fireTex, color: 16767120, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.95 }));
+      fl.position.y = -1.5;
+      fl.scale.set(3.6, 3.6, 1);
+      g.add(fl);
+      g.visible = false;
+      scene.add(g);
+      rktPool.push({ g, fl, id: -1 });
+    }
+    const _rkUp = new Vector3(0, 1, 0), _rkD = new Vector3(), _rkP = new Vector3();
+    function updateRockets(list) {
+      list = list || [];
+      const ids = /* @__PURE__ */ new Set();
+      for (const r of list) ids.add(r.id);
+      for (const P of rktPool) if (P.id >= 0 && !ids.has(P.id)) {
+        P.id = -1;
+        P.g.visible = false;
+      }
+      for (const r of list) {
+        let P = rktPool.find((q) => q.id === r.id) || rktPool.find((q) => q.id < 0);
+        if (!P) continue;
+        P.id = r.id;
+        P.g.visible = true;
+        P.g.position.set(r.x, r.y, r.z);
+        _rkD.set(r.vx, r.vy, r.vz + 83.4).normalize();
+        P.g.quaternion.setFromUnitVectors(_rkUp, _rkD);
+        const f = 3.2 + Math.random() * 1.4;
+        P.fl.scale.set(f, f, 1);
+        _rkP.set(r.x, r.y, r.z);
+        ribbonEmit("rk" + r.id, _rkP, { w0: 0.9, w1: 6.5, life: 4.2, a: 0.85, col: [0.93, 0.93, 0.9], drift: 83.4 });
+      }
+    }
     function cloneFighter(kind) {
       const src = prototypes[kind] || prototypes["109"];
       if (!src) return null;
@@ -37890,7 +38304,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         }
       });
       mesh.scale.setScalar(kind === "110" ? 2.45 : kind === "190" ? 2.15 : 2);
-      if (kind === "p51") {
+      if (kind === "p51" && !src.userData.procedural) {
         mesh.traverse((o) => {
           if (!o.isMesh || !o.material) return;
           const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -38244,6 +38658,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         prototypes["109"] = bf.scene;
         prototypes["190"] = fw.scene;
         prototypes["110"] = bf.scene;
+        prototypes["p51"] = buildP51Model();
         for (const key of ["109", "190"]) {
           if (!prototypes[key]) continue;
           prototypes[key].traverse((o) => {
@@ -38372,6 +38787,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       prototypes["109"] = make("109");
       prototypes["190"] = make("190");
       prototypes["110"] = make("109");
+      prototypes["p51"] = buildP51Model();
       for (let i = 0; i < 56; i++) {
         const mesh = cloneFighter("109");
         fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
@@ -38647,6 +39063,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         let alpha = dot.a * wDot * Math.min(1, want * want / (S * S * SOFT_INK));
         const ff = fogF(d);
         let r = 0.035, g = 0.037, b = 0.04;
+        if (e.type === "p51") {
+          r = 0.66;
+          g = 0.7;
+          b = 0.76;
+        }
         col[n * 4] = r + (_hz.r - r) * ff;
         col[n * 4 + 1] = g + (_hz.g - g) * ff;
         col[n * 4 + 2] = b + (_hz.b - b) * ff;
@@ -39102,9 +39523,41 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       trBuf = buf;
       trN = count;
     }
+    const FARL = 2;
+    let _farTag = 0, _frameN = 0;
+    function tagFar() {
+      earth.traverse((o) => {
+        o.layers.set(FARL);
+      });
+      skyMesh.layers.set(FARL);
+      for (const L of [hemi, sun, fill, key2]) L.layers.enable(FARL);
+    }
     function render() {
       prWatch();
       buildTracers();
+      if (!window.__FG_NO2PASS) {
+        if (_frameN++ % 30 === 0) tagFar();
+        camera.near = 30;
+        camera.far = 8e4;
+        camera.updateProjectionMatrix();
+        camera.layers.set(FARL);
+        renderer.render(scene, camera);
+        renderer.autoClear = false;
+        renderer.clearDepth();
+        camera.near = 0.05;
+        camera.far = 3e4;
+        camera.updateProjectionMatrix();
+        camera.layers.set(0);
+        renderer.render(scene, camera);
+        renderer.clearDepth();
+        camera.layers.set(OVL);
+        renderer.render(scene, camera);
+        camera.layers.set(0);
+        renderer.autoClear = true;
+        camera.far = 7e4;
+        camera.updateProjectionMatrix();
+        return;
+      }
       camera.layers.set(0);
       renderer.render(scene, camera);
       renderer.autoClear = false;
@@ -39165,13 +39618,13 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       },
       dropBombs,
       get bombStats() {
-        return Object.assign({}, bombStats);
+        return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) });
       },
       get glintStats() {
         return { n: glStats.n, max: glStats.max };
       },
       get wreckStats() {
-        return { puffs: wpStats.live, fires: wreck.fires.filter((f) => f.visible).length, tail: !!wreck.tail };
+        return { puffs: wpStats.live, fires: wreck.fires.filter((f) => f.visible).length, tail: !!wreck.tail, wing: !!wreck.wing, wingSide: wreck.wingSide, aiDet: friendlyPool.filter((g) => g.userData.det).map((g) => g.userData.det.userData.isWing ? "wing" : "tail") };
       },
       lodOf: (id) => {
         const i = slotOf.get(id);
