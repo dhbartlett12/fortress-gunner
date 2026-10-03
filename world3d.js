@@ -3115,6 +3115,22 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     });
     // World-ish readable scale (mesh span ~4.6–4.8u ≈ phone 35ft×~25). NOT 7–20× face-huggers.
     mesh.scale.setScalar(kind === "110" ? 2.45 : kind === "190" ? 2.15 : 2.0);
+    if (kind === "p51") { // 1.5.0: no P-51 model — the 109 mesh painted natural metal (spec: 0xC5C2B4, metalness 0.55, roughness 0.38)
+      mesh.traverse((o) => {
+        if (!o.isMesh || !o.material) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          const nm = ((m.name || "") + " " + (o.name || "")).toLowerCase();
+          if (m.transparent || (m.opacity != null && m.opacity < 0.95) || /glass|canop|wind|prop|disc|spinner|hub|tire|wheel|gear/.test(nm)) continue;
+          if (m.color) m.color.setHex(0xC5C2B4);
+          if ("metalness" in m) m.metalness = 0.55;
+          if ("roughness" in m) m.roughness = 0.38;
+          if ("map" in m && m.map) { m.map = null; m.needsUpdate = true; }
+          if (m.emissive) m.emissive.setHex(0x1a1a18);
+          m.userData = m.userData || {}; m.userData.nmf = true;
+        }
+      });
+    }
     // contact-ish blob under the fighter (grounds 3D vs photo sky)
     if (!mesh.userData.blob) {
       const c = document.createElement("canvas");
@@ -3509,7 +3525,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       // NO cel outline — it reads as a toy against the photo sky.
       // Rim comes from cool fill + slight emissive in punchFighterMats.
 
-      for (let i = 0; i < 44; i++) {
+      for (let i = 0; i < 56; i++) {
         const mesh = cloneFighter("109");
         fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
       }
@@ -3598,7 +3614,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     prototypes["109"] = make("109");
     prototypes["190"] = make("190");
     prototypes["110"] = make("109");
-    for (let i = 0; i < 44; i++) {
+    for (let i = 0; i < 56; i++) {
       const mesh = cloneFighter("109");
       fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
     }

@@ -37889,6 +37889,26 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         }
       });
       mesh.scale.setScalar(kind === "110" ? 2.45 : kind === "190" ? 2.15 : 2);
+      if (kind === "p51") {
+        mesh.traverse((o) => {
+          if (!o.isMesh || !o.material) return;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const m of mats) {
+            const nm = ((m.name || "") + " " + (o.name || "")).toLowerCase();
+            if (m.transparent || m.opacity != null && m.opacity < 0.95 || /glass|canop|wind|prop|disc|spinner|hub|tire|wheel|gear/.test(nm)) continue;
+            if (m.color) m.color.setHex(12960436);
+            if ("metalness" in m) m.metalness = 0.55;
+            if ("roughness" in m) m.roughness = 0.38;
+            if ("map" in m && m.map) {
+              m.map = null;
+              m.needsUpdate = true;
+            }
+            if (m.emissive) m.emissive.setHex(1710616);
+            m.userData = m.userData || {};
+            m.userData.nmf = true;
+          }
+        });
+      }
       if (!mesh.userData.blob) {
         const c = document.createElement("canvas");
         c.width = 64;
@@ -38268,7 +38288,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
             o.material = out.length === 1 ? out[0] : out;
           });
         }
-        for (let i = 0; i < 44; i++) {
+        for (let i = 0; i < 56; i++) {
           const mesh = cloneFighter("109");
           fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
         }
@@ -38351,7 +38371,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       prototypes["109"] = make("109");
       prototypes["190"] = make("190");
       prototypes["110"] = make("109");
-      for (let i = 0; i < 44; i++) {
+      for (let i = 0; i < 56; i++) {
         const mesh = cloneFighter("109");
         fighterPool.push({ mesh, kind: "109", trail: makeTrail() });
       }
