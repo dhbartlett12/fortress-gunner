@@ -33220,7 +33220,7 @@
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     renderer.outputColorSpace = SRGBColorSpace;
     renderer.toneMapping = ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.98;
+    renderer.toneMappingExposure = 1.12;
     const scene = new Scene();
     const camera = new PerspectiveCamera(
       50,
@@ -33239,8 +33239,8 @@
     scene.add(fill);
     const key2 = new DirectionalLight(16767144, 0);
     key2.position.set(30, 50, -20);
-    scene.fog = new Fog(11780042, 900, 12e3);
-    const SKY_HORIZON = new Color(11780042);
+    scene.fog = new Fog(8366554, 3500, 52e3);
+    const SKY_HORIZON = new Color(8366554);
     const sunDir0 = new Vector3(45, 90, 30).normalize();
     const skyU = { uSun: { value: sunDir0.clone() } };
     const skyMat = new ShaderMaterial({
@@ -33254,8 +33254,8 @@
       void main(){
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 zen = vec3(0.012, 0.042, 0.17), mid = vec3(0.05, 0.14, 0.36), hor = vec3(0.38, 0.45, 0.54), low = vec3(0.36, 0.41, 0.47);
-        vec3 c = mix(hor, mid, smoothstep(0.0, 0.22, h));
+        vec3 zen = vec3(0.006, 0.05, 0.30), mid = vec3(0.03, 0.17, 0.56), hor = vec3(0.20, 0.42, 0.74), low = vec3(0.16, 0.34, 0.62); // 1.5.1 crisp deep blue
+        vec3 c = mix(hor, mid, smoothstep(0.0, 0.12, h));
         c = mix(c, zen, smoothstep(0.18, 0.9, h));
         c = mix(c, low, smoothstep(0.0, -0.08, h));
         float sd = max(dot(d, uSun), 0.0);
@@ -36066,10 +36066,10 @@
       c.height = 256;
       const x = c.getContext("2d");
       const g = x.createLinearGradient(0, 0, 0, 256);
-      g.addColorStop(0, "rgba(179,191,202,0)");
-      g.addColorStop(0.55, "rgba(179,191,202,0.75)");
-      g.addColorStop(0.75, "rgba(179,191,202,0.45)");
-      g.addColorStop(1, "rgba(179,191,202,0)");
+      g.addColorStop(0, "rgba(127,169,218,0)");
+      g.addColorStop(0.55, "rgba(127,169,218,0.22)");
+      g.addColorStop(0.75, "rgba(127,169,218,0.12)");
+      g.addColorStop(1, "rgba(127,169,218,0)");
       x.fillStyle = g;
       x.fillRect(0, 0, 4, 256);
       const tx = new CanvasTexture(c);
@@ -36131,7 +36131,7 @@
     const ground = new Mesh(
       new PlaneGeometry(6e4, 6e4),
       (() => {
-        const m = new MeshBasicMaterial({ map: farmTex, color: 11120802, fog: true });
+        const m = new MeshBasicMaterial({ map: farmTex, color: 12896950, fog: true });
         m.onBeforeCompile = (sh) => {
           sh.uniforms.uShadow = { value: cloudShadowTex };
           sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;").replace("#include <map_fragment>", `
@@ -36144,11 +36144,11 @@
   col = mix(col, col * vec3(1.06, 1.04, 0.9), smoothstep(0.35, 0.55, l2));
   col = mix(col, (lo1 + sampledDiffuseColor.rgb) * 0.5, 0.18);
   float gl = dot(col, vec3(0.3, 0.55, 0.15));
-  col = mix(vec3(gl), col, 0.62); // desaturated, hazy high-altitude ground
+  col = mix(vec3(gl), col, 1.0); // 1.5.1: natural colour (was desaturated)
   // 1.4.0: seen from 25,000 ft \u2014 soft cloud shadows from the deck below us, then a veil of blue-grey air even straight down
   float shd = texture2D(uShadow, vMapUv * 0.9 + vec2(0.13, 0.41)).r * 0.65 + texture2D(uShadow, vMapUv * 0.37 + vec2(0.7, 0.2)).r * 0.35;
   col *= 1.0 - 0.34 * smoothstep(0.35, 0.75, shd);
-  col = mix(col, vec3(0.62, 0.68, 0.76), 0.3);
+  col = mix(col, vec3(0.45, 0.58, 0.76), 0.04);
   diffuseColor.rgb *= col;
 #endif
 `);
@@ -36495,7 +36495,8 @@
         const r = Math.min(20 + rnd() * 22, px2 - 2, 126 - px2, py2 - 2, 126 - py2);
         const g = x.createRadialGradient(px2, py2 - r * 0.25, r * 0.1, px2, py2, r);
         g.addColorStop(0, "rgba(255,255,255,1)");
-        g.addColorStop(0.55, "rgba(246,248,252,0.75)");
+        g.addColorStop(0.62, "rgba(250,251,255,0.95)");
+        g.addColorStop(0.9, "rgba(240,244,252,0.55)");
         g.addColorStop(1, "rgba(236,240,246,0)");
         x.fillStyle = g;
         x.beginPath();
@@ -36506,7 +36507,7 @@
       const ug = x.createLinearGradient(0, 40, 0, 118);
       ug.addColorStop(0, "rgba(255,252,244,0.25)");
       ug.addColorStop(0.45, "rgba(200,208,220,0.0)");
-      ug.addColorStop(1, "rgba(118,130,150,0.65)");
+      ug.addColorStop(1, "rgba(92,108,138,0.8)");
       x.fillStyle = ug;
       x.fillRect(0, 0, 128, 128);
       const tx = new CanvasTexture(c);
@@ -38402,7 +38403,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       envTex.colorSpace = SRGBColorSpace;
       envTex.needsUpdate = true;
       scene.environment = envTex;
-      scene.fog = new Fog(SKY_HORIZON.getHex(), 900, 12e3);
+      scene.fog = new Fog(SKY_HORIZON.getHex(), 3500, 52e3);
       haze.visible = false;
     }
     let prCap = 2, prT = 0, prN = 0, prSum = 0, prDone = false;
@@ -38957,9 +38958,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     scene.add(trMesh);
     const TR_KIND = [
       [[1, 0.88, 0.46], [1, 0.62, 0.14], 1, 2.6, 0.9, 0.26, 0.4],
-      // 1.3.9: own guns = the box gunners' look
+      // own guns
       [[1, 0.88, 0.46], [1, 0.62, 0.14], 1, 2.6, 0.9, 0.26, 0.4],
-      [[1, 0.42, 0.26], [1, 0.14, 0.05], 1.1, 2.8, 0.95, 0.32, 0.3]
+      // box gunners / P-51s
+      [[1, 0.88, 0.46], [1, 0.62, 0.14], 1, 2.6, 0.9, 0.26, 0.4]
+      // German fighters (1.5.0 was red)
     ];
     let trBuf = null, trN = 0;
     const _tf = new Vector3(), _tc = new Vector3();

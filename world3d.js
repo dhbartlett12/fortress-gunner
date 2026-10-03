@@ -65,7 +65,7 @@ export function createWorld3D(canvas) {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.98;
+  renderer.toneMappingExposure = 1.12; // 1.5.1: crisper, more saturated
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(
@@ -89,11 +89,11 @@ export function createWorld3D(canvas) {
   scene.add(fill);
   const key2 = new THREE.DirectionalLight(0xffd8a8, 0.0);
   key2.position.set(30, 50, -20);
-  scene.fog = new THREE.Fog(0xb3bfca, 900, 12000);
+  scene.fog = new THREE.Fog(0x7fa9da, 3500, 52000); // 1.5.1: no milky air — a faint blue aerial perspective only
 
   // 1.3.6: procedural high-altitude sky — deep blue zenith, paler band, milky haze at the horizon,
   // hard sun with a tight glow. Rotates with the box's heading (the sun stays put in the world).
-  const SKY_HORIZON = new THREE.Color(0xb3bfca);
+  const SKY_HORIZON = new THREE.Color(0x7fa9da);
   const sunDir0 = new THREE.Vector3(45, 90, 30).normalize();
   const skyU = { uSun: { value: sunDir0.clone() } };
   const skyMat = new THREE.ShaderMaterial({
@@ -103,8 +103,8 @@ export function createWorld3D(canvas) {
       void main(){
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 zen = vec3(0.012, 0.042, 0.17), mid = vec3(0.05, 0.14, 0.36), hor = vec3(0.38, 0.45, 0.54), low = vec3(0.36, 0.41, 0.47);
-        vec3 c = mix(hor, mid, smoothstep(0.0, 0.22, h));
+        vec3 zen = vec3(0.006, 0.05, 0.30), mid = vec3(0.03, 0.17, 0.56), hor = vec3(0.20, 0.42, 0.74), low = vec3(0.16, 0.34, 0.62); // 1.5.1 crisp deep blue
+        vec3 c = mix(hor, mid, smoothstep(0.0, 0.12, h));
         c = mix(c, zen, smoothstep(0.18, 0.9, h));
         c = mix(c, low, smoothstep(0.0, -0.08, h));
         float sd = max(dot(d, uSun), 0.0);
@@ -1853,10 +1853,10 @@ export function createWorld3D(canvas) {
     const x = c.getContext("2d");
     const g = x.createLinearGradient(0, 0, 0, 256);
     // canvas top → cylinder BOTTOM (CanvasTexture flipY) — opaque low, clear high
-    g.addColorStop(0, "rgba(179,191,202,0)");
-    g.addColorStop(0.55, "rgba(179,191,202,0.75)");
-    g.addColorStop(0.75, "rgba(179,191,202,0.45)");
-    g.addColorStop(1, "rgba(179,191,202,0)");
+    g.addColorStop(0, "rgba(127,169,218,0)");
+    g.addColorStop(0.55, "rgba(127,169,218,0.22)");
+    g.addColorStop(0.75, "rgba(127,169,218,0.12)");
+    g.addColorStop(1, "rgba(127,169,218,0)");
     x.fillStyle = g;
     x.fillRect(0, 0, 4, 256);
     const tx = new THREE.CanvasTexture(c);
@@ -1900,7 +1900,7 @@ export function createWorld3D(canvas) {
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(60000, 60000),
     (() => {
-      const m = new THREE.MeshBasicMaterial({ map: farmTex, color: 0xa9b0a2, fog: true });
+      const m = new THREE.MeshBasicMaterial({ map: farmTex, color: 0xc4cab6, fog: true });
       m.onBeforeCompile = (sh) => {
         sh.uniforms.uShadow = { value: cloudShadowTex };
         sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;").replace("#include <map_fragment>", `
@@ -1913,11 +1913,11 @@ export function createWorld3D(canvas) {
   col = mix(col, col * vec3(1.06, 1.04, 0.9), smoothstep(0.35, 0.55, l2));
   col = mix(col, (lo1 + sampledDiffuseColor.rgb) * 0.5, 0.18);
   float gl = dot(col, vec3(0.3, 0.55, 0.15));
-  col = mix(vec3(gl), col, 0.62); // desaturated, hazy high-altitude ground
+  col = mix(vec3(gl), col, 1.0); // 1.5.1: natural colour (was desaturated)
   // 1.4.0: seen from 25,000 ft — soft cloud shadows from the deck below us, then a veil of blue-grey air even straight down
   float shd = texture2D(uShadow, vMapUv * 0.9 + vec2(0.13, 0.41)).r * 0.65 + texture2D(uShadow, vMapUv * 0.37 + vec2(0.7, 0.2)).r * 0.35;
   col *= 1.0 - 0.34 * smoothstep(0.35, 0.75, shd);
-  col = mix(col, vec3(0.62, 0.68, 0.76), 0.3);
+  col = mix(col, vec3(0.45, 0.58, 0.76), 0.04);
   diffuseColor.rgb *= col;
 #endif
 `);
@@ -2174,7 +2174,8 @@ export function createWorld3D(canvas) {
       const r = Math.min(20 + rnd() * 22, px - 2, 126 - px, py - 2, 126 - py);
       const g = x.createRadialGradient(px, py - r * 0.25, r * 0.1, px, py, r);
       g.addColorStop(0, "rgba(255,255,255,1)");
-      g.addColorStop(0.55, "rgba(246,248,252,0.75)");
+      g.addColorStop(0.62, "rgba(250,251,255,0.95)");
+      g.addColorStop(0.9, "rgba(240,244,252,0.55)");
       g.addColorStop(1, "rgba(236,240,246,0)");
       x.fillStyle = g;
       x.beginPath(); x.arc(px, py, r, 0, Math.PI * 2); x.fill();
@@ -2184,7 +2185,7 @@ export function createWorld3D(canvas) {
     const ug = x.createLinearGradient(0, 40, 0, 118);
     ug.addColorStop(0, "rgba(255,252,244,0.25)");
     ug.addColorStop(0.45, "rgba(200,208,220,0.0)");
-    ug.addColorStop(1, "rgba(118,130,150,0.65)");
+    ug.addColorStop(1, "rgba(92,108,138,0.8)");
     x.fillStyle = ug;
     x.fillRect(0, 0, 128, 128);
     const tx = new THREE.CanvasTexture(c);
@@ -3648,7 +3649,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     envTex.colorSpace = THREE.SRGBColorSpace;
     envTex.needsUpdate = true;
     scene.environment = envTex;
-    scene.fog = new THREE.Fog(SKY_HORIZON.getHex(), 900, 12000);
+    scene.fog = new THREE.Fog(SKY_HORIZON.getHex(), 3500, 52000);
     haze.visible = false; // 1.3.1: farmland + fog own the horizon now
   }
 
@@ -4122,10 +4123,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   trMesh.frustumCulled = false; trMesh.renderOrder = 50;
   scene.add(trMesh);
   // kinds: 0 our guns, 1 other B-17 gunners, 2 Bf 109 — [core rgb, glow rgb, core px, glow px, core a, glow a, tail keep]
+  // 1.5.1: the player's 1.5.0 tracer is the reference. EVERY tracer (own guns, box gunners, 109s, 190s, P-51s) uses the same look.
   const TR_KIND = [
-    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // 1.3.9: own guns = the box gunners' look
-    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4],
-    [[1.0, 0.42, 0.26], [1.0, 0.14, 0.05], 1.1, 2.8, 0.95, 0.32, 0.3],
+    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // own guns
+    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // box gunners / P-51s
+    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // German fighters (1.5.0 was red)
   ];
   let trBuf = null, trN = 0;
   const _tf = new THREE.Vector3(), _tc = new THREE.Vector3();
