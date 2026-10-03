@@ -265,3 +265,20 @@ button:active { transform: translateY(2px); border-bottom-width: 2px; }
 #lockHint small { display: block; font-size: 10.5px; letter-spacing: 0.06em; font-weight: 600; opacity: 0.8; margin-top: 3px; }
 #lockHint.hidden { display: none; }
 body.desktop canvas { cursor: crosshair; }
+
+/* 1.4.1: difficulty selector on the title screen (remembered in localStorage fg_difficulty) */
+#diffRow { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
+#diffRow .diffLabel { font-size: 11px; letter-spacing: 0.2em; color: #c9a44a; margin-right: 4px; }
+#diffRow .diffBtn {
+  background: rgba(20,24,30,0.7); color: #e6d9b4; border: 1px solid rgba(233,210,150,0.35); border-bottom: 3px solid rgba(90,76,40,0.9);
+  padding: 7px 16px 6px; font-size: 13px; letter-spacing: 0.16em; min-width: 118px; touch-action: manipulation; line-height: 1.15;
+}
+#diffRow .diffBtn small { display: block; font-size: 9px; letter-spacing: 0.08em; font-weight: 600; opacity: 0.75; margin-top: 2px; }
+#diffRow .diffBtn.sel { background: #c9a227; color: #1a1408; border-color: #e7c64a; border-bottom-color: #7a6110; }
+#diffRow .diffBtn:focus-visible { outline: 2px solid #ffe08a; outline-offset: 2px; }
+@media (max-height: 420px) {
+  #diffRow { margin-bottom: 8px; gap: 6px; }
+  #diffRow .diffBtn { padding: 5px 12px 4px; font-size: 12px; min-width: 104px; }
+  #title .debugnote { display: none; }
+  #title .controls { margin-bottom: 6px; line-height: 1.5; }
+}

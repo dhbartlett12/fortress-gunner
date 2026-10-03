@@ -226,6 +226,7 @@
   }
 
   function initMissionState() {
+    gunner.lift = 0; gunner.liftP = 0; gunner.liftAt = null; // 1.4.1 bomb-release lurch
     mission = {
       t: 0,
       timeLeft: MISSION_DURATION,
@@ -466,15 +467,19 @@
       const eo = engineOutCount(f.engines);
       const hurt = eo > 0 || f.health < 45;
       f.straggle = clamp((f.straggle || 0) + dt * (hurt ? 0.035 * (eo + 1) : -0.01), 0, 1);
-      const bob = Math.sin(elapsed * 0.5 + f.slot * 1.7);
-      const tx = f.homeX + Math.sin(elapsed * 0.23 + f.slot) * 0.6;
-      const ty = f.homeY + bob * 0.4 - f.straggle * 14;
-      const tz = f.homeZ - f.straggle * 38;
+      // 1.4.1: every ship on its own rhythm — two-tone bob, fore/aft surge, lateral drift and a slow wing rock
+      const sl = f.slot || 0;
+      const bob = Math.sin(elapsed * (0.42 + 0.05 * (sl % 5)) + sl * 1.7) + 0.4 * Math.sin(elapsed * (1.05 + 0.09 * (sl % 3)) + sl * 2.3);
+      const tx = f.homeX + Math.sin(elapsed * (0.19 + 0.03 * (sl % 4)) + sl) * 0.9;
+      const ty = f.homeY + bob * (0.5 + 0.08 * (sl % 3)) - f.straggle * 14 + (f.lift || 0);
+      f.lift = (f.lift || 0) * Math.pow(0.35, dt);
+      const tz = f.homeZ - f.straggle * 38 + Math.sin(elapsed * (0.15 + 0.02 * (sl % 5)) + sl * 0.7) * 1.1;
       f.x = lerp(f.x, tx, 1 - Math.pow(0.5, dt));
       f.y = lerp(f.y, ty, 1 - Math.pow(0.5, dt));
       f.z = lerp(f.z, tz, 1 - Math.pow(0.6, dt));
       f.yaw = 0;
-      const bankWant = clamp(f.listTarget || 0, -0.07, 0.07) + (turning ? (mission.turnRoll || 0) : 0) + bob * 0.008;
+      const bankWant = clamp(f.listTarget || 0, -0.07, 0.07) + (turning ? (mission.turnRoll || 0) : 0) + bob * 0.008
+        + 0.024 * Math.sin(elapsed * (0.33 + 0.045 * (sl % 4)) + sl * 0.9) + 0.007 * Math.sin(elapsed * 1.7 + sl);
       f.bank = lerp(f.bank || 0, bankWant, 1 - Math.pow(0.3, dt));
     }
     friendlies = friendlies.filter((f) => f.health >= 0);
@@ -794,8 +799,12 @@
   //  • Re-attacks: they reform far out (3.5 km on a flank, a speck) and only come again when they
   //    are ahead of the box — or when the box's turn for home swings them ahead.
   const TAC = {
-    fire: { headon: [470, 140], fq: [430, 120], reattack: [440, 130] },
-    brk: { headon: 130, fq: 105, reattack: 110 },
+    fire: { headon: [470, 140], fq: [430, 120], reattack: [440, 130], rear: [420, 110] },
+    brk: { headon: 130, fq: 105, reattack: 110, rear: 100 },
+    // 1.4.1: they regroup ~1.5–2 km out on the flanks, loiter there in plain sight, and are fed back in waves
+    reformLat: [1000, 1250], stationZ: [250, 850], stationUp: 380,
+    waveGap: [9, 14], waveN: [2, 4], firstWave: 34, stationMax: 5,
+    presserFrac: 0.34, presserBrk: [120, 165],
     ammo: 8,                  // bursts per 109
     arriveV: 380,             // mph cruise on the way in
     pairGap: 19, pairFirst: 29,      // 1.3.8: 10 Rotten spread over 29–200 s of the 4:00 run (was every 8.2 s)
@@ -819,16 +828,26 @@
     for (let i = 0; i < live.length; i++) { r -= w[i]; if (r <= 0) return { kind: "friendly", f: live[i] }; }
     return { kind: "friendly", f: live[0] };
   }
+  // 1.4.1: a "presser" goes for the ship nearest ours (sometimes us) so the pass comes by within ~200–400 m
+  function presserTarget() {
+    if (!(bomber && bomber.dead) && Math.random() < 0.22) return { kind: "player" };
+    let best = null, bd = 1e9;
+    for (const f of friendlies) { if (!friendlyOk(f)) continue; const d = Math.hypot(f.x, f.y - BOMBER_AIM_Y, f.z) * rand(0.8, 1.25); if (d < bd) { bd = d; best = f; } }
+    return best ? { kind: "friendly", f: best } : { kind: "player" };
+  }
   function commitPass(e, mode) {
     mode = mode || "headon";
     e.mode = mode;
     if (e.leader && e.leader.alive && e.leader.phase === "attack" && e.leader.tgt &&
       (e.leader.tgt.kind !== "friendly" || friendlyOk(e.leader.tgt.f))) e.tgt = e.leader.tgt; // the Rotte hits one ship
     else e.tgt = pickFormationTarget(e, mode);
+    if (e.tgtPre) { if (e.tgtPre.kind !== "friendly" || friendlyOk(e.tgtPre.f)) e.tgt = e.tgtPre; e.tgtPre = null; }
+    if (e.presser) e.tgt = presserTarget(); // 1.4.1: presses in on the ships right next to us
     const T = targetPoint(e.tgt);
     let d = norm3(T.x - e.x, T.y - e.y, T.z - e.z);
     let px = rand(-1, 1), py = rand(-0.5, 0.5), pz = rand(-1, 1); // slash past, never ram
     if (mode === "fq") py = -Math.abs(py) - 0.5; // diving through, pass under
+    if (mode === "rear") py = -Math.abs(py) - 0.3; // diving through from 6 high, out underneath
     const dp = px * d.x + py * d.y + pz * d.z;
     px -= dp * d.x; py -= dp * d.y; pz -= dp * d.z;
     const pl = Math.hypot(px, py, pz) || 1;
@@ -849,8 +868,9 @@
     e.phase = "attack"; e.phaseT = 0; e.vT = FAI.vFull; e.invert = false;
     e.fireWin = TAC.fire[mode] || TAC.fire.headon;
     e.breakR = (TAC.brk[mode] || 120) * rand(0.85, 1.15);
+    if (e.presser) e.breakR = rand(TAC.presserBrk[0], TAC.presserBrk[1]);
     const r = Math.random();
-    e.breakType = mode === "headon" ? (r < 0.45 ? "splitS" : r < 0.8 ? "slice" : r < 0.92 ? "under" : "zoom")
+    e.breakType = mode === "rear" ? (r < 0.7 ? "under" : "slice") : mode === "headon" ? (r < 0.45 ? "splitS" : r < 0.8 ? "slice" : r < 0.92 ? "under" : "zoom")
       : (r < 0.55 ? "under" : r < 0.85 ? "slice" : "splitS");
     e.burstsLeft = Math.min(e.ammo, e.opening ? 2 : TUNE.burstsPerPass); // 1.4.0: opening 3 → 2 bursts
     e.fireCd = rand(0.1, 0.4);
@@ -872,8 +892,8 @@
   }
   // setup point for a pass from ahead: head-on (12 high) or front quarter (10:30 / 1:30 high)
   function frontSetup(mode, side) {
-    if (mode === "fq") return { x: BOX_C.x + side * 430, y: BOX_C.y + 500, z: BOX_C.z + 1700 }; // 1.3.6: ~11 o'clock high — nose nearer the line of relative motion
-    return { x: BOX_C.x + side * 90, y: BOX_C.y + 260, z: BOX_C.z + 1750 };
+    if (mode === "fq") return { x: BOX_C.x + side * 380, y: BOX_C.y + 440, z: BOX_C.z + 1250 }; // 1.3.6: ~11 o'clock high (1.4.1: 1700 → 1250 ahead, closer in)
+    return { x: BOX_C.x + side * 90, y: BOX_C.y + 240, z: BOX_C.z + 1300 };
   }
   // engine nacelle world position on a friendly (box frame) / on our own ship
   const OWN_ENG = [[8.3, -2.4, 3.2], [4.3, -2.6, 3.5], [-4.3, -2.6, 3.5], [-8.3, -2.4, 3.2]]; // eye-relative, own-ship units ≈ box units near the eye
@@ -922,6 +942,21 @@
     if (e.ammo <= 1 || (mission && mission.bombsAway && mission.post > e.breakOffT) || Math.random() < 0.08) { e.phase = "egress"; e.phaseT = 0; return; } // 1.3.8: 0.2 → 0.08 (4:00 run: they stay in the fight)
     e.phase = "reform"; e.phaseT = 0;
     e.rSide = e.x > BOX_C.x ? 1 : -1;
+    e.stLat = rand(TAC.reformLat[0], TAC.reformLat[1]); e.stZ = rand(TAC.stationZ[0], TAC.stationZ[1]); e.stUp = TAC.stationUp + rand(-80, 160); e.stPh = rand(0, 6.28);
+  }
+  // 1.4.1: station ~1.5–2 km out on a front flank where they're seen setting up the next pass
+  function stationOf(e) {
+    const side = e.rSide || 1, w = (mission ? mission.t : elapsed) * 0.35 + (e.stPh || 0);
+    return { x: BOX_C.x + side * ((e.stLat || 1100) + Math.sin(w) * 70), y: BOX_C.y + (e.stUp || 380) + Math.sin(w * 1.3) * 30, z: BOX_C.z + (e.stZ || 500) + Math.cos(w * 0.8) * 60 };
+  }
+  function flyStation(e, S, dt) {
+    const dz = S.z - e.z, dist = Math.hypot(S.x - e.x, S.y - e.y, dz);
+    e.vT = clamp(VF + 12 + dz * 0.12 + Math.max(0, dist - 250) * 0.08, VF + 8, FAI.vFull);
+    let d = airDirTo(e, S.x + (S.x - e.x) * 0.2, S.y, S.z + 220); // aim a little ahead so they settle alongside, not orbit
+    d = slopeLimit(e, d, -0.3, 0.2);
+    d = safeDir(e, d);
+    flyStep(e, d.x, d.y, d.z, dt, 0.8);
+    return dist;
   }
   function updateFighterAI(e, dt) {
     e.phaseT = (e.phaseT || 0) + dt;
@@ -949,7 +984,20 @@
       flyStep(e, d.x, d.y, d.z, dt, 1.1);
       const S0 = frontSetup(e.mode0, e.side0);
       const leadGone = e.leader && e.leader.alive && e.leader.phase === "attack" && e.leader.phaseT > 0.9; // wingman follows ~1 s behind
-      if ((e.leader && e.leader.alive && e.leader.phase === "arrive") ? false : ((e.z - S0.z < 160 || e.z < S0.z || leadGone) && aiActive < FAI.maxActive)) { aiActive++; commitPass(e, e.mode0); }
+      const ready = e.final ? (e.z > S0.z - 200 && Math.abs(e.x - S0.x) < 520) || e.phaseT > 34 : (e.z - S0.z < 160 || e.z < S0.z || leadGone);
+      if (e.final && !ready) { e.vT = FAI.vFull; }
+      if ((e.leader && e.leader.alive && e.leader.phase === "arrive") ? false : (ready && aiActive < FAI.maxActive)) { aiActive++; e.final = false; commitPass(e, e.mode0); }
+      if (mission && mission.bombsAway && mission.post > e.breakOffT) { e.phase = "egress"; e.phaseT = 0; }
+      return;
+    }
+    if (e.phase === "arriveRear") { // 1.4.1: a pair coming up from behind, high, then diving in on the tail
+      const R = { x: BOX_C.x + e.side0 * 170, y: BOX_C.y + 640, z: BOX_C.z - 950 };
+      if (e.leader && e.leader.alive && e.leader.phase === "arriveRear") { R.x = e.leader.x + e.side0 * 45; R.y = e.leader.y - 5; R.z = e.leader.z - 35; }
+      e.vT = FAI.vFull;
+      d = airDirTo(e, R.x, R.y, R.z); d = slopeLimit(e, d, -0.25, 0.2); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, 1.0);
+      const leadGone = e.leader && e.leader.alive && e.leader.phase === "attack" && e.leader.phaseT > 0.8;
+      const near = Math.hypot(R.x - e.x, R.y - e.y, R.z - e.z) < 260 || e.z > R.z || e.phaseT > 40;
+      if ((e.leader && e.leader.alive && e.leader.phase === "arriveRear") ? leadGone : near) { if (aiActive < FAI.maxActive) { aiActive++; commitPass(e, "rear"); } }
       if (mission && mission.bombsAway && mission.post > e.breakOffT) { e.phase = "egress"; e.phaseT = 0; }
       return;
     }
@@ -961,7 +1009,7 @@
       if (along > 70) d = airDirTo(e, A.x, A.y, A.z);
       else d = { x: e.hx, y: e.hy, z: e.hz }; // committed: flash straight past
       d = safeDir(e, d);
-      e.vT = FAI.vFull;
+      e.vT = e.mode === "rear" ? FAI.vDive * 1.08 : FAI.vFull;
       flyStep(e, d.x, d.y, d.z, dt, 2.0);
       if (e.invert && e.phaseT > 1.0) e.invert = false; // 1.3.7: the Split-S roll-in is over: fly the run upright
       const T = targetPoint(e.tgt);
@@ -1011,7 +1059,7 @@
       d = safeDir(e, norm3(e.hx * 0.6 + so * 0.3, clamp(e.hy, -0.3, 0.04) - 0.06, e.hz * 0.6 + away * 0.9));
       flyStep(e, d.x, d.y, d.z, dt, 0.9);
       const bc = Math.hypot(e.x - BOX_C.x, e.y - BOX_C.y, e.z - BOX_C.z);
-      if ((bc > 1700 && e.phaseT > 2.5) || e.phaseT > 11) reformOrEgress(e);
+      if ((bc > 1150 && e.phaseT > 2.5) || e.phaseT > 9) reformOrEgress(e);
       return;
     }
     if (e.phase === "egress") { // out of ammo / breaking off: dive away from the box
@@ -1021,21 +1069,59 @@
       flyStep(e, d.x, d.y, d.z, dt, 0.8);
       return;
     }
-    // reform: far out on a flank (a speck) at full throttle; come again only once ahead of the box
+    // 1.4.1 reform: back to a station ~1.5–2 km out on a front flank; "setup": hold there in plain sight until the
+    // wave scheduler releases them; "rollin": climb and roll away, then a curve of pursuit onto the ship
     if (mission && mission.bombsAway && mission.post > e.breakOffT) { e.phase = "egress"; e.phaseT = 0; return; }
-    e.vT = FAI.vFull;
-    const side = e.rSide || 1;
-    const ahead = e.z - BOX_C.z, lat = Math.abs(e.x - BOX_C.x);
-    if (ahead > 1500 && ahead > lat * 0.6 && e.phaseT > 4 && aiActive < FAI.maxActive) {
-      e.mode0 = Math.random() < 0.7 ? "headon" : "fq"; e.side0 = e.x > BOX_C.x ? 1 : -1;
-      e.phase = "arrive"; e.phaseT = 0; e.reattack = true;
+    if (e.phase === "rollin") {
+      const out = e.rSide || 1;
+      if (e.phaseT < 0) { flyStation(e, stationOf(e), dt); return; } // waiting for the one ahead to peel off
+      if (e.phaseT < 1.5) { // pull up and roll away from the box
+        e.vT = FAI.vFull; d = safeDir(e, norm3(out * 0.5, 0.42, 1)); flyStep(e, d.x, d.y, d.z, dt, 1.4);
+      } else {
+        if (!e.tgtPre) e.tgtPre = pickFormationTarget(e, "fq");
+        const T = targetPoint(e.tgtPre);
+        e.vT = FAI.vDive; d = airDirTo(e, T.x, T.y + 40, T.z); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, 0.75); // rate-limited turn in = a curve of pursuit
+        const r = Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z);
+        if ((r < 950 || e.phaseT > 11) && aiActive < FAI.maxActive) { aiActive++; commitPass(e, e.z - T.z > 350 ? "fq" : "reattack"); }
+      }
       return;
     }
-    const S = { x: BOX_C.x + side * 2400, y: BOX_C.y + 650, z: e.z + 2500 }; // parallel course far out, climbing back
-    d = norm3((S.x - e.x) * 0.0012, clamp((S.y - e.y) * 0.002, -0.15, 0.12), 1);
-    if (e.hz < 0.2) d = norm3(side * 1.1, -0.05, 0.35 + Math.max(0, e.hz)); // reverse with a level banked turn outward (no loop)
-    d = safeDir(e, d);
-    flyStep(e, d.x, d.y, d.z, dt, 0.9);
+    const St = stationOf(e);
+    const dist = flyStation(e, St, dt);
+    if (e.phase === "reform" && dist < 260 && e.phaseT > 2) { e.phase = "setup"; e.phaseT = 0; }
+    if (e.phase === "reform" && e.phaseT > 30) { e.phase = "setup"; e.phaseT = 0; } // never stuck chasing the station
+  }
+  // 1.4.1 wave scheduler: every 12–18 s release 2–4 of the fighters holding station (longest-waiting first),
+  // keeping a couple visibly setting up; the last head-on wave comes in at TGT ~1:30
+  function waveScheduler() {
+    if (!mission || mission.bombsAway) return;
+    if (mission.nextWave == null) mission.nextWave = TAC.firstWave;
+    if (!mission.finalWave && mission.timeLeft <= 116) { // they need ~25 s to swing out ahead → head-on at ~TGT 1:30
+      mission.finalWave = true;
+      let k = 0;
+      if (mission.held) { for (const e of mission.held) { e.launchAt = mission.t; } }
+      for (const e of enemies) {
+        if (!e.alive || e.ammo <= 1 || !(e.phase === "setup" || e.phase === "reform" || e.phase === "extend")) continue;
+        e.mode0 = k % 3 === 2 ? "fq" : "headon"; e.side0 = e.x > BOX_C.x ? 1 : -1; e.final = true;
+        e.phase = "arrive"; e.phaseT = 0; e.reattack = true; e.leader = null; k++;
+      }
+      mission.finalN = k;
+      pushCallout("HERE THEY COME AGAIN — 12 O'CLOCK LEVEL, THE WHOLE BUNCH!", 2.4, true); sfxIntercom();
+      mission.nextWave = mission.t + 30;
+      return;
+    }
+    if (mission.t < mission.nextWave) return;
+    const wait = enemies.filter((e) => e.alive && e.phase === "setup").sort((a, b) => b.phaseT - a.phaseT);
+    const pool = wait.length + enemies.filter((e) => e.alive && e.phase === "reform").length;
+    if (wait.length < 2) { mission.nextWave = mission.t + 2.5; return; }
+    let n = Math.round(rand(TAC.waveN[0], TAC.waveN[1]));
+    if (pool >= 5) n = Math.min(n, wait.length - 2); // keep a couple on station, visible, for the next one
+    let crowd = false;
+    if (wait.length - n > TAC.stationMax) { n = Math.min(6, wait.length - TAC.stationMax + 1); crowd = true; } // don't let a crowd idle out there
+    n = clamp(n, 1, wait.length);
+    for (let i = 0; i < n; i++) { const e = wait[i]; e.phase = "rollin"; e.phaseT = -i * rand(0.8, 1.6); e.tgtPre = null; } // peel off one after another
+    mission.waves = (mission.waves || 0) + 1;
+    mission.nextWave = mission.t + (crowd ? rand(5, 7) : rand(TAC.waveGap[0], TAC.waveGap[1]));
   }
   function makeMissionFighter() {
     const e = {
@@ -1044,7 +1130,7 @@
       hx: 0, hy: 0, hz: -1, ux: 0, uy: 1, uz: 0, p: 0, V: 350 * MPH, phi: 0, gLoad: 1,
       phase: "inbound", phaseT: 0, fireCd: 1, alive: true, flash: 0, smoke: 0.3,
       passSide: 1, trail: [], pendingDmg: null, burstsLeft: 0,
-      ammo: TAC.ammo, breakOffT: rand(22, 48), vT: 0,
+      ammo: TAC.ammo, breakOffT: rand(22, 48), vT: 0, presser: Math.random() < TAC.presserFrac,
       id: Math.random().toString(36).slice(2, 9),
     };
     return e;
@@ -1110,6 +1196,12 @@
       e.V = TAC.arriveV * MPH;
       initAttitude(e, { x: 0, y: -0.05, z: -1 }, 0);
       e.phase = "arrive"; e.mode0 = mode; e.side0 = side; e.staffel = side < 0 ? 3 : 4;
+      if (j >= 7) { // 1.4.1: the last three Rotten come in from 6 o'clock high instead (launch ~72 / 118 / 164 s)
+        e.phase = "arriveRear"; e.mode0 = "rear";
+        e.launchAt = [72, 118, 164][j - 7]; e.hold = true;
+        e.x = BOX_C.x + side * (200 + rand(0, 150)) + wing * 45; e.y = BOX_C.y + 700 + rand(0, 200) - wing * 8; e.z = BOX_C.z - 1900 - wing * 35;
+        e.V = FAI.vFull; initAttitude(e, { x: 0, y: 0, z: 1 }, 0);
+      }
       if (wing === 0) leader = e; else e.leader = leader;
       add(e);
       if (e.hold) { enemies.pop(); (mission.held || (mission.held = [])).push(e); }
@@ -1119,6 +1211,7 @@
   function missionFighterLoop(dt) {
     aiActive = 0;
     for (const e of enemies) if (e.alive && e.phase === "attack") aiActive++;
+    waveScheduler();
     for (const e of enemies) {
       if (!e.alive) { // falling wreck, trailing smoke (world3d)
         e.wreckT = (e.wreckT || 0) - dt;
@@ -1206,19 +1299,25 @@
       mission.bombersDropped = countBombCapable();
       pushCallout("BOMBS AWAY — " + mission.bombersDropped + " SHIPS", 2.4, true);
       sfxIntercom();
+      // 1.4.1: the lead ship's stick goes first, the rest toggle on him over ~1.5 s; each ship lifts as the load
+      // goes; the rack clunks + thump, and our own ship lurches up (gunner.lift) — the bombs are 3D sticks in world3d
+      if (window.FGAudio && window.FGAudio.bombsAway && !downSeq) window.FGAudio.bombsAway();
+      const sticks = [];
       for (const f of friendlies) {
         if (!friendlyOk(f)) continue;
-        for (let b = 0; b < 4; b++) {
-          particles.push({
-            x: f.x + rand(-1, 1), y: f.y - 1.5 - b * 1.2, z: f.z + rand(-1, 1),
-            vx: 0, vy: -rand(6, 9), vz: -rand(0, 1),
-            life: rand(1.6, 2.4), max: 2.4, kind: "bomb", r: 1.2,
-          });
-        }
+        const lead = f.sq === "lead" && f.el === 0;
+        const delay = lead ? 0 : rand(0.35, 1.6);
+        sticks.push({ x: f.x, y: f.y - 1.6, z: f.z + 0.6, n: lead ? 12 : f.sq === "lead" ? 8 : 6, delay, lead, f });
+        f.liftAt = mission.t + delay;
       }
+      if (bomber && !bomber.dead && !downSeq) { sticks.push({ own: true, x: CAM.x, y: CAM.y - 5.2, z: CAM.z - 3.5, n: 6, delay: 0.5 }); gunner.liftAt = mission.t + 0.5; }
+      if (World3D && World3D.dropBombs) World3D.dropBombs(sticks.map((q) => ({ x: q.x, y: q.y, z: q.z, n: q.n, delay: q.delay, lead: !!q.lead, own: !!q.own })));
+      mission.sticks = sticks.length;
     }
     if (mission.bombsAway) {
       mission.post += dt;
+      for (const f of friendlies) if (f.liftAt != null && mission.t >= f.liftAt) { f.lift = Math.max(f.lift || 0, 4.2); f.liftAt = null; }
+      if (gunner.liftAt != null) { const lt = mission.t - gunner.liftAt; gunner.lift = lt < 0 ? 0 : lt > 6 ? 0 : 3.4 * (1 - Math.exp(-lt / 0.3)) * Math.exp(-lt / 1.8); gunner.liftP = lt < 0 || lt > 6 ? 0 : 0.03 * Math.exp(-lt / 0.5) * (1 - Math.exp(-lt / 0.12)); if (lt > 6) gunner.liftAt = null; }
       if (!mission.turningBack && mission.post > 1.5) {
         mission.turningBack = true;
         mission.phase = "egress";
@@ -1459,6 +1558,7 @@
       },
       render() { api.render(); },
       setTracers: api.setTracers ? (b, n) => api.setTracers(b, n) : null,
+      dropBombs: api.dropBombs ? (l) => api.dropBombs(l) : null,
       rayShip: api.rayShip ? (w, a, b, c, d, e, f, p) => api.rayShip(w, a, b, c, d, e, f, p) : null,
       addHole: api.addHole ? (w, h, sz) => api.addHole(w, h, sz) : null,
       clearDamage: api.clearDamage ? () => api.clearDamage() : null,
@@ -1583,7 +1683,7 @@
 
   /** Urgent intercom: triple-beep + radio click + voice-ish (Cycle 137 MotA). */
   function sfxIntercom() {
-    if (!audioCtx) return;
+    if (!audioCtx || downSeq) return;
     const t0 = audioCtx.currentTime;
     // Radio click / squelch open
     const clickLen = Math.floor(audioCtx.sampleRate * 0.035);
@@ -1983,7 +2083,9 @@
     calloutEl.textContent = c ? c.text : "";
     calloutEl.classList.toggle("urgent", !!(c && CALL_URGENT.test(c.text)));
   }
+  const DOWN_CALLS = /SHE'S GOING DOWN|BAIL OUT|YOU'RE OUT|CANOPY OPEN|BREAKING UP/;
   function pushCallout(text, life, important) {
+    if (downSeq && !DOWN_CALLS.test(text)) return; // 1.4.1: once we're going down, only our own story is called
     if (callouts.some((c) => c.text === text)) return;
     life = Math.max(0.9, Math.min(life || 1, important ? 2.0 : 1.3));
     const c = { text, life, important: !!important, age: 0 };
@@ -2650,6 +2752,23 @@
     for (const b of flakBursts) { b.t += dt; b.z -= VF * dt; b.y += 0.5 * dt; if (b.pending && b.t >= 0) flakDetonate(b); }
     flakBursts = flakBursts.filter((b) => b.t < 14);
     if (state !== "PLAYING" || m.evaluated) return;
+    // 1.4.1: over the target the sky fills — extra "show" salvos that burst around (never inside) the box: each burst
+    // is kept >= 40 u from every ship (frag radius 24), so it's heavier to look at and to hear but balance-neutral
+    if ((m.timeLeft <= MISSION_DOORS_AT && !m.bombsAway) || (m.bombsAway && (m.post || 0) < 10)) {
+      const r2 = m.bombsAway ? 2.4 * (1 - (m.post || 0) / 10) : 1.2 + 2.4 * (1 - m.timeLeft / MISSION_DOORS_AT);
+      m.flakAcc2 = (m.flakAcc2 || 0) + dt * r2 * (0.4 + 1.2 * Math.random());
+      while (m.flakAcc2 >= 1) {
+        m.flakAcc2 -= 1;
+        for (let tries = 0; tries < 6; tries++) {
+          const a = rand(0, TAU), rr = rand(120, 460);
+          const x = BOX_C.x + Math.cos(a) * rr, y = BOX_C.y + rand(-70, 90), z = BOX_C.z + 80 + Math.sin(a) * rr * 1.2 + rand(0, 200);
+          const dl = rand(0, 0.9), zd = z - VF * dl; // where it will actually burst (it streams aft until the fuze goes)
+          let clear = Math.hypot(CAM.x - x, CAM.y - y, CAM.z - zd) > 45;
+          for (const f of friendlies) { if (!clear) break; if (friendlyOk(f) && Math.hypot(f.x - x, f.y - y, f.z - zd) < 42) clear = false; }
+          if (clear) { spawnFlakBurst(x, y, z, dl, F); F.show = (F.show || 0) + 1; break; }
+        }
+      }
+    }
     const rate = flakRate(m);
     if (rate <= 0) return;
     m.flakAcc = (m.flakAcc || 0) + dt * rate / 4 * (0.35 + 1.3 * Math.random()); // salvos of ~4, ragged timing (1.4.0: no metronome)
@@ -2745,9 +2864,25 @@
     S.roll += S.rollV * dt;
     S.pd = Math.min(0.55, 0.075 * tf);
     S.yaw += D.side * Math.min(0.3, 0.05 * tf) * dt;
-    S.vy = -Math.min(70, 1.5 + 6.5 * tf);
-    S.vz = -Math.min(40, 4.2 * tf);
-    S.vx = D.side * Math.min(16, 2.6 * tf);
+    if (D.phase === "fall") {
+      S.vy = -Math.min(70, 1.5 + 6.5 * tf);
+      S.vz = -Math.min(40, 4.2 * tf);
+      S.vx = D.side * Math.min(16, 2.6 * tf);
+    } else {
+      // 1.4.1: under the canopy we watch her go — a burning spiral dive that stays in view for ~30–40 s:
+      // she sinks ~45 m/s, still has a little forward airspeed, and corkscrews round a wide circle.
+      const ct = D.chute ? D.chute.t : 0;
+      S.vy += (-(21 + Math.min(7, ct * 0.2)) - S.vy) * Math.min(1, 0.6 * dt);
+      S.vz += (((D.chute ? D.chute.vz : -(VF - 10)) + 5) - S.vz) * Math.min(1, 0.5 * dt);
+      const w = 0.32, a = ct * w * D.side;
+      S.vx += (Math.cos(a) * 20 * D.side - S.vx) * Math.min(1, 0.8 * dt);
+      S.vz += Math.sin(a) * 14 * dt;
+      // pitch steepens; once the tail is gone she noses over hard and the spin winds up
+      S.pdC = (S.pdC == null ? S.pd : S.pdC); S.pdC += ((S.tailOff ? 1.15 : 0.7) - S.pdC) * Math.min(1, (S.tailOff ? 0.35 : 0.08) * dt); S.pd = S.pdC;
+      if (S.tailOff) { S.roll += D.side * Math.min(1.1, 0.25 * (ct - S.tailOffT)) * dt; S.vy += -Math.min(8, (ct - S.tailOffT) * 0.8) * dt * 0.6; }
+      if (!S.tailOff && ct > 3.8) { S.tailOff = true; S.tailOffT = ct; pushCallout("SHE'S BREAKING UP — THE TAIL'S GONE", 1.8, true); } // the tail tears off; world3d throws it clear with debris
+      S.burn = Math.min(1, 0.6 + ct * 0.03);
+    }
     S.x += S.vx * dt; S.y += S.vy * dt; S.z += S.vz * dt;
     // engines die one by one (burning, then out) → the audio winds each one down
     for (const q of D.engOut) {
@@ -2789,8 +2924,9 @@
     const n = 4 + ((Math.random() * 3) | 0);
     for (let k = 0; k < n; k++) D.crew.push({ t: 0.4 + k * rand(0.5, 1.1), done: false });
     // look back up at the box
-    const bx = BOX_C.x - D.chute.x, by = 0 - D.chute.y, bz = 60 - D.chute.z;
-    gunner.yaw = wrapYaw(Math.atan2(bx, bz)); gunner.pitch = clampPitch(Math.atan2(by, Math.hypot(bx, bz)) * 0.8);
+    // 1.4.1: look down at our own ship going down (the crew's chutes pop out around her); the box is above
+    const bx = S.x + S.vx * 3 - D.chute.x, by = S.y + S.vy * 3 - D.chute.y, bz = S.z + (S.vz + VF) * 3 - D.chute.z;
+    gunner.yaw = wrapYaw(Math.atan2(bx, bz)); gunner.pitch = clampPitch(Math.max(-1.0, Math.atan2(by, Math.hypot(bx, bz)) * 0.75));
     input.fire = false;
     callouts = []; // the intercom is gone
     setDownHud(true);
@@ -2849,7 +2985,7 @@
   function update(dt) {
     window.__FG_SIMT = (window.__FG_SIMT || 0) + dt; // 1.3.9: sim clock for the tracer persistence smear
     elapsed += dt;
-    if (window.FGAudio && !update._inAdvance) { const b = lookBasis(); window.FGAudio.frame({ playing: state === "PLAYING", listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: EYE.x, cy: EYE.y, cz: EYE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20) }); }
+    if (window.FGAudio && !update._inAdvance) { const b = lookBasis(); window.FGAudio.frame({ playing: state === "PLAYING", listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: EYE.x, cy: EYE.y, cz: EYE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20) }); }
     if (state === "TITLE") {
       gunner.yaw = 0.25 + Math.sin(elapsed * 0.18) * 0.35;
       gunner.pitch = 0.10 + Math.sin(elapsed * 0.11) * 0.05;
@@ -3111,6 +3247,14 @@
     }
     void SKIP_AT;
     if (inChute) {
+      { // 1.4.1: dark backing plate so the text reads over bright cloud / canopy
+        const f1 = Math.round(Math.max(11, H * 0.034)), lh = Math.round(Math.max(13, H * 0.042)), two = D.chute && D.chute.t > 2.6;
+        ctx.font = "600 " + f1 + "px system-ui, sans-serif";
+        const w1 = ctx.measureText("THE BOX IS 00.0 KM AWAY · 00,000 FT").width * 0.9 + 26;
+        const x0 = 6, y0 = 26 - f1 - 6, hh = f1 + 12 + (two ? lh : 0);
+        ctx.fillStyle = "rgba(12,12,10,0.55)"; ctx.strokeStyle = "rgba(210,200,170,0.18)"; ctx.lineWidth = 1;
+        ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x0, y0, w1, hh, 5); else ctx.rect(x0, y0, w1, hh); ctx.fill(); ctx.stroke();
+      }
       ctx.textAlign = "left"; ctx.font = "600 " + Math.round(Math.max(11, H * 0.034)) + "px system-ui, sans-serif";
       ctx.fillStyle = "rgba(235,230,215,0.8)";
       ctx.fillText("SHOT DOWN — BAILED OUT", 16, 26);
@@ -4348,6 +4492,7 @@
   // (the camera axis), which is exactly where both guns' rounds cross at 320 u (CONV_R + the AIMTAB drop/drift
   // correction). Thin ring + centre dot + four short ticks, pale with a dark hairline so it reads on sky and ground.
   let leadHint = null; // first-time lead hint (once per install)
+  let difficulty = "easy"; // 1.4.1 (set from the title screen, see setDifficulty)
   function drawCrosshair() {
     const cx = W * 0.5 + gunner.shake * (Math.sin(elapsed * 73) * 1.1);
     const cy = H * 0.5 + gunner.recoil * 2 + gunner.shake * (Math.cos(elapsed * 61) * 0.6);
@@ -4373,7 +4518,7 @@
     }
     // Gold lead pip only — teaches deflection; no green on-target HUD
     // (window.__FG_NOPIP: test-harness only, keeps the pip off pinned flyby targets)
-    if (state === "PLAYING" && !window.__FG_NOPIP) {
+    if (state === "PLAYING" && !window.__FG_NOPIP && difficulty !== "medium") { // MEDIUM: no lead markers
       let best = null, bestPlane = null, bestZ = 1e9;
       for (const e of enemies) {
         if (!e.alive) continue;
@@ -4977,6 +5122,20 @@
     if (k === " ") input.fire = false;
   });
 
+  // 1.4.1 difficulty: EASY = the game as it was (gold lead pip + dashed lead line on the aimed 109, first-time lead
+  // hint); MEDIUM = those markers removed. Remembered in localStorage "fg_difficulty". Buttons work on mouse + touch.
+  try { const d = localStorage.getItem("fg_difficulty"); if (d === "medium" || d === "easy") difficulty = d; } catch (e) { /* no storage */ }
+  function setDifficulty(d) {
+    difficulty = d === "medium" ? "medium" : "easy";
+    try { localStorage.setItem("fg_difficulty", difficulty); } catch (e) { /* no storage */ }
+    for (const b of document.querySelectorAll("#diffRow .diffBtn")) { const on = b.dataset.diff === difficulty; b.classList.toggle("sel", on); b.setAttribute("aria-checked", on ? "true" : "false"); }
+  }
+  for (const b of document.querySelectorAll("#diffRow .diffBtn")) {
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); setDifficulty(b.dataset.diff); });
+    b.addEventListener("touchstart", (ev) => { ev.stopPropagation(); }, { passive: true });
+    b.addEventListener("pointerdown", (ev) => { ev.stopPropagation(); });
+  }
+  setDifficulty(difficulty);
   document.getElementById("startBtn").addEventListener("click", startGame);
   document.getElementById("restartBtn").addEventListener("click", restartGame);
 
@@ -5101,7 +5260,8 @@
     aimBlocked: () => aimHitsOwnShip(),
     bulletsRaw: () => bullets.map((b) => ({ x: b.x - CAM.x, y: b.y - CAM.y, z: b.z - CAM.z, vx: b.vx, vy: b.vy, vz: b.vz, trav: b.trav, life: b.life })),
     ownPart: (x, y, z) => ownPartAt(x, y, z),
-    missionInfo: () => mission ? { t: mission.t, firstShotT: mission.firstShotT, passes: mission.passes, bursts: mission.bursts, lost: mission.friendliesLost, killed: mission.fightersKilled, cpuKills, youKills: kills, cpuShots: mission.cpuShots || 0, cpuHits: mission.cpuHits || 0, ff: mission.friendlyHits || 0, ffCpu: mission.friendlyHitsCpu || 0, ffLost: mission.friendlyFFLost || 0, dropped: mission.bombersDropped, done: mission.evaluated, modeStats: mission.modeStats, heading: mission.heading || 0, post: mission.post, ownHits: mission.ownHits || 0, engHits: mission.hs || null, cpuTracers: mission.cpuTracers || 0, gunStats: mission.gunStats || null, tail: bomber ? bomber.tail.fire : 0, engFire: bomber ? bomber.engines.map((q) => +q.fire.toFixed(2)) : null, phases: enemies.filter((q) => q.alive).reduce((a, q) => { a[q.phase] = (a[q.phase] || 0) + 1; return a; }, {}), alive109: MISSION_FIGHTERS - mission.fightersKilled, state, playerDead: !!(bomber && bomber.dead), downAt: downSeq ? downSeq.missionT : null, downCause: downSeq ? downSeq.cause : null, chutesSpawned: mission.chutes || 0, health: bomber ? bomber.health : 0, flak: mission.flakStats || null, timeLeft: mission.timeLeft,
+    difficulty: (d) => { if (d) setDifficulty(d); return difficulty; },
+    missionInfo: () => mission ? { waves: mission.waves || 0, finalN: mission.finalN, t: mission.t, firstShotT: mission.firstShotT, passes: mission.passes, bursts: mission.bursts, lost: mission.friendliesLost, killed: mission.fightersKilled, cpuKills, youKills: kills, cpuShots: mission.cpuShots || 0, cpuHits: mission.cpuHits || 0, ff: mission.friendlyHits || 0, ffCpu: mission.friendlyHitsCpu || 0, ffLost: mission.friendlyFFLost || 0, dropped: mission.bombersDropped, done: mission.evaluated, modeStats: mission.modeStats, heading: mission.heading || 0, post: mission.post, ownHits: mission.ownHits || 0, engHits: mission.hs || null, cpuTracers: mission.cpuTracers || 0, gunStats: mission.gunStats || null, tail: bomber ? bomber.tail.fire : 0, engFire: bomber ? bomber.engines.map((q) => +q.fire.toFixed(2)) : null, phases: enemies.filter((q) => q.alive).reduce((a, q) => { a[q.phase] = (a[q.phase] || 0) + 1; return a; }, {}), alive109: MISSION_FIGHTERS - mission.fightersKilled, state, playerDead: !!(bomber && bomber.dead), downAt: downSeq ? downSeq.missionT : null, downCause: downSeq ? downSeq.cause : null, chutesSpawned: mission.chutes || 0, health: bomber ? bomber.health : 0, flak: mission.flakStats || null, timeLeft: mission.timeLeft,
       fHealth: friendlies.map((f) => Math.round(f.health)), player: bomber ? Math.round(bomber.health) : null, VF, MPH } : null,
     hitEnemy: (id, n) => {
       const e = enemies.find((q) => q.id === id);
@@ -5154,7 +5314,7 @@
     tune: (o) => Object.assign(TUNE, o || {}),
     gunsDbg: () => { const out = []; for (const f of friendlies) { if (!f.guns || !friendlyOk(f)) continue; const c = Math.cos(f.yaw || 0), sn = Math.sin(f.yaw || 0); f.guns.forEach((g, gi) => { if (!(g.burst > 0 && g.tgt && g.tgt.alive)) return; const G = CPU_GUNS[gi]; const ox = f.x + G.p[0] * c + G.p[2] * sn, oy = f.y + G.p[1], oz = f.z - G.p[0] * sn + G.p[2] * c; const dx = g.tgt.x - ox, dy = g.tgt.y - oy, dz = g.tgt.z - oz, d = Math.hypot(dx, dy, dz) || 1; out.push({ gi, n: CPU_GUNS.length, tid: g.tgt.id, lx: (dx * c - dz * sn) / d, ly: dy / d, lz: (dx * sn + dz * c) / d, ship: f.name }); }); } return out; },
     killPlayer: (cause) => { playerShotDown(cause || "109"); return !!downSeq; },
-    downInfo: () => downSeq ? { T: +downSeq.T.toFixed(2), phase: downSeq.phase, cause: downSeq.cause, missionT: downSeq.missionT, eye: { x: EYE.x, y: EYE.y, z: EYE.z }, roll: viewRoll, ship: { y: downSeq.ship.y, z: downSeq.ship.z, pd: downSeq.ship.pd }, chute: downSeq.chute ? { y: downSeq.chute.y, z: downSeq.chute.z, vy: downSeq.chute.vy, vz: downSeq.chute.vz, t: downSeq.chute.t } : null, finished: downSeq.finished } : null,
+    downInfo: () => downSeq ? { T: +downSeq.T.toFixed(2), phase: downSeq.phase, cause: downSeq.cause, missionT: downSeq.missionT, eye: { x: EYE.x, y: EYE.y, z: EYE.z }, roll: viewRoll, ship: { x: downSeq.ship.x, y: downSeq.ship.y, z: downSeq.ship.z, pd: downSeq.ship.pd, tailOff: !!downSeq.ship.tailOff }, chute: downSeq.chute ? { y: downSeq.chute.y, z: downSeq.chute.z, vy: downSeq.chute.vy, vz: downSeq.chute.vz, t: downSeq.chute.t } : null, finished: downSeq.finished } : null,
     skipDown: () => { if (downSeq) finishDownSeq(); return state; },
     chutes: () => chutes.map((c) => ({ id: c.id, kind: c.kind, x: c.x, y: c.y, z: c.z, open: c.open, t: c.t })),
     spawnChute: (x, y, z, kind) => spawnChute(x, y, z, 0, -4, -VF, kind || "us", 0.01),
@@ -5234,6 +5394,7 @@
     boxC: () => ({ x: BOX_C.x, y: BOX_C.y, z: BOX_C.z }),
     god: (b) => { godMode = !!b; },
     // 1.4.0 harness: look in the SHIP frame (deg; yaw 0 = nose, 180 = tail) and set our ship's health (drives the damage look)
+    lookFromEye: (x, y, z) => { const dx = x - EYE.x, dy = y - EYE.y, dz = z - EYE.z; gunner.yaw = wrapYaw(Math.atan2(dx, dz)); gunner.pitch = clamp(Math.atan2(dy, Math.hypot(dx, dz)), PITCH_MIN, PITCH_MAX); gunner.yawV = 0; gunner.pitchV = 0; return [gunner.yaw, gunner.pitch]; },
     look: (ywDeg, ptDeg) => { gunner.yaw = wrapYaw(ywDeg * Math.PI / 180); gunner.pitch = clamp(ptDeg * Math.PI / 180, PITCH_MIN, PITCH_MAX); gunner.yawV = 0; gunner.pitchV = 0; input.swipeAimX = 0; input.swipeAimY = 0; input.stickVX = 0; input.stickVY = 0; input.stickActive = false; },
     setHealth: (h) => { if (bomber) { bomber.health = h; healthEngineCheck(); } },
     forceRoll: (r) => { forcedRoll = r == null ? null : +r; if (forcedRoll != null) viewRoll = forcedRoll; },

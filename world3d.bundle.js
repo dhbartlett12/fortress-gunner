@@ -33155,6 +33155,7 @@
 
   // www/world3d.js
   var CAM = { x: 0, y: 10.2, z: 6.5 };
+  var pnow = () => window.__FG_CAPCLK != null ? window.__FG_CAPCLK : performance.now();
   function createWorld3D(canvas) {
     function failStub(reason) {
       console.error("[World3D] FAIL:", reason);
@@ -33523,97 +33524,310 @@
       return grp;
     }
     let _b17n = 0;
+    const B17_SHADES = [5068084, 5790267, 4740410, 6119751, 4410161, 5462072];
+    const B17_METAL = /* @__PURE__ */ new Set([3, 7, 10, 15]);
+    const B17_TAIL = [["tri", "A"], ["tri", "B"], ["sq", "J"], ["tri", "C"], ["sq", "D"], ["tri", "G"], ["sq", "H"], ["tri", "L"], ["sq", "K"], ["tri", "A"], ["sq", "P"], ["tri", "B"], ["tri", "C"], ["sq", "J"], ["tri", "G"], ["sq", "D"], ["tri", "L"], ["sq", "H"]];
+    const B17_CODES = ["LN-T", "BK-R", "DF-A", "SO-K", "XK-D", "QW-M", "LL-B", "PU-S", "OR-N", "VP-J", "WF-C", "TU-E", "MZ-P", "GD-F", "BX-H", "JW-L", "KY-G", "NV-Q"];
+    function b17Weather(k, metal) {
+      const c = document.createElement("canvas");
+      c.width = c.height = 256;
+      const x = c.getContext("2d");
+      let sd = 101 + k * 7919;
+      const r = () => {
+        sd = sd * 16807 % 2147483647;
+        return sd / 2147483647;
+      };
+      x.fillStyle = "#c8c8c8";
+      x.fillRect(0, 0, 256, 256);
+      const chalk = r(), grime = r();
+      for (let i = 0; i < 70 + (r() * 60 | 0); i++) {
+        const g = x.createRadialGradient(0, 0, 0, 0, 0, 1);
+        const v = r() < 0.35 + chalk * 0.4 ? "240,236,220" : metal ? "120,122,125" : "140,138,125";
+        g.addColorStop(0, "rgba(" + v + "," + (0.2 + chalk * 0.3).toFixed(2) + ")");
+        g.addColorStop(1, "rgba(" + v + ",0)");
+        x.save();
+        x.translate(r() * 256, r() * 256);
+        x.scale(10 + r() * 50, 5 + r() * 22);
+        x.fillStyle = g;
+        x.beginPath();
+        x.arc(0, 0, 1, 0, 6.3);
+        x.fill();
+        x.restore();
+      }
+      for (let i = 0; i < 18 + grime * 40; i++) {
+        x.fillStyle = "rgba(40,36,30," + (0.05 + grime * 0.12).toFixed(2) + ")";
+        x.fillRect(r() * 256, r() * 256, 20 + r() * 70, 1 + r() * 3);
+      }
+      if (metal) for (let i = 0; i < 40; i++) {
+        x.fillStyle = "rgba(255,255,255," + (0.04 + r() * 0.08).toFixed(2) + ")";
+        x.fillRect((r() * 8 | 0) * 32, (r() * 8 | 0) * 32, 32, 32);
+      }
+      x.strokeStyle = "rgba(55,55,50," + (0.25 + r() * 0.2).toFixed(2) + ")";
+      x.lineWidth = 1;
+      for (let y = 0; y < 256; y += 32) {
+        x.beginPath();
+        x.moveTo(0, y + 0.5);
+        x.lineTo(256, y + 0.5);
+        x.stroke();
+      }
+      for (let q = 0; q < 24; q++) {
+        const xx = r() * 256 | 0, yy = (r() * 8 | 0) * 32;
+        x.beginPath();
+        x.moveTo(xx + 0.5, yy);
+        x.lineTo(xx + 0.5, yy + 32);
+        x.stroke();
+      }
+      if (!metal && r() < 0.5) for (let i = 0; i < 6; i++) {
+        x.fillStyle = "rgba(95,100,70,0.35)";
+        x.fillRect(r() * 256, r() * 256, 20 + r() * 40, 14 + r() * 30);
+      }
+      const t = new CanvasTexture(c);
+      t.colorSpace = SRGBColorSpace;
+      t.wrapS = t.wrapT = RepeatWrapping;
+      t.anisotropy = 4;
+      return t;
+    }
+    function b17TailTex(k, metal) {
+      const c = document.createElement("canvas");
+      c.width = 128;
+      c.height = 160;
+      const x = c.getContext("2d");
+      const [shape, letter] = B17_TAIL[k % B17_TAIL.length];
+      const ink = metal ? "#16181a" : "#e8e4d6", fg = metal ? "#d8dcde" : "#15171a";
+      x.fillStyle = ink;
+      x.beginPath();
+      if (shape === "tri") {
+        x.moveTo(64, 8);
+        x.lineTo(118, 96);
+        x.lineTo(10, 96);
+      } else x.rect(20, 14, 88, 82);
+      x.closePath();
+      x.fill();
+      x.fillStyle = fg;
+      x.font = "bold 58px sans-serif";
+      x.textAlign = "center";
+      x.textBaseline = "middle";
+      x.fillText(letter, 64, shape === "tri" ? 66 : 57);
+      const serial = "4" + (2 + k % 3) + "-" + (3e4 + k * 7919 % 69999);
+      x.fillStyle = metal ? "#15171a" : "#e7c43a";
+      x.font = "bold 21px monospace";
+      x.fillText(serial.slice(1).replace("-", ""), 64, 126);
+      const t = new CanvasTexture(c);
+      t.colorSpace = SRGBColorSpace;
+      t.anisotropy = 4;
+      return t;
+    }
+    function b17CodeTex(k, metal) {
+      const c = document.createElement("canvas");
+      c.width = 256;
+      c.height = 64;
+      const x = c.getContext("2d");
+      const code = B17_CODES[k % B17_CODES.length];
+      x.fillStyle = metal ? "#15171a" : "#b7b8ae";
+      x.font = "bold 44px sans-serif";
+      x.textBaseline = "middle";
+      x.fillText(code.slice(0, 2), 8, 34);
+      x.fillText(code.slice(3), 214, 34);
+      x.fillStyle = metal ? "#1f2f5e" : "#2a3552";
+      x.beginPath();
+      x.arc(150, 32, 24, 0, Math.PI * 2);
+      x.fill();
+      x.fillStyle = "#e8e6dc";
+      x.beginPath();
+      for (let q = 0; q < 10; q++) {
+        const rr = q % 2 ? 9 : 22, a = -Math.PI / 2 + q * Math.PI / 5;
+        x.lineTo(150 + Math.cos(a) * rr, 32 + Math.sin(a) * rr);
+      }
+      x.closePath();
+      x.fill();
+      const t = new CanvasTexture(c);
+      t.colorSpace = SRGBColorSpace;
+      t.anisotropy = 4;
+      return t;
+    }
     function buildB17() {
       const S = B17_VIS;
       const g = new Group();
       const k = _b17n++;
-      const b17Olive = k === 3 || k === 10 || k === 15 ? b17Metal : b17OD;
-      const fus = new Mesh(new CylinderGeometry(0.047 * S, 0.028 * S, 0.62 * S, 10), b17Olive);
-      fus.rotation.x = Math.PI / 2;
-      fus.position.z = 0.02 * S;
+      const metal = B17_METAL.has(k);
+      const wt = b17Weather(k, metal);
+      const skin = metal ? new MeshStandardMaterial({ color: new Color(10791600).offsetHSL(0, 0, (k * 37 % 9 - 4) * 0.012), map: wt, roughness: 0.26 + k % 3 * 0.06, metalness: 0.84, envMapIntensity: 1 }) : new MeshStandardMaterial({ color: B17_SHADES[k * 5 % B17_SHADES.length], map: wt, roughness: 0.5 + k * 3 % 5 * 0.03, metalness: 0.16, envMapIntensity: 0.42 });
+      const dark = new MeshStandardMaterial({ color: 2303770, roughness: 0.7, metalness: 0.2 });
+      const glassM = new MeshStandardMaterial({ color: 2569021, roughness: 0.16, metalness: 0.5, envMapIntensity: 0.65 });
+      const mats = [skin, dark, glassM];
+      g.userData.hazeMats = mats.map((m) => ({ m, col: m.color.clone() }));
+      const prof = [[-0.405, 4e-3], [-0.39, 0.011], [-0.35, 0.016], [-0.28, 0.024], [-0.18, 0.034], [-0.06, 0.043], [0.06, 0.048], [0.18, 0.05], [0.26, 0.048], [0.3, 0.044]];
+      const lp = prof.map(([z, r]) => new Vector2(r * S, z * S));
+      const lg = new LatheGeometry(lp, 14);
+      lg.rotateX(Math.PI / 2);
+      lg.scale(0.94, 1.02, 1);
+      const fus = new Mesh(lg, skin);
       g.add(fus);
-      const tailCone = new Mesh(new CylinderGeometry(0.028 * S, 0.012 * S, 0.12 * S, 8), b17Olive);
-      tailCone.rotation.x = Math.PI / 2;
-      tailCone.position.z = -0.35 * S;
-      g.add(tailCone);
-      const nose = new Mesh(new SphereGeometry(0.047 * S, 10, 8), b17Glass);
-      nose.scale.set(1, 1, 1.6);
-      nose.position.z = 0.33 * S;
+      const nose = new Mesh(new SphereGeometry(0.044 * S, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), glassM);
+      nose.rotation.x = Math.PI / 2;
+      nose.scale.set(0.94, 1, 1.1);
+      nose.position.z = 0.298 * S;
       g.add(nose);
-      for (const side of [-1, 1]) {
-        const inner = new Mesh(new BoxGeometry(0.26 * S, 0.018 * S, 0.17 * S), b17Olive);
-        inner.position.set(side * 0.13 * S, -0.01 * S, 0.06 * S);
-        g.add(inner);
-        const outer = new Mesh(new BoxGeometry(0.25 * S, 0.014 * S, 0.105 * S), b17Olive);
-        outer.position.set(side * 0.38 * S, -4e-3 * S, 0.045 * S);
-        g.add(outer);
-        const star = new Mesh(new CircleGeometry(0.03 * S, 10), b17Star);
-        star.rotation.x = -Math.PI / 2;
-        star.position.set(side * 0.38 * S, 5e-3 * S, 0.045 * S);
-        g.add(star);
+      const chin = new Mesh(new SphereGeometry(0.016 * S, 8, 6), dark);
+      chin.position.set(0, -0.04 * S, 0.3 * S);
+      g.add(chin);
+      const cock = new Mesh(new BoxGeometry(0.06 * S, 0.022 * S, 0.07 * S), glassM);
+      cock.position.set(0, 0.046 * S, 0.215 * S);
+      cock.rotation.x = -0.12;
+      g.add(cock);
+      const cockF = new Mesh(new BoxGeometry(0.062 * S, 4e-3 * S, 4e-3 * S), dark);
+      cockF.position.set(0, 0.058 * S, 0.215 * S);
+      g.add(cockF);
+      if (metal) {
+        const ag = new Mesh(new BoxGeometry(0.05 * S, 4e-3 * S, 0.1 * S), new MeshStandardMaterial({ color: 4146992, roughness: 0.7, metalness: 0.1 }));
+        ag.position.set(0, 0.047 * S, 0.29 * S);
+        ag.rotation.x = 0.28;
+        g.add(ag);
       }
-      const hstab = new Mesh(new BoxGeometry(0.42 * S, 0.012 * S, 0.09 * S), b17Olive);
-      hstab.position.set(0, 0, -0.36 * S);
-      g.add(hstab);
+      const top = new Mesh(new SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM);
+      top.position.set(0, 0.049 * S, 0.165 * S);
+      g.add(top);
+      const ball = new Mesh(new SphereGeometry(0.022 * S, 8, 6), dark);
+      ball.position.set(0, -0.05 * S, -0.02 * S);
+      g.add(ball);
+      const tailG = new Mesh(new BoxGeometry(0.018 * S, 0.02 * S, 0.035 * S), glassM);
+      tailG.position.set(0, 4e-3 * S, -0.405 * S);
+      g.add(tailG);
+      for (const sd of [-1, 1]) {
+        const w = new Mesh(new PlaneGeometry(0.05 * S, 0.018 * S), dark);
+        w.position.set(sd * 0.0405 * S, 0.012 * S, -0.1 * S);
+        w.rotation.y = sd * Math.PI / 2;
+        g.add(w);
+      }
+      {
+        const ct = b17CodeTex(k, metal), cm = new MeshStandardMaterial({ map: ct, transparent: true, alphaTest: 0.1, roughness: 0.6, metalness: metal ? 0.6 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
+        mats.push(cm);
+        g.userData.hazeMats.push({ m: cm, col: cm.color.clone() });
+        for (const sd of [-1, 1]) {
+          const d = new Mesh(new PlaneGeometry(0.2 * S, 0.05 * S), cm);
+          d.position.set(sd * 0.0435 * S, 4e-3 * S, -0.02 * S);
+          d.rotation.y = sd * Math.PI / 2;
+          g.add(d);
+        }
+      }
+      const wingShape = (() => {
+        const sh = new Shape();
+        sh.moveTo(0.02 * S, 0.14 * S);
+        sh.lineTo(0.47 * S, 0.075 * S);
+        sh.quadraticCurveTo(0.51 * S, 0.07 * S, 0.51 * S, 0.04 * S);
+        sh.quadraticCurveTo(0.5 * S, 0.01 * S, 0.47 * S, 0.012 * S);
+        sh.lineTo(0.02 * S, -0.06 * S);
+        sh.closePath();
+        return sh;
+      })();
+      const wg = new ExtrudeGeometry(wingShape, { depth: 0.016 * S, bevelEnabled: true, bevelThickness: 3e-3 * S, bevelSize: 3e-3 * S, bevelSegments: 1 });
+      wg.rotateX(Math.PI / 2);
+      wg.translate(0, 0, 0);
+      for (const side of [-1, 1]) {
+        const w = new Mesh(wg, skin);
+        w.scale.x = side;
+        w.position.set(0, -0.018 * S, 0);
+        w.rotation.z = side * 0.075;
+        g.add(w);
+        const star = new Mesh(new CircleGeometry(0.028 * S, 10), b17Star);
+        star.rotation.x = -Math.PI / 2;
+        star.position.set(side * 0.38 * S, (-0.015 + 0.38 * 0.075 + 15e-4) * S, 0.05 * S);
+        star.rotation.y = 0;
+        if (side > 0) g.add(star);
+      }
       {
         const sh = new Shape();
-        sh.moveTo(-0.43 * S, 0);
-        sh.lineTo(-0.16 * S, 0);
-        sh.lineTo(-0.3 * S, 0.07 * S);
-        sh.lineTo(-0.37 * S, 0.19 * S);
-        sh.lineTo(-0.43 * S, 0.19 * S);
-        sh.lineTo(-0.44 * S, 0.1 * S);
+        sh.moveTo(0, -0.3 * S);
+        sh.lineTo(0.2 * S, -0.365 * S);
+        sh.quadraticCurveTo(0.225 * S, -0.37 * S, 0.22 * S, -0.39 * S);
+        sh.lineTo(0.02 * S, -0.415 * S);
+        sh.lineTo(0, -0.415 * S);
         sh.closePath();
-        const fg = new ExtrudeGeometry(sh, { depth: 0.012 * S, bevelEnabled: false });
-        fg.translate(0, 0, -6e-3 * S);
-        const fin = new Mesh(fg, b17Olive);
-        fin.rotation.y = -Math.PI / 2;
-        fin.position.set(0, 0.02 * S, 0);
-        g.add(fin);
+        const sg = new ExtrudeGeometry(sh, { depth: 9e-3 * S, bevelEnabled: false });
+        sg.rotateX(Math.PI / 2);
+        for (const side of [-1, 1]) {
+          const st = new Mesh(sg, skin);
+          st.scale.x = side;
+          st.position.y = 0.012 * S;
+          g.add(st);
+        }
       }
-      const top = new Mesh(new SphereGeometry(0.022 * S, 8, 6), b17Glass);
-      top.position.set(0, 0.046 * S, 0.2 * S);
-      g.add(top);
-      const ball = new Mesh(new SphereGeometry(0.024 * S, 8, 6), b17Dark);
-      ball.position.set(0, -0.048 * S, -0.02 * S);
-      g.add(ball);
+      {
+        const sh = new Shape();
+        sh.moveTo(-0.415 * S, 0);
+        sh.lineTo(-0.15 * S, 0);
+        sh.quadraticCurveTo(-0.26 * S, 0.03 * S, -0.3 * S, 0.075 * S);
+        sh.lineTo(-0.35 * S, 0.19 * S);
+        sh.quadraticCurveTo(-0.38 * S, 0.205 * S, -0.41 * S, 0.195 * S);
+        sh.lineTo(-0.425 * S, 0.1 * S);
+        sh.closePath();
+        const fg = new ExtrudeGeometry(sh, { depth: 0.01 * S, bevelEnabled: false });
+        fg.translate(0, 0, -5e-3 * S);
+        const fin = new Mesh(fg, skin);
+        fin.rotation.y = -Math.PI / 2;
+        fin.position.set(0, 0.03 * S, 0);
+        g.add(fin);
+        const tt = b17TailTex(k, metal), tm = new MeshStandardMaterial({ map: tt, transparent: true, alphaTest: 0.08, roughness: 0.6, metalness: metal ? 0.5 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
+        g.userData.hazeMats.push({ m: tm, col: tm.color.clone() });
+        for (const sd of [-1, 1]) {
+          const d = new Mesh(new PlaneGeometry(0.06 * S, 0.075 * S), tm);
+          d.position.set(sd * 56e-4 * S, 0.03 * S + 0.13 * S, -0.383 * S);
+          d.rotation.y = sd * Math.PI / 2;
+          g.add(d);
+        }
+      }
       const engines = [];
+      const cowlRing = new TorusGeometry(0.021 * S, 4e-3 * S, 6, 14);
       for (let i = 0; i < 4; i++) {
         const ex = NACELLE_X[i] * S;
-        const nac = new Mesh(new CylinderGeometry(0.024 * S, 0.02 * S, 0.15 * S, 8), b17Dark);
+        const nac = new Mesh(new CylinderGeometry(0.023 * S, 0.016 * S, 0.17 * S, 10), skin);
         nac.rotation.x = Math.PI / 2;
-        nac.position.set(ex, -0.012 * S, 0.14 * S);
+        nac.position.set(ex, -0.012 * S, 0.13 * S);
         g.add(nac);
+        const cowl = new Mesh(new CylinderGeometry(0.024 * S, 0.024 * S, 0.035 * S, 12), dark);
+        cowl.rotation.x = Math.PI / 2;
+        cowl.position.set(ex, -0.012 * S, 0.2 * S);
+        g.add(cowl);
+        const ring = new Mesh(cowlRing, dark);
+        ring.position.set(ex, -0.012 * S, 0.218 * S);
+        g.add(ring);
         const stn = new Mesh(new PlaneGeometry(0.05 * S, 0.14 * S), stainMat);
         stn.rotation.x = -Math.PI / 2;
-        stn.position.set(ex, 0 * S + 0.012 * S, 0.02 * S);
+        stn.position.set(ex, 0.021 * S, 0.02 * S);
         g.add(stn);
         const anchor = new Object3D();
         anchor.position.set(ex, 0, 0.1 * S);
         g.add(anchor);
         const disc = new Mesh(new CircleGeometry(0.056 * S, 20), propDiscMat);
-        disc.position.set(ex, -0.012 * S, 0.222 * S);
+        disc.position.set(ex, -0.012 * S, 0.226 * S);
         disc.rotation.z = Math.random() * 6;
         g.add(disc);
         const blades = makeBlades(0.056 * S, 0.012 * S);
         blades.position.copy(disc.position);
         g.add(blades);
-        const fire = new Sprite(new SpriteMaterial({
-          map: fireTex,
-          color: 16777215,
-          transparent: true,
-          depthWrite: false,
-          blending: AdditiveBlending,
-          opacity: 0.9
-        }));
+        const fire = new Sprite(new SpriteMaterial({ map: fireTex, color: 16777215, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.9 }));
         fire.visible = false;
         anchor.add(fire);
         engines.push({ anchor, fire, lastEmit: 0, disc, blades });
       }
       g.userData.engines = engines;
+      g.userData.wob = { ph: k * 2.39 + 0.7, fy: 0.31 + k % 5 * 0.047, fp: 0.23 + k % 4 * 0.053 };
       g.visible = false;
       scene.add(g);
       return g;
+    }
+    const _hzC = new Color();
+    function b17Haze(g, d) {
+      const h = Math.min(0.62, 1 - Math.exp(-Math.max(0, d - 30) / 950));
+      if (Math.abs((g.userData._hz || 0) - h) < 4e-3) return;
+      g.userData._hz = h;
+      _hzC.copy(scene.fog ? scene.fog.color : SKY_HORIZON);
+      for (const q of g.userData.hazeMats) {
+        q.m.color.copy(q.col).multiplyScalar(1 - h);
+        if (q.m.emissive) q.m.emissive.copy(_hzC).multiplyScalar(h * 0.62);
+        if (q.m.envMapIntensity != null && q.env == null) q.env = q.m.envMapIntensity;
+        if (q.env != null) q.m.envMapIntensity = q.env * (1 - h);
+      }
     }
     const friendlyPool = [];
     for (let i = 0; i < 18; i++) friendlyPool.push(buildB17());
@@ -33848,11 +34062,71 @@
         sh.lineTo(0.95, -1.3);
         const cg = new ExtrudeGeometry(sh, { depth: 1.2, bevelEnabled: true, bevelSize: 0.12, bevelThickness: 0.14, bevelSegments: 3 });
         cg.translate(0, 0, -0.6);
-        const cm = new Mesh(cg, glass);
+        const skyEnvC = (() => {
+          const W = 256, H = 128, c = document.createElement("canvas");
+          c.width = W;
+          c.height = H;
+          const x = c.getContext("2d");
+          const g = x.createLinearGradient(0, 0, 0, H);
+          g.addColorStop(0, "#4f78b4");
+          g.addColorStop(0.3, "#86a8d4");
+          g.addColorStop(0.46, "#dfe8f2");
+          g.addColorStop(0.5, "#c8d2da");
+          g.addColorStop(0.56, "#7f8a7a");
+          g.addColorStop(1, "#4a5446");
+          x.fillStyle = g;
+          x.fillRect(0, 0, W, H);
+          for (let i = 0; i < 26; i++) {
+            const cx = Math.random() * W, cy = H * (0.36 + Math.random() * 0.1), r = 6 + Math.random() * 14;
+            const cg2 = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+            cg2.addColorStop(0, "rgba(255,255,255,0.55)");
+            cg2.addColorStop(1, "rgba(255,255,255,0)");
+            x.fillStyle = cg2;
+            x.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+          }
+          const t = new CanvasTexture(c);
+          t.mapping = EquirectangularReflectionMapping;
+          t.colorSpace = SRGBColorSpace;
+          return t;
+        })();
+        const plexi = new MeshPhysicalMaterial({
+          color: 3820632,
+          metalness: 0,
+          roughness: 0.05,
+          envMap: skyEnvC,
+          envMapIntensity: 1.25,
+          transparent: true,
+          opacity: 0.5,
+          reflectivity: 0.9,
+          clearcoat: 1,
+          clearcoatRoughness: 0.04,
+          side: FrontSide,
+          depthWrite: false
+        });
+        const cm = new Mesh(cg, plexi);
         cm.rotation.y = -Math.PI / 2;
+        cm.renderOrder = 3;
+        cm.userData.noHit = true;
         ownShip.add(cm);
+        {
+          const inside = new MeshStandardMaterial({ color: 1382170, roughness: 0.9, metalness: 0.1 });
+          const leather = new MeshStandardMaterial({ color: 4863268, roughness: 0.75, metalness: 0.05 });
+          const jacket = new MeshStandardMaterial({ color: 3813926, roughness: 0.85, metalness: 0 });
+          const floor = add(new BoxGeometry(1.3, 0.05, 2.1), inside, 0, -1.12, 1.95);
+          floor.userData.noHit = true;
+          const coam = add(new BoxGeometry(1.2, 0.16, 0.2), inside, 0, -1.02, 2.75);
+          coam.userData.noHit = true;
+          for (const sd of [-1, 1]) {
+            const head = add(new SphereGeometry(0.095, 12, 10), leather, sd * 0.3, -0.9, 2.32);
+            head.scale.set(1, 1.1, 1.05);
+            head.userData.noHit = true;
+            const sh2 = add(new BoxGeometry(0.34, 0.16, 0.2), jacket, sd * 0.3, -1.05, 2.26);
+            sh2.userData.noHit = true;
+          }
+        }
+        const frameOD = new MeshStandardMaterial({ color: 3817770, roughness: 0.7, metalness: 0.15, envMapIntensity: 0.15, side: DoubleSide });
         const bar = (w, h, d, x, y, z, rx) => {
-          const b = add(new BoxGeometry(w, h, d), odDark, x, y, z);
+          const b = add(new BoxGeometry(w, h * 0.8, d), frameOD, x, y, z);
           if (rx) b.rotation.x = rx;
           return b;
         };
@@ -34264,43 +34538,91 @@
             x.stroke();
           }
         }));
-        const missing = canvasTex(128, 128, (x) => {
-          x.fillStyle = "rgba(30,26,22,0.6)";
-          x.fillRect(4, 4, 120, 120);
-          x.fillStyle = "rgb(14,12,10)";
-          x.fillRect(12, 16, 104, 96);
-          x.strokeStyle = "rgba(125,122,112,0.85)";
-          x.lineWidth = 3;
-          for (let k = 0; k < 5; k++) {
-            const xx = 22 + k * 21;
+        const missingV = [0, 1, 2].map((v) => canvasTex(160, 160, (x) => {
+          const C = 80;
+          soot(x, C + (R() - 0.5) * 10, C + (R() - 0.5) * 10, 78, 0.7);
+          const n = 34, pts = [];
+          for (let k = 0; k < n; k++) {
+            const a = k / n * Math.PI * 2;
+            let r = 38 + R() * 16;
+            if (R() < 0.18) r += 12 + R() * 16;
+            if (R() < 0.12) r -= 12;
+            pts.push([C + Math.cos(a) * r * (1.05 - v * 0.08), C + Math.sin(a) * r * (0.78 + v * 0.1)]);
+          }
+          x.beginPath();
+          pts.forEach(([px2, py2], k) => {
+            const ex = C + (px2 - C) * 1.14 + (R() - 0.5) * 5, ey = C + (py2 - C) * 1.14 + (R() - 0.5) * 5;
+            if (k) x.lineTo(ex, ey);
+            else x.moveTo(ex, ey);
+          });
+          x.closePath();
+          const lg = x.createLinearGradient(20, 20, 140, 140);
+          lg.addColorStop(0, "rgb(206,208,204)");
+          lg.addColorStop(0.5, "rgb(140,142,138)");
+          lg.addColorStop(1, "rgb(92,92,88)");
+          x.fillStyle = lg;
+          x.fill();
+          x.beginPath();
+          pts.forEach(([px2, py2], k) => {
+            if (k) x.lineTo(px2, py2);
+            else x.moveTo(px2, py2);
+          });
+          x.closePath();
+          const hg = x.createRadialGradient(C + 10, C + 12, 4, C, C, 58);
+          hg.addColorStop(0, "rgb(4,4,4)");
+          hg.addColorStop(0.7, "rgb(10,9,8)");
+          hg.addColorStop(1, "rgb(26,23,20)");
+          x.fillStyle = hg;
+          x.fill();
+          x.save();
+          x.clip();
+          for (let k = 0; k < 2; k++) {
+            const y0 = C - 30 + R() * 60, y1 = y0 + (R() - 0.5) * 40, xe = C + (R() - 0.2) * 50;
+            x.strokeStyle = "rgba(70,68,62,0.95)";
+            x.lineWidth = 5 - k * 2;
             x.beginPath();
-            x.moveTo(xx, 16);
-            x.lineTo(xx, 112);
+            x.moveTo(C - 70, y0);
+            x.quadraticCurveTo(C - 10, y0 + 8, xe, y1);
+            x.stroke();
+            x.strokeStyle = "rgba(170,168,160,0.55)";
+            x.lineWidth = 1.2;
+            x.beginPath();
+            x.moveTo(C - 70, y0 - 2);
+            x.quadraticCurveTo(C - 10, y0 + 6, xe, y1 - 2);
             x.stroke();
           }
-          x.strokeStyle = "rgba(95,92,84,0.95)";
-          x.lineWidth = 6;
+          x.strokeStyle = "rgba(95,60,40,0.8)";
+          x.lineWidth = 1.6;
           x.beginPath();
-          x.moveTo(12, 62);
-          x.lineTo(116, 62);
+          x.moveTo(C - 40, C - 40);
+          x.bezierCurveTo(C - 20, C + 10, C + 5, C - 5, C + 18, C + 30);
           x.stroke();
-          x.fillStyle = "rgba(200,200,195,0.8)";
-          for (let k = 14; k < 116; k += 7) {
-            x.fillRect(k, 11, 2, 2);
-            x.fillRect(k, 114, 2, 2);
+          x.restore();
+          for (let k = 0; k < 6; k++) {
+            const j = R() * n | 0, [px2, py2] = pts[j], dx = px2 - C, dy = py2 - C, l = Math.hypot(dx, dy) || 1;
+            x.fillStyle = k % 2 ? "rgb(196,198,194)" : "rgb(120,122,118)";
+            x.beginPath();
+            x.moveTo(px2 - dy / l * 6, py2 + dx / l * 6);
+            x.lineTo(px2 + dx / l * (12 + R() * 12), py2 + dy / l * (12 + R() * 12));
+            x.lineTo(px2 + dy / l * 6, py2 - dx / l * 6);
+            x.closePath();
+            x.fill();
           }
-          for (let k = 18; k < 112; k += 7) {
-            x.fillRect(7, k, 2, 2);
-            x.fillRect(119, k, 2, 2);
-          }
-          x.fillStyle = "rgb(185,186,182)";
+          x.strokeStyle = "rgba(20,18,16,0.9)";
+          x.lineWidth = 1.4;
           x.beginPath();
-          x.moveTo(116, 16);
-          x.lineTo(126, 8);
-          x.lineTo(124, 30);
-          x.lineTo(116, 34);
-          x.fill();
-        });
+          pts.forEach(([px2, py2], k) => {
+            if (k) x.lineTo(px2, py2);
+            else x.moveTo(px2, py2);
+          });
+          x.closePath();
+          x.stroke();
+          x.fillStyle = "rgba(15,14,12,0.85)";
+          for (let k = 0; k < 14; k++) {
+            const a = R() * Math.PI * 2, r = 62 + R() * 8;
+            x.fillRect(C + Math.cos(a) * r, C + Math.sin(a) * r * 0.85, 2, 2);
+          }
+        }));
         const scorch = [0, 1].map(() => canvasTex(128, 128, (x) => {
           soot(x, 64, 64, 60, 0.7);
           soot(x, 58 + R() * 12, 60 + R() * 12, 30, 0.6);
@@ -34327,7 +34649,7 @@
           soot(x, 32, 14, 16, 0.8);
         });
         const decalMat = (map, dw) => new MeshStandardMaterial({ map, transparent: true, alphaTest: 0.03, depthWrite: false, roughness: 0.6, metalness: 0.3, polygonOffset: true, polygonOffsetFactor: dw || -4, polygonOffsetUnits: -4, side: DoubleSide });
-        const mats = { torn: torn.map((t) => decalMat(t)), missing: [decalMat(missing, -5)], scorch: scorch.map((t) => decalMat(t, -3)), streak: [decalMat(streak, -3)] };
+        const mats = { torn: torn.map((t) => decalMat(t)), missing: missingV.map((t) => decalMat(t, -5)), scorch: scorch.map((t) => decalMat(t, -3)), streak: [decalMat(streak, -3)] };
         ownShip.updateMatrixWorld(true);
         const rc = new Raycaster(), targets = [];
         ownShip.traverse((o) => {
@@ -34347,7 +34669,10 @@
           for (let tries = 0; tries < 12; tries++) {
             let h = null;
             if (where2 === "spine") h = cast((R() - 0.5) * 1, 3, -1.3 - R() * 7.5, 0, -1, 0);
-            else if (where2 === "side") {
+            else if (where2 === "spineOff") {
+              const sg = R() < 0.5 ? -1 : 1;
+              h = cast(sg * (0.5 + R() * 0.35), 3, -1.6 - R() * 7.2, 0, -1, 0);
+            } else if (where2 === "side") {
               const sg = R() < 0.5 ? -1 : 1;
               const z = -1.5 - R() * 8;
               h = cast(sg * 3, topAt(z) - 0.25 - R() * 0.35, z, -sg, -0.2, 0);
@@ -34428,7 +34753,7 @@
           if (h) place(mats.streak[0], h, 0.3 + R() * 0.25, 1.8 + R() * 1.6, 58 - i * 9, true);
         }
         for (let i = 0; i < 13; i++) {
-          const h = pickSurf(where([["spine", 0.3], ["side", 0.4], ["wing", 0.88], ["stab", 1]]));
+          const h = pickSurf(where([["spineOff", 0.3], ["side", 0.4], ["wing", 0.88], ["stab", 1]]));
           if (!h) continue;
           const s2 = 0.42 + R() * 0.4, th = 68 - i * 5.1;
           place(mats.torn[i % 3], h, s2, s2 * (0.8 + R() * 0.4), th, false);
@@ -34453,10 +34778,10 @@
           ownDmg.items.push({ th: th - 2, obj: flap });
         }
         for (let i = 0; i < 10; i++) {
-          const h = pickSurf(where([["spine", 0.3], ["side", 0.4], ["wing", 1]]));
+          const h = pickSurf(where([["spineOff", 0.3], ["side", 0.45], ["wing", 1]]));
           if (h) {
-            const s2 = 0.6 + R() * 0.45;
-            place(mats.missing[0], h, s2, s2 * (0.7 + R() * 0.3), 48 - i * 4.6, false);
+            const s2 = 0.5 + R() * 0.4;
+            place(mats.missing[i % 3], h, s2, s2 * (0.7 + R() * 0.3), 48 - i * 4.6, false);
           }
         }
         const fc = ownDmg.cuts[1], scm = ownDmg.cuts[0];
@@ -34540,9 +34865,269 @@
     })();
     const _ov = new Vector3();
     const _fallE = new Euler();
-    let _ownT = performance.now();
+    const BOMB_N = 200;
+    const bombGeo = (() => {
+      const body = new CylinderGeometry(0.17, 0.17, 0.95, 10);
+      body.rotateX(Math.PI / 2);
+      const nose = new SphereGeometry(0.17, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+      nose.rotateX(Math.PI / 2);
+      nose.scale(1, 1, 1.9);
+      nose.translate(0, 0, 0.475);
+      const tail = new CylinderGeometry(0.17, 0.06, 0.42, 10);
+      tail.rotateX(-Math.PI / 2);
+      tail.translate(0, 0, -0.68);
+      const fin1 = new BoxGeometry(0.5, 0.02, 0.3);
+      fin1.translate(0, 0, -0.78);
+      const fin2 = new BoxGeometry(0.02, 0.5, 0.3);
+      fin2.translate(0, 0, -0.78);
+      const parts = [body, nose, tail, fin1, fin2].map((g) => g.index ? g.toNonIndexed() : g);
+      let n = 0;
+      for (const g of parts) n += g.attributes.position.count;
+      const P = new Float32Array(n * 3), N = new Float32Array(n * 3);
+      let o = 0;
+      for (const g of parts) {
+        g.computeVertexNormals();
+        P.set(g.attributes.position.array, o * 3);
+        N.set(g.attributes.normal.array, o * 3);
+        o += g.attributes.position.count;
+      }
+      const G2 = new BufferGeometry();
+      G2.setAttribute("position", new BufferAttribute(P, 3));
+      G2.setAttribute("normal", new BufferAttribute(N, 3));
+      return G2;
+    })();
+    const bombMesh = new InstancedMesh(bombGeo, new MeshStandardMaterial({ color: 4079920, roughness: 0.7, metalness: 0.2 }), BOMB_N);
+    bombMesh.count = 0;
+    bombMesh.frustumCulled = false;
+    scene.add(bombMesh);
+    const bombs = [];
+    const bombStats = { live: 0, dropped: 0 };
+    const _bm = new Matrix4(), _bq = new Quaternion(), _bs = new Vector3(1.3, 1.3, 1.3), _bp = new Vector3(), _be = new Euler();
+    function dropBombs(list) {
+      for (const st of list) {
+        for (let k = 0; k < st.n && bombs.length < BOMB_N; k++) {
+          bombs.push({ x0: st.x + (k % 2 ? 0.28 : -0.28), y0: st.y + k % 3 * 0.12, z0: st.z + (st.own ? 0 : 0.3), t: -(st.delay + k * 0.12), yawJ: (Math.random() - 0.5) * 0.1, rollS: (Math.random() - 0.5) * 1.2, lead: st.lead });
+          bombStats.dropped++;
+        }
+      }
+    }
+    function updateBombs(dt) {
+      let n = 0;
+      for (let i = bombs.length - 1; i >= 0; i--) {
+        const b = bombs[i];
+        b.t += dt;
+        if (b.t > 14) bombs.splice(i, 1);
+      }
+      for (const b of bombs) {
+        if (b.t < 0 || n >= BOMB_N) continue;
+        const t = b.t;
+        _bp.set(b.x0, b.y0 - 0.5 * 6.5 * t * t, b.z0 - 0.5 * 1.1 * t * t - 0.02 * t * t * t);
+        const vy = -6.5 * t, vz = -1.1 * t - 0.06 * t * t;
+        const pitch = Math.atan2(-vy, 83 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05;
+        _be.set(pitch, b.yawJ, b.rollS * t * 0.3, "YXZ");
+        _bq.setFromEuler(_be);
+        _bm.compose(_bp, _bq, _bs);
+        bombMesh.setMatrixAt(n++, _bm);
+      }
+      bombMesh.count = n;
+      bombMesh.instanceMatrix.needsUpdate = true;
+      bombStats.live = n;
+    }
+    const wreck = { fires: [], srcs: [], tail: null, parts: [], emit: 0, on: false, last: [null, null, null] };
+    {
+      const srcDef = [[1.9, -0.7, 1], [-1.9, -0.9, 0.9], [4.3, 0.6, 0.85], [-4.3, 0.4, 0.75]];
+      for (const [x, zOff, s] of srcDef) {
+        const ax = Math.abs(x), wy = -2.35 + ax * 0.0787, zb = 1.6 - (ax - 1) * (2 / 12) - 3.2;
+        const top = wy + (ax < 3 ? 0.55 : 0.75);
+        const src = new Object3D();
+        src.position.set(x, top, zb + zOff);
+        ownShip.add(src);
+        wreck.srcs.push(src);
+        for (let k = 0; k < 4; k++) {
+          const f = new Sprite(new SpriteMaterial({ map: fireTex, color: k === 3 ? 16742960 : 16777215, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.95 }));
+          if (k < 3) f.position.set(x + (k ? (Math.random() - 0.5) * 0.3 : 0), top + k * 0.25, zb + zOff - k * 1.9);
+          else f.position.set(x, wy - 0.45, zb + zOff - 0.6);
+          f.visible = false;
+          f.userData.s = s * (k === 0 ? 1.15 : k === 3 ? 0.9 : 1 - k * 0.22);
+          f.renderOrder = 3;
+          ownShip.add(f);
+          wreck.fires.push(f);
+        }
+      }
+    }
+    const WP_N = 460, wpPool = [];
+    const wpTex = (() => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 128;
+      const x = c.getContext("2d");
+      let sd = 31;
+      const R = () => {
+        sd = sd * 16807 % 2147483647;
+        return sd / 2147483647;
+      };
+      for (let k = 0; k < 26; k++) {
+        const px2 = 64 + (R() - 0.5) * 56, py2 = 64 + (R() - 0.5) * 56, r = 16 + R() * 26;
+        const g = x.createRadialGradient(px2, py2, 0, px2, py2, r);
+        g.addColorStop(0, "rgba(255,255,255," + (0.35 + R() * 0.3) + ")");
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        x.fillStyle = g;
+        x.beginPath();
+        x.arc(px2, py2, r, 0, Math.PI * 2);
+        x.fill();
+      }
+      const t = new CanvasTexture(c);
+      t.colorSpace = SRGBColorSpace;
+      return t;
+    })();
+    for (let i = 0; i < WP_N; i++) {
+      const sp = new Sprite(new SpriteMaterial({ map: wpTex, color: 1184016, transparent: true, depthWrite: false, opacity: 0 }));
+      sp.visible = false;
+      scene.add(sp);
+      wpPool.push({ sp, age: 0, life: 0, s0: 1, s1: 10, a: 0.8, rot: 0 });
+    }
+    let wpIdx = 0;
+    function wpEmit(pos, o) {
+      const p = wpPool[wpIdx];
+      wpIdx = (wpIdx + 1) % WP_N;
+      p.sp.position.copy(pos);
+      p.age = 0;
+      p.life = o.life * (0.85 + Math.random() * 0.3);
+      p.s0 = o.s0;
+      p.s1 = o.s1 * (0.8 + Math.random() * 0.4);
+      p.a = o.a;
+      p.sp.material.color.setHex(o.col);
+      p.sp.material.rotation = Math.random() * 6.28;
+      p.sp.visible = true;
+    }
+    const wpStats = { live: 0 };
+    function updateWreckPuffs(dt) {
+      let live = 0;
+      for (const p of wpPool) {
+        if (!p.sp.visible) continue;
+        p.age += dt;
+        if (p.age >= p.life) {
+          p.sp.visible = false;
+          continue;
+        }
+        live++;
+        const k = p.age / p.life;
+        p.sp.position.z -= 83 * dt;
+        p.sp.position.y += 0.6 * dt;
+        const sc = p.s0 + (p.s1 - p.s0) * Math.sqrt(k);
+        p.sp.scale.set(sc, sc, 1);
+        p.sp.material.opacity = p.a * Math.pow(1 - k, 1.2) * Math.min(1, p.age * 4 + 0.3);
+      }
+      wpStats.live = live;
+    }
+    const _wpA = new Vector3();
+    function wpTrail(slot, pos, step, o) {
+      const L = wreck.last[slot];
+      if (!L) {
+        wreck.last[slot] = pos.clone();
+        wpEmit(pos, o);
+        return;
+      }
+      L.z -= 83 * o._dt;
+      const d = L.distanceTo(pos), n = Math.min(8, Math.floor(d / step));
+      for (let i = 1; i <= n; i++) {
+        _wpA.lerpVectors(L, pos, i / n);
+        _wpA.x += (Math.random() - 0.5) * 1.2;
+        _wpA.y += (Math.random() - 0.5) * 1.2;
+        wpEmit(_wpA, o);
+      }
+      if (n > 0 || d > step * 8) L.copy(pos);
+    }
+    function updateOwnWreck(FALL, rdt) {
+      const S = FALL && FALL.ship;
+      const on = !!(S && (FALL.phase === "chute" || FALL.phase === "fall" && (S.burn || 0) > 0));
+      if (!S) {
+        if (wreck.on || wreck.tail) {
+          for (const q of wreck.parts) q.orig.visible = true;
+          if (wreck.tail) scene.remove(wreck.tail);
+          wreck.tail = null;
+          wreck.parts.length = 0;
+          for (const f of wreck.fires) f.visible = false;
+          wreck.last = [null, null, null];
+        }
+        wreck.on = false;
+        return;
+      }
+      wreck.on = on;
+      const burn = S.burn || 0;
+      const fl = 0.8 + 0.2 * Math.sin(pnow() * 0.013);
+      for (const f of wreck.fires) {
+        f.visible = on && burn > 0;
+        if (f.visible) {
+          const k = (2.4 + burn * 3) * f.userData.s * (0.8 + Math.random() * 0.4) * fl;
+          f.scale.set(k * 0.85, k * (1.2 + Math.random() * 0.6), 1);
+          f.material.opacity = 0.7 + Math.random() * 0.3;
+        }
+      }
+      if (on && burn > 0) {
+        const dtE = Math.min(0.25, rdt);
+        for (let i = 0; i < 2; i++) {
+          wreck.srcs[i].getWorldPosition(_ov);
+          wpTrail(i, _ov, 3, { _dt: dtE, life: 10, s0: 4.6, s1: 26 + burn * 8, a: 0.8, col: i ? 1381137 : 920844 });
+        }
+      }
+      if (S.tailOff && !wreck.tail) {
+        const tg = new Group();
+        tg.position.copy(ownShip.position);
+        tg.quaternion.copy(ownShip.quaternion);
+        ownShip.traverse((o) => {
+          if (!o.isMesh || !o.visible || o.parent !== ownShip) return;
+          if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+          const cz = o.geometry.boundingSphere.center.z + o.position.z;
+          if (o.userData.part === "fin" || o.userData.part === "stab" || cz < -10.3 && o.geometry.boundingSphere.radius < 7) wreck.parts.push({ orig: o });
+        });
+        for (const q of wreck.parts) {
+          const c = new Mesh(q.orig.geometry, q.orig.material);
+          c.position.copy(q.orig.position);
+          c.quaternion.copy(q.orig.quaternion);
+          c.scale.copy(q.orig.scale);
+          tg.add(c);
+          q.orig.visible = false;
+        }
+        const tf = new Sprite(new SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0.9 }));
+        tf.position.set(0, -0.6, -10.8);
+        tf.scale.set(2.6, 3.4, 1);
+        tg.add(tf);
+        tg.userData = { vx: (Math.random() - 0.5) * 16, vy: 6, vz: -14, wx: (Math.random() - 0.5) * 3, wy: (Math.random() - 0.5) * 2, wz: 1.5 + Math.random() * 2, fire: tf, t: 0 };
+        scene.add(tg);
+        wreck.tail = tg;
+        _ov.set(0, 0, -11).applyMatrix4(ownShip.matrixWorld);
+        spawnDebris(_ov.x, _ov.y, _ov.z, 60, 0.5);
+        emitSmoke(_ov, true, true);
+      }
+      if (wreck.tail) {
+        const T = wreck.tail, u = T.userData, dt = Math.min(0.05, rdt);
+        u.t += dt;
+        u.vy -= 6.5 * dt;
+        u.vy = Math.max(u.vy, -60);
+        u.vz += (-83 - u.vz) * Math.min(1, 0.35 * dt);
+        T.position.x += u.vx * dt;
+        T.position.y += u.vy * dt;
+        T.position.z += u.vz * dt;
+        T.rotateX(u.wx * dt);
+        T.rotateY(u.wy * dt);
+        T.rotateZ(u.wz * dt);
+        u.fire.visible = u.t < 14;
+        if (u.fire.visible) u.fire.material.opacity = 0.6 + Math.random() * 0.35;
+        _ov.set(0, 0, -11).applyMatrix4(T.matrixWorld);
+        if (u.t < 24) {
+          if (!u.lastP) u.lastP = null;
+          const Lp = u.lastP;
+          if (!Lp || Lp.distanceTo(_ov) > 3) {
+            wpEmit(_ov, { life: 7, s0: 1.6, s1: 11, a: 0.6, col: 1841688 });
+            u.lastP = _ov.clone();
+          }
+        }
+      }
+    }
+    let _ownT = pnow();
+    let _lift = 0, _liftP = 0;
     function updateOwnShip(opts) {
-      const now2 = performance.now();
+      const now2 = pnow();
       const rdt = Math.min(0.25, (now2 - _ownT) / 1e3);
       const dt = Math.min(0.05, rdt);
       _ownT = now2;
@@ -34552,10 +35137,11 @@
         ownShip.position.set(S.x, S.y, S.z);
         ownShip.quaternion.setFromEuler(_fallE.set(S.pd || 0, S.yaw || 0, -(S.roll || 0), "YXZ"));
       } else {
-        ownShip.position.set(CAM.x, CAM.y, CAM.z);
-        ownShip.rotation.set(0, 0, -(opts.roll || 0));
+        ownShip.position.set(CAM.x, CAM.y + _lift, CAM.z);
+        ownShip.rotation.set(-_liftP, 0, -(opts.roll || 0));
       }
       ownShip.updateMatrixWorld(true);
+      updateOwnWreck(FALL, rdt);
       const engs = opts.own && opts.own.engines || [];
       for (let i = 0; i < 4; i++) {
         const E = ownEngines[i], st = engs[i] || { fire: 0, out: false };
@@ -35053,6 +35639,7 @@
       }
     }
     const ownChute = new Group();
+    const _legDir = new Vector3();
     {
       const dome = new Mesh(canopyGeo, chuteMatUS);
       dome.scale.set(2.9, 1.9, 2.9);
@@ -35064,20 +35651,37 @@
         p.push(Math.cos(a) * 2.9 * Math.sin(1.15), 4.4 + 1.9 * Math.cos(1.15), Math.sin(a) * 2.9 * Math.sin(1.15), k < 6 ? 0.22 : -0.22, 0.35, 0.05);
       }
       ownChute.add(new LineSegments(new BufferGeometry().setAttribute("position", new Float32BufferAttribute(p, 3)), new LineBasicMaterial({ color: 9078136 })));
-      const bootM = new MeshLambertMaterial({ color: 2366484 });
-      for (const sx of [-0.14, 0.14]) {
-        const b = new Mesh(new BoxGeometry(0.12, 0.14, 0.3), bootM);
-        b.position.set(sx, -1.45, 0.12);
-        ownChute.add(b);
-        const leg = new Mesh(new CylinderGeometry(0.07, 0.08, 0.8, 6), new MeshLambertMaterial({ color: 4866864 }));
-        leg.position.set(sx, -1, 0.02);
-        ownChute.add(leg);
+      const legs = new Group();
+      ownChute.add(legs);
+      const suitM = new MeshLambertMaterial({ color: 4867377 }), bootM = new MeshLambertMaterial({ color: 2760470 }), soleM = new MeshLambertMaterial({ color: 1183242 });
+      const limb = (a, b, r, m) => {
+        const d = new Vector3().subVectors(b, a), L = d.length();
+        const g = new CapsuleGeometry(r, L, 4, 12);
+        const me = new Mesh(g, m);
+        me.position.copy(a).addScaledVector(d, 0.5);
+        me.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), d.normalize());
+        legs.add(me);
+        return me;
+      };
+      for (const sx of [-0.13, 0.13]) {
+        const hip = new Vector3(sx, -0.62, -0.1), knee = new Vector3(sx * 1.2, -0.78, 0.2), ank = new Vector3(sx * 1.15, -1.22, 0.24);
+        limb(hip, knee, 0.068, suitM);
+        limb(knee, ank, 0.052, suitM);
+        const boot = new Mesh(new CapsuleGeometry(0.058, 0.14, 4, 10), bootM);
+        boot.rotation.x = Math.PI / 2 - 0.25;
+        boot.position.set(ank.x, ank.y - 0.06, ank.z + 0.08);
+        boot.scale.set(1, 1, 0.8);
+        legs.add(boot);
+        const sole = new Mesh(new BoxGeometry(0.1, 0.025, 0.24), soleM);
+        sole.rotation.x = -0.25;
+        sole.position.set(ank.x, ank.y - 0.13, ank.z + 0.09);
+        legs.add(sole);
       }
       const streamer = new Mesh(canopyGeo, chuteMatUS);
       streamer.scale.set(0.35, 3.2, 0.35);
       streamer.position.y = 3;
       ownChute.add(streamer);
-      ownChute.userData = { dome, streamer };
+      ownChute.userData = { dome, streamer, legs };
       ownChute.visible = false;
       scene.add(ownChute);
     }
@@ -35156,7 +35760,7 @@
       if (rb.last) rb.v += rb.last.distanceTo(pos) / 9;
       else rb.last = new Vector3();
       rb.last.copy(pos);
-      rb.lastT = performance.now();
+      rb.lastT = pnow();
       if (rb.pts.length >= RIB_P) rb.pts.shift();
       rb.pts.push({ x: pos.x, y: pos.y, z: pos.z, age: 0, life: o.life || 2.5, w0: o.w0 || 0.4, w1: o.w1 || 4, a: o.a || 0.5, c: o.col || [0.2, 0.2, 0.2], v: rb.v, dz: o.drift == null ? 55 : o.drift });
       ribStats.emits++;
@@ -36197,9 +36801,9 @@
         d.life = d.hot ? 0.25 + Math.random() * 0.35 : 1.4 + Math.random() * 1.6;
       }
     }
-    let debLast = performance.now();
+    let debLast = pnow();
     function updateDebris(dz) {
-      const now2 = performance.now(), dt = Math.min(0.05, (now2 - debLast) / 1e3);
+      const now2 = pnow(), dt = Math.min(0.05, (now2 - debLast) / 1e3);
       debLast = now2;
       for (let i = 0; i < DEB_N; i++) {
         const d = deb[i];
@@ -36429,11 +37033,11 @@
     }
     for (const g of friendlyPool) addContrails(g, NACELLE_X.map((nx) => [nx * B17_VIS, -0.01 * B17_VIS, -0.05 * B17_VIS]));
     if (false) addContrails(ownShip, [[8.3, -2.3, -2.5], [4.3, -2.5, -3], [-4.3, -2.5, -3], [-8.3, -2.3, -2.5]]);
-    let _lastT = performance.now();
+    let _lastT = pnow();
     const _v = new Vector3();
     let _odo = null, _hd = 0;
     function syncMission(opts) {
-      const now2 = performance.now();
+      const now2 = pnow();
       const dt = Math.min(0.05, (now2 - _lastT) / 1e3);
       _lastT = now2;
       const geo = opts.geo || { x: 0, z: 0, rot: 0 };
@@ -36511,6 +37115,14 @@
         g.rotation.y = yaw;
         g.rotation.x = -pitch;
         g.rotation.z = -(f.bank || 0);
+        {
+          const W = g.userData.wob, tt = window.__FG_SIMT || 0;
+          if (W && !f.spiraling) {
+            g.rotation.x += Math.sin(tt * W.fp * 6.283 + W.ph) * 9e-3;
+            g.rotation.y += Math.sin(tt * W.fy * 4.1 + W.ph * 1.7) * 7e-3;
+          }
+          if (g.userData.hazeMats) b17Haze(g, g.position.distanceTo(camera.position));
+        }
         const engs = g.userData.engines;
         g.updateMatrixWorld(true);
         for (let k = 0; k < 4; k++) {
@@ -36542,6 +37154,8 @@
         }
       }
       updateSmoke(dt);
+      updateWreckPuffs(dt);
+      updateBombs(dt);
       updateRibbons(dt);
       updateContrails();
     }
@@ -37118,28 +37732,89 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     toOverlay(cage);
     const cageE = new Euler();
     function updateCage(pitch, hidden) {
-      cage.visible = !hidden && pitch > -0.38;
+      cage.visible = !hidden;
       arch.visible = pitch > -0.12;
-      const p = Math.max(pitch, -0.14);
+      const p = Math.max(pitch, 0);
       cage.rotation.set(-p, 0, 0);
-      cage.position.y = pitch >= -0.14 ? 0 : -Math.min(0.6, (-0.14 - pitch) * 2.4);
+      cage.position.y = 0;
     }
     const sightBox = new Group();
     {
-      const boxM = new MeshStandardMaterial({ color: 1513754, roughness: 0.55, metalness: 0.45, envMapIntensity: 0.4 });
-      const b = new Mesh(new BoxGeometry(0.2, 0.1, 0.16), boxM);
-      sightBox.add(b);
-      const lens = new Mesh(new BoxGeometry(0.1, 0.05, 5e-3), new MeshStandardMaterial({ color: 3828336, roughness: 0.1, metalness: 0.6, envMapIntensity: 1 }));
-      lens.position.set(-0.02, 0.015, 0.081);
-      sightBox.add(lens);
-      const bg = new SphereGeometry(6e-3, 6, 5);
-      for (const [bx, by] of [[-0.09, 0.04], [0.09, 0.04], [-0.09, -0.04], [0.09, -0.04]]) {
+      const stencil = (() => {
+        const c = document.createElement("canvas");
+        c.width = 256;
+        c.height = 128;
+        const x = c.getContext("2d");
+        x.fillStyle = "#4a5236";
+        x.fillRect(0, 0, 256, 128);
+        let sd = 5;
+        const r = () => {
+          sd = sd * 16807 % 2147483647;
+          return sd / 2147483647;
+        };
+        for (let i = 0; i < 900; i++) {
+          x.fillStyle = r() < 0.5 ? "rgba(0,0,0,0.12)" : "rgba(210,215,190,0.07)";
+          x.fillRect(r() * 256, r() * 128, 1 + r() * 4, 1 + r() * 2);
+        }
+        x.strokeStyle = "rgba(0,0,0,0.35)";
+        x.lineWidth = 3;
+        for (const yy of [30, 98]) {
+          x.beginPath();
+          x.moveTo(0, yy);
+          x.lineTo(256, yy);
+          x.stroke();
+        }
+        x.fillStyle = "rgba(225,220,190,0.8)";
+        x.font = "bold 20px monospace";
+        x.fillText("CAL .50", 64, 58);
+        x.font = "bold 13px monospace";
+        x.fillText("M2 LINKED  400 RDS", 44, 80);
+        x.fillStyle = "#c9c3a6";
+        x.fillRect(8, 40, 40, 44);
+        x.fillStyle = "rgba(40,40,50,0.7)";
+        for (let yy = 48; yy < 80; yy += 6) x.fillRect(12, yy, 32, 1.5);
+        for (let i = 0; i < 60; i++) {
+          x.fillStyle = "rgba(180,185,170,0.45)";
+          x.fillRect(r() * 256, r() < 0.5 ? r() * 4 : 124 + r() * 4, 3 + r() * 14, 1);
+        }
+        const t = new CanvasTexture(c);
+        t.colorSpace = SRGBColorSpace;
+        t.anisotropy = 4;
+        return t;
+      })();
+      const odBox = new MeshStandardMaterial({ color: 10133640, map: stencil, roughness: 0.62, metalness: 0.28, envMapIntensity: 0.35 });
+      const odPlain = new MeshStandardMaterial({ color: 4541491, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.35 });
+      const steelD = new MeshStandardMaterial({ color: 2895404, roughness: 0.45, metalness: 0.8, envMapIntensity: 0.5 });
+      const W = 0.13, Hh = 0.062, D = 0.1;
+      const body = new Mesh(new BoxGeometry(W, Hh, D), [odPlain, odPlain, odPlain, odPlain, odBox, odPlain]);
+      sightBox.add(body);
+      const lid = new Mesh(new BoxGeometry(W + 6e-3, 8e-3, D + 6e-3), odPlain);
+      lid.position.y = Hh / 2 + 4e-3;
+      sightBox.add(lid);
+      for (const k of [-1, 0, 1]) {
+        const rib = new Mesh(new BoxGeometry(5e-3, Hh * 0.8, 4e-3), odPlain);
+        rib.position.set(k * 0.042, 0, D / 2 + 2e-3);
+        sightBox.add(rib);
+      }
+      const latch = new Mesh(new BoxGeometry(0.018, 0.02, 6e-3), steelD);
+      latch.position.set(0, Hh / 2 - 4e-3, D / 2 + 5e-3);
+      sightBox.add(latch);
+      const hinge = new Mesh(new CylinderGeometry(4e-3, 4e-3, W * 0.9, 8), steelD);
+      hinge.rotation.z = Math.PI / 2;
+      hinge.position.set(0, Hh / 2 + 4e-3, -D / 2 - 2e-3);
+      sightBox.add(hinge);
+      const throat = new Mesh(new BoxGeometry(0.05, 0.022, 0.03), steelD);
+      throat.position.set(-W / 2 + 0.03, Hh / 2 + 0.018, -0.01);
+      throat.rotation.z = 0.25;
+      sightBox.add(throat);
+      const bg = new SphereGeometry(35e-4, 6, 5);
+      for (const [bx, by] of [[-0.058, 0.024], [0.058, 0.024], [-0.058, -0.024], [0.058, -0.024]]) {
         const q = new Mesh(bg, boltMat);
-        q.position.set(bx, by, 0.081);
+        q.position.set(bx, by, D / 2 + 2e-3);
         sightBox.add(q);
       }
-      sightBox.position.set(0.27, -0.245, -0.5);
-      sightBox.rotation.set(0.1, -0.4, 0);
+      sightBox.position.set(0.29, -0.228, -0.5);
+      sightBox.rotation.set(0.2, -0.42, 0.02);
       camera.add(sightBox);
       toOverlay(sightBox);
     }
@@ -37172,7 +37847,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
           const h = opts.heat || 0, on = h > 0.3;
           gg.shim.visible = on;
           if (on) {
-            const t = performance.now() * 1e-3;
+            const t = pnow() * 1e-3;
             gg.shim.material.map.offset.set(Math.sin(t * 1.7 + i) * 0.04, -t * 0.6);
             gg.shim.material.opacity = 0.16 * Math.min(1, (h - 0.3) / 0.5);
           }
@@ -37712,7 +38387,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     }
     let prCap = 2, prT = 0, prN = 0, prSum = 0, prDone = false;
     function prWatch() {
-      const now2 = performance.now();
+      const now2 = pnow();
       if (prDone || window.__FG_PR) {
         prT = now2;
         return;
@@ -37767,7 +38442,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       scene.add(s);
       blasts.push({ s, life: 0 });
     }
-    let blastIdx = 0, _dbT = performance.now();
+    let blastIdx = 0, _dbT = pnow();
     function spawnKillFx(pos, e) {
       const b = blasts[blastIdx];
       blastIdx = (blastIdx + 1) % blasts.length;
@@ -37787,7 +38462,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       for (let i = 0; i < 5; i++) emitSmoke(pos, true, true, { life: 3.5, s0: 3, s1: 14, a: 0.75 });
     }
     function updateDebris() {
-      const now2 = performance.now();
+      const now2 = pnow();
       const dt = Math.min(0.05, (now2 - _dbT) / 1e3);
       _dbT = now2;
       for (const d of debris) {
@@ -37885,6 +38560,25 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     specks.frustumCulled = false;
     specks.renderOrder = -1;
     scene.add(specks);
+    const GL_N = 64, glGeo = new BufferGeometry();
+    glGeo.setAttribute("position", new BufferAttribute(new Float32Array(GL_N * 3), 3));
+    glGeo.setAttribute("aSize", new BufferAttribute(new Float32Array(GL_N), 1));
+    glGeo.setAttribute("aCol", new BufferAttribute(new Float32Array(GL_N * 4), 4));
+    glGeo.setDrawRange(0, 0);
+    const glMat = new ShaderMaterial({
+      vertexShader: "attribute float aSize; attribute vec4 aCol; varying vec4 vC; void main(){ vC = aCol; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_PointSize = aSize; }",
+      fragmentShader: "varying vec4 vC; void main(){ vec2 q = gl_PointCoord - 0.5; float r = length(q) * 2.0; float core = exp(-r * r * 9.0); float star = exp(-abs(q.x) * 40.0) * exp(-abs(q.y) * 5.0) + exp(-abs(q.y) * 40.0) * exp(-abs(q.x) * 5.0); float a = vC.a * (core + 0.35 * star) * (1.0 - smoothstep(0.8, 1.0, r)); if (a < 0.004) discard; gl_FragColor = vec4(vC.rgb * a, a);\n#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}",
+      depthTest: true,
+      depthWrite: false,
+      transparent: true,
+      blending: AdditiveBlending
+    });
+    const glints = new Points(glGeo, glMat);
+    glints.frustumCulled = false;
+    glints.renderOrder = 0;
+    scene.add(glints);
+    const glPrev = /* @__PURE__ */ new Map();
+    const glStats = { n: 0, max: 0 };
     const _hz = new Color();
     const speckStats = [];
     const SOFT_INK = (() => {
@@ -37918,7 +38612,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const pos = speckGeo.attributes.position.array, sz = speckGeo.attributes.aSize.array, col = speckGeo.attributes.aCol.array;
       const pr = renderer.getPixelRatio(), dpr = window.devicePixelRatio || 1;
       _hz.copy(scene.fog ? scene.fog.color : SKY_HORIZON).convertSRGBToLinear();
-      const t = performance.now() * 1e-3;
+      const t = pnow() * 1e-3;
       const sd = skyU.uSun.value;
       let n = 0;
       speckStats.length = 0;
@@ -37947,6 +38641,47 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       speckGeo.attributes.position.needsUpdate = true;
       speckGeo.attributes.aSize.needsUpdate = true;
       speckGeo.attributes.aCol.needsUpdate = true;
+      {
+        const gp = glGeo.attributes.position.array, gs = glGeo.attributes.aSize.array, gc = glGeo.attributes.aCol.array;
+        let g = 0, gmax = 0;
+        const now2 = t;
+        const sx = sd.x, sy = sd.y, sz2 = sd.z;
+        for (let i = 0; i < speckList.length && g < GL_N; i += 3) {
+          const e = speckList[i], d = speckList[i + 1];
+          if (d < 480 || d > SPECK_MAX || e.ux == null || e.id == null) continue;
+          const cx = (camera.position.x - e.x) / d, cy = (camera.position.y - e.y) / d, cz = (camera.position.z - e.z) / d;
+          let hx = sx + cx, hy = sy + cy, hz = sz2 + cz;
+          const hl = Math.hypot(hx, hy, hz) || 1;
+          hx /= hl;
+          hy /= hl;
+          hz /= hl;
+          const nu = e.ux * hx + e.uy * hy + e.uz * hz;
+          const spec = Math.pow(Math.max(0, nu), 90) + 0.5 * Math.pow(Math.max(0, -nu), 90);
+          const pv = glPrev.get(e.id);
+          let rate = 0;
+          if (pv && now2 > pv.t) rate = Math.acos(Math.max(-1, Math.min(1, pv.x * e.ux + pv.y * e.uy + pv.z * e.uz))) / Math.max(0.016, now2 - pv.t);
+          glPrev.set(e.id, { x: e.ux, y: e.uy, z: e.uz, t: now2 });
+          const k = spec * Math.min(1, 0.25 + rate * 0.7) * (1 - fogF(d) * 0.6);
+          if (k < 0.04) continue;
+          gmax = Math.max(gmax, k);
+          gp[g * 3] = e.x;
+          gp[g * 3 + 1] = e.y;
+          gp[g * 3 + 2] = e.z;
+          gs[g] = (7 + 9 * k) * pr / dpr;
+          gc[g * 4] = 1;
+          gc[g * 4 + 1] = 0.94;
+          gc[g * 4 + 2] = 0.8;
+          gc[g * 4 + 3] = Math.min(1, k * 1.4);
+          g++;
+        }
+        if (glPrev.size > 200) glPrev.clear();
+        glGeo.setDrawRange(0, g);
+        glStats.n = g;
+        glStats.max = +gmax.toFixed(3);
+        glGeo.attributes.position.needsUpdate = true;
+        glGeo.attributes.aSize.needsUpdate = true;
+        glGeo.attributes.aCol.needsUpdate = true;
+      }
       speckList.length = 0;
     }
     const slotOf = /* @__PURE__ */ new Map();
@@ -37954,13 +38689,15 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     function sync(enemiesArr, gunnerState, opts = {}) {
       const shake = gunnerState.shake || 0;
       const recoil = gunnerState.recoil || 0;
-      const sx = (Math.sin(performance.now() * 0.097) * 0.095 + Math.sin(performance.now() * 0.171) * 0.048) * shake;
-      const sy = (Math.cos(performance.now() * 0.113) * 0.072 + Math.sin(performance.now() * 0.203) * 0.038) * shake;
+      const sx = (Math.sin(pnow() * 0.097) * 0.095 + Math.sin(pnow() * 0.171) * 0.048) * shake;
+      const sy = (Math.cos(pnow() * 0.113) * 0.072 + Math.sin(pnow() * 0.203) * 0.038) * shake;
       const FALL = opts.fall;
       if (FALL && FALL.eye) camera.position.set(FALL.eye.x + sx, FALL.eye.y + sy, FALL.eye.z);
-      else camera.position.set(CAM.x + sx, CAM.y + sy + recoil * 0.07, CAM.z);
+      else camera.position.set(CAM.x + sx, CAM.y + sy + recoil * 0.07 + (gunnerState.lift || 0), CAM.z);
+      _lift = FALL ? 0 : gunnerState.lift || 0;
+      _liftP = FALL ? 0 : gunnerState.liftP || 0;
       const yaw = gunnerState.yaw;
-      const pitch = gunnerState.pitch;
+      const pitch = gunnerState.pitch + (FALL ? 0 : gunnerState.liftP || 0);
       const look = new Vector3(
         Math.sin(yaw) * Math.cos(pitch),
         Math.sin(pitch),
@@ -37987,6 +38724,14 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         if (inChute) {
           ownChute.position.copy(camera.position);
           ownChute.rotation.set(0, 0, -(FALL.sway || 0) * 0.8);
+          {
+            const dv = camera.getWorldDirection(_legDir);
+            const hd = Math.atan2(dv.x, dv.z);
+            const L = ownChute.userData.legs;
+            let dd = hd - L.rotation.y;
+            dd = Math.atan2(Math.sin(dd), Math.cos(dd));
+            L.rotation.y += dd * Math.min(1, 0.06 + Math.abs(dd) * 0.08);
+          }
           const open = (FALL.chuteT || 0) > 1.3;
           ownChute.userData.dome.visible = open;
           ownChute.userData.streamer.visible = !open && (FALL.chuteT || 0) > 0.5;
@@ -38223,6 +38968,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       _trQprev.copy(_trQ);
       _trHave = true;
       const w = _trW.length(), a = Math.min(0.35, w * TR_BLUR);
+      trStats.viewRateDeg = +(w * 180 / Math.PI).toFixed(1);
+      if (!window.__FG_TR_SMEAR) return null;
       if (a < 1e-5) return null;
       return _trDq.setFromAxisAngle(_trV.copy(_trW).multiplyScalar(1 / w), a);
     }
@@ -38392,6 +39139,16 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       _ownShip: ownShip,
       get speckStats() {
         return speckStats.slice();
+      },
+      dropBombs,
+      get bombStats() {
+        return Object.assign({}, bombStats);
+      },
+      get glintStats() {
+        return { n: glStats.n, max: glStats.max };
+      },
+      get wreckStats() {
+        return { puffs: wpStats.live, fires: wreck.fires.filter((f) => f.visible).length, tail: !!wreck.tail };
       },
       lodOf: (id) => {
         const i = slotOf.get(id);

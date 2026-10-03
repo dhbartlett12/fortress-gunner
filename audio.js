@@ -143,17 +143,50 @@
       noiseHit(G, tt, 0.05, 1100, 1.0, 0.3 * near, pan, lp);
     }
   }
+  // 1.4.1: rounds hitting OUR ship — sharp metallic cracks, tearing aluminium, a debris rattle and a low thud through
+  // the airframe; every hit different (which layers, pitch, length, pan). 1.4.0 was two polite tinks.
+  function crack(G, t, gain, pan, f) { // the hard strike: a very short broadband snap + a low inharmonic clang
+    noiseHit(G, t, 0.018 + Math.random() * 0.02, f || (3200 + Math.random() * 2200), 0.7, gain, pan, 7000, 0.0008);
+    const ctx = G.ctx, base = 700 + Math.random() * 900;
+    for (const [m, a] of [[1, 0.55], [2.76, 0.3], [5.4, 0.18], [8.93, 0.08]]) {
+      const o = ctx.createOscillator(); o.type = "sine"; o.frequency.value = base * m * (0.98 + Math.random() * 0.04);
+      const e = ctx.createGain(); const dur = 0.08 + Math.random() * 0.16 + 0.12 / m;
+      e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(a, t + 0.0015); e.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(e); e.connect(out(G, t, gain * 0.55, pan, 6500)); o.start(t); o.stop(t + dur + 0.02);
+    }
+  }
+  function tear(G, t, dur, gain, pan) { // aluminium skin ripping: a resonant noise band sliding down, chopped into a crackle
+    const ctx = G.ctx, s = ctx.createBufferSource(); s.buffer = G.noise; s.playbackRate.value = 0.8 + Math.random() * 0.4;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 4 + Math.random() * 4;
+    const f0 = 1800 + Math.random() * 1600; bp.frequency.setValueAtTime(f0, t); bp.frequency.exponentialRampToValueAtTime(f0 * (0.25 + Math.random() * 0.2), t + dur);
+    const e = ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(1, t + 0.012); e.gain.setValueAtTime(0.8, t + dur * 0.6); e.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    const chop = ctx.createGain(); chop.gain.value = 0.5; const lfo = ctx.createOscillator(); lfo.type = "square"; lfo.frequency.value = 28 + Math.random() * 40; const lg = ctx.createGain(); lg.gain.value = 0.5; lfo.connect(lg); lg.connect(chop.gain);
+    s.connect(bp); bp.connect(chop); chop.connect(e); e.connect(out(G, t, gain, pan, 6000));
+    s.start(t, Math.random() * 1.2); s.stop(t + dur + 0.05); lfo.start(t); lfo.stop(t + dur + 0.05);
+  }
+  function rattle(G, t, n, gain, pan, spread) { // bits of airframe, rivets and fragments rattling about
+    for (let k = 0; k < n; k++) {
+      const tt = t + Math.pow(Math.random(), 1.6) * spread, g = gain * (1 - (tt - t) / (spread * 1.3));
+      if (Math.random() < 0.7) tink(G, tt, g * (0.4 + Math.random() * 0.6), pan + (Math.random() - 0.5) * 0.9);
+      else noiseHit(G, tt, 0.012 + Math.random() * 0.02, 1500 + Math.random() * 3000, 1.5, g * 0.6, pan + (Math.random() - 0.5) * 0.9, 6000);
+    }
+  }
   function sHitOwn(G, t, kind) {
     if (kind === "flak") { // shrapnel rattling across the skin: a hard crack + a spray of tinks
       thump(G, t, 85, 30, 0.3, 0.75, (Math.random() - 0.5) * 0.5, 1200);
-      noiseHit(G, t, 0.05, 2600, 0.8, 0.6, 0, 6000);
-      const n = 9 + ((Math.random() * 7) | 0);
-      for (let k = 0; k < n; k++) tink(G, t + 0.01 + Math.random() * 0.34, 0.2 + Math.random() * 0.3, (Math.random() - 0.5) * 1.6);
+      crack(G, t, 0.6, 0, 3000);
+      if (Math.random() < 0.6) tear(G, t + 0.02, 0.25 + Math.random() * 0.2, 0.3, (Math.random() - 0.5) * 0.8);
+      rattle(G, t + 0.01, 10 + ((Math.random() * 7) | 0), 0.45, (Math.random() - 0.5) * 0.6, 0.4);
       return;
     }
-    if (kind === "cannon" || kind === "engine") { thump(G, t, 70, 30, 0.25, 0.7, (Math.random() - 0.5) * 0.6, 900); noiseHit(G, t, 0.22, 500, 0.7, 0.5, 0, 1800); }
-    tink(G, t, kind === "self" ? 0.45 : 0.55, (Math.random() - 0.5) * 0.8);
-    if (Math.random() < 0.5) tink(G, t + 0.03 + Math.random() * 0.05, 0.35, (Math.random() - 0.5) * 0.8);
+    const heavy = kind === "cannon" || kind === "engine", pan = (Math.random() - 0.5) * 1.1;
+    const v = 0.8 + Math.random() * 0.4;
+    crack(G, t, (heavy ? 0.95 : kind === "self" ? 0.6 : 0.75) * v, pan);
+    if (Math.random() < 0.45) crack(G, t + 0.025 + Math.random() * 0.06, 0.5 * v, pan + (Math.random() - 0.5) * 0.4); // a second round
+    thump(G, t + 0.004, (heavy ? 70 : 95) * (0.85 + Math.random() * 0.3), 28, heavy ? 0.34 : 0.18, (heavy ? 0.95 : 0.55) * v, pan * 0.5, 700); // through the airframe
+    if (heavy) noiseHit(G, t, 0.28, 420, 0.6, 0.55, pan * 0.6, 1600, 0.004); // the 20 mm shell going off
+    if (heavy || Math.random() < 0.5) tear(G, t + 0.015 + Math.random() * 0.03, (heavy ? 0.35 : 0.16) + Math.random() * 0.22, (heavy ? 0.45 : 0.28) * v, pan);
+    if (heavy || Math.random() < 0.65) rattle(G, t + 0.03, heavy ? 8 + ((Math.random() * 6) | 0) : 3 + ((Math.random() * 4) | 0), heavy ? 0.4 : 0.28, pan, heavy ? 0.55 : 0.3);
   }
   function sBoom(G, t, dist, pan, big) {
     const near = 1 / (1 + dist / 150), lp = Math.max(300, 1800 - dist * 1.2);
@@ -206,6 +239,30 @@
     G.chute.gain.cancelScheduledValues(t); G.chute.gain.setValueAtTime(0.0, t); G.chute.gain.linearRampToValueAtTime(0.05, t + 1.0);
     G.chuteFlap.gain.setValueAtTime(0.02, t);
   }
+  // 1.4.1: under the canopy — the wind fades as we slow and settle, the box's drone recedes, far-off flak thumps
+  function sFarFlak(G, t, dist, pan) { // a distant flak burst heard from the chute: a soft low "whump", no crackle
+    const near = 1 / (1 + dist / 400);
+    thump(G, t, 48 + Math.random() * 10, 22, 0.9 + Math.random() * 0.4, 0.55 * near, pan, 260);
+    noiseHit(G, t + 0.02, 1.1, 140, 0.5, 0.35 * near, pan, 320, 0.03);
+  }
+  function chuteBed(G, t, ct, boxDist) { // levels for chute time ct (s) and the box's distance (u)
+    const w = 0.012 + 0.05 * Math.exp(-ct / 12); // the slipstream roar dying away to a breath
+    G.chute.gain.setTargetAtTime(0.028 + 0.03 * Math.exp(-ct / 20), t, 0.8);
+    G.chuteFlap.gain.setTargetAtTime(0.008 + 0.014 * Math.exp(-ct / 15), t, 0.8);
+    G.wind.gain.setTargetAtTime(w, t, 0.8);
+    const k = 1 / (1 + (boxDist || 0) / 420);
+    G.distDrone.gain.setTargetAtTime(0.075 * k, t, 0.7);
+  }
+  function sBombsAway(G, t) { // the shackles let go one after another, the bay door bang, the ship lifts
+    for (let k = 0; k < 10; k++) {
+      const tt = t + k * (0.09 + Math.random() * 0.03), pan = (k % 2 ? 0.15 : -0.15);
+      thump(G, tt, 190 + Math.random() * 40, 80, 0.07, 0.35, pan, 2400);
+      noiseHit(G, tt, 0.04, 1300 + Math.random() * 500, 1.2, 0.25, pan, 5000);
+    }
+    thump(G, t, 52, 24, 1.1, 0.9, 0, 300); // the whole airframe unloading
+    G.rumble.gain.cancelScheduledValues(t); G.rumble.gain.setValueAtTime(0.16, t); G.rumble.gain.linearRampToValueAtTime(0.34, t + 0.3); G.rumble.gain.linearRampToValueAtTime(0.16, t + 2.2);
+    noiseHit(G, t + 0.25, 1.4, 500, 0.4, 0.3, 0, 1500, 0.2); // wind through the open bay
+  }
   function restoreGraph(G, t) {
     for (const E of G.eng) {
       E.saw.frequency.cancelScheduledValues(t); E.buzz.frequency.cancelScheduledValues(t); E.g.gain.cancelScheduledValues(t);
@@ -257,7 +314,7 @@
   const L = { fx: 0, fy: 0, fz: 1, rx: -1, ry: 0, rz: 0, cx: 0, cy: 0, cz: 0 }; // listener basis (view)
   const budget = { t: 0, n: 0 };
   const passes = new Map(); // fighter id → {minD, done}
-  let muted = false, lastDistGun = 0;
+  let muted = false, lastDistGun = 0, nextFarFlak = 0;
   function ok() { return !!(ctx && G && ctx.state === "running") && !muted; }
   function panOf(x, y, z) { const dx = x - L.cx, dy = y - L.cy, dz = z - L.cz, d = Math.hypot(dx, dy, dz) || 1; return { d, pan: (dx * L.rx + dy * L.ry + dz * L.rz) / d }; }
   const API = {
@@ -277,10 +334,11 @@
         const t = ctx.currentTime;
         Object.assign(L, s.listener || {});
         G.master.gain.setTargetAtTime(s.playing ? 0.8 : 0.35, t, 0.5);
-        if (s.down === "chute") { // under the canopy: the battle recedes — drone and guns fade with distance
+        if (s.down === "chute") { // under the canopy: the battle recedes — wind fades, the box's drone recedes, far flak
           const k = 1 / (1 + (s.boxDist || 0) / 350);
-          G.distDrone.gain.setTargetAtTime(0.06 * k, t, 0.5);
-          if (t - lastDistGun > 0.25 + Math.random() * 0.6 && k > 0.12) { lastDistGun = t; const d = (s.boxDist || 300) + Math.random() * 200; for (let q = 0; q < 3; q++) sGun(G, t + q * 0.07, d, (Math.random() - 0.5) * 0.6, false); }
+          chuteBed(G, t, s.chuteT || 0, s.boxDist || 0);
+          if (t - lastDistGun > 0.5 + Math.random() * 1.2 && k > 0.18) { lastDistGun = t; const d = (s.boxDist || 300) + Math.random() * 200; for (let q = 0; q < 3; q++) sGun(G, t + q * 0.07, d, (Math.random() - 0.5) * 0.6, false); }
+          if (t > nextFarFlak) { nextFarFlak = t + 2.2 + Math.random() * 4.5; sFarFlak(G, t, 700 + Math.random() * 1400, (Math.random() - 0.5) * 1.4); count("farFlak"); }
           return;
         }
         if (s.engines) for (let i = 0; i < 4 && i < s.engines.length; i++) { const e = s.engines[i]; engineAt(G, i, t, e.out ? "out" : e.fire > 0.25 ? "sputter" : "run"); }
@@ -320,12 +378,14 @@
     bell() { if (!ok()) return; sBell(G, ctx.currentTime); count("bell"); },
     bail() { if (!ok()) return; sBail(G, ctx.currentTime); count("bail"); },
     chuteOpen() { if (!ok()) return; sChuteOpen(G, ctx.currentTime); count("chuteOpen"); },
+    bombsAway() { if (!ok()) return; sBombsAway(G, ctx.currentTime); count("bombsAway"); },
     mute(b) { muted = !!b; if (ctx && G) G.master.gain.setTargetAtTime(b ? 0.0001 : 0.35, ctx.currentTime, 0.05); },
     results() { muted = false; if (ctx && G) { restoreGraph(G, ctx.currentTime); G.master.gain.setTargetAtTime(0.35, ctx.currentTime, 0.6); } count("results"); },
     reset() { muted = false; passes.clear(); if (ctx && G) restoreGraph(G, ctx.currentTime); count("reset"); },
     // offline demo: the same synth graph rendered to a buffer (verification + a listenable sample)
     renderSample(sec, part) {
       if (part === "bailout") return renderBailout(sec);
+      if (part === "hits141") return renderHits141(sec);
       sec = sec || 28;
       const oc = new OAC(2, Math.floor(44100 * sec), 44100);
       const g = Graph(oc); g.master.gain.value = 0.8;
@@ -371,6 +431,24 @@
     for (let tt = 9.8; tt < sec - 0.4; tt += 0.35 + Math.random() * 0.5) { const d = 250 + (tt - 9.8) * 120; for (let q = 0; q < 3; q++) sGun(g, tt + q * 0.07, d, (Math.random() - 0.5) * 0.6, false); }
     g.distDrone.gain.setValueAtTime(0.06, 9.5); g.distDrone.gain.linearRampToValueAtTime(0.01, sec);
     sFlak(g, 12.5, 700, 0.4); sFlak(g, 16.0, 1000, -0.4); sFlak(g, 19.5, 1400, 0.2);
+    return oc.startRendering();
+  }
+  // 1.4.1 demo: 0.6–7.4 s our ship taking hits (single MG strikes, a pair, a 20 mm cannon shell, a friendly .50, a
+  // flak burst close aboard); 8.2 s BOMBS AWAY (shackles, the lift); 10.5 s bail-out; 11.8 s canopy open; then ~16 s
+  // drifting — the wind dies away, the box's drone recedes, far-off flak thumps and distant gunfire.
+  function renderHits141(sec) {
+    sec = sec || 28;
+    const oc = new OAC(2, Math.floor(44100 * sec), 44100);
+    const g = Graph(oc); g.master.gain.value = 0.8;
+    const H = [[0.6, "mg"], [1.3, "mg"], [1.42, "mg"], [2.2, "cannon"], [3.1, "mg"], [3.5, "self"], [4.3, "mg"], [4.38, "mg"], [4.47, "mg"], [5.2, "cannon"], [6.2, "engine"]];
+    for (const [t, k] of H) sHitOwn(g, t, k);
+    sFlak(g, 6.9, 40, 0.3); sHitOwn(g, 6.95, "flak");
+    sBombsAway(g, 8.2);
+    sBail(g, 10.5); sChuteOpen(g, 11.8);
+    const t0 = 12.6;
+    for (let tt = t0; tt < sec - 0.2; tt += 0.25) { const ct = tt - 11.8; chuteBed(g, tt, ct, 200 + ct * 70); }
+    for (let tt = t0 + 0.5; tt < sec - 3; tt += 0.9 + Math.random() * 1.6) { const d = 260 + (tt - t0) * 90; if (d < 1500) for (let q = 0; q < 3; q++) sGun(g, tt + q * 0.07, d, (Math.random() - 0.5) * 0.6, false); }
+    for (const [t, d, p] of [[14.0, 900, 0.5], [16.8, 1400, -0.6], [19.1, 1100, 0.2], [22.4, 1800, -0.3], [25.0, 1600, 0.6]]) if (t < sec - 1) sFarFlak(g, t, d, p);
     return oc.startRendering();
   }
   window.FGAudio = API;

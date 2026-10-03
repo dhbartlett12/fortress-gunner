@@ -1,7 +1,7 @@
 # Fortress Gunner (web)
 
 B-17 Flying Fortress top-turret gunner, 1943. Defend the combat box against 44 Bf 109s on the run to the target.
-Browser build of the Android game (v1.4.0), served as plain static files: `index.html` is at the root.
+Browser build of the Android game (v1.4.1), served as plain static files: `index.html` is at the root.
 
 **Play:** https://dhbartlett12.github.io/fortress-gunner/
 
