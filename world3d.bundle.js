@@ -33399,7 +33399,7 @@
       return t;
     })();
     const B17_VIS = 16;
-    const NACELLE_X = [-0.44, -0.22, 0.22, 0.44];
+    const NACELLE_X = [-0.35, -0.19, 0.19, 0.35];
     const weatherTex = (() => {
       const c = document.createElement("canvas");
       c.width = c.height = 256;
@@ -33793,6 +33793,13 @@
       { z: 0.342, hw: 95e-4, top: 1e-3, bot: -0.014, n: 2 },
       { z: 0.348, hw: 2e-3, top: -3e-3, bot: -9e-3, n: 2 }
     ];
+    for (const A of [b17HullSecs, b17NoseSecs]) for (const q of A) {
+      const yM = (q.top + q.bot) * 0.5, h = (q.top - q.bot) * 0.5 * 0.84;
+      q.top = yM * 0.92 + h;
+      q.bot = yM * 0.92 - h;
+      q.hw *= 0.735;
+      if (q.z > 0) q.bot -= 7e-3 * Math.min(1, q.z / 0.15) * (q.z < 0.3 ? 1 : Math.max(0, (0.348 - q.z) / 0.05));
+    }
     function b17Loft(secs, N, i0, i1, capEnds) {
       const S = B17_VIS, pos = [], uv = [], idx = [], rows = i1 - i0 + 1;
       for (let r = 0; r < rows; r++) {
@@ -33881,18 +33888,18 @@
       g.add(nose);
       const chin = new Mesh(new SphereGeometry(0.0165 * S, 10, 7), dark);
       chin.scale.set(0.95, 1, 1.15);
-      chin.position.set(0, -0.037 * S, 0.292 * S);
+      chin.position.set(0, -0.043 * S, 0.292 * S);
       g.add(chin);
-      const cock = new Mesh(new BoxGeometry(0.056 * S, 0.02 * S, 0.075 * S), glassM);
-      cock.position.set(0, 0.0505 * S, 0.222 * S);
+      const cock = new Mesh(new BoxGeometry(0.045 * S, 0.017 * S, 0.075 * S), glassM);
+      cock.position.set(0, 0.0425 * S, 0.222 * S);
       cock.rotation.x = -0.14;
       g.add(cock);
-      const cockF = new Mesh(new BoxGeometry(0.058 * S, 3e-3 * S, 4e-3 * S), dark);
-      cockF.position.set(0, 0.0605 * S, 0.222 * S);
+      const cockF = new Mesh(new BoxGeometry(0.046 * S, 3e-3 * S, 4e-3 * S), dark);
+      cockF.position.set(0, 0.0512 * S, 0.222 * S);
       g.add(cockF);
       if (metal) {
-        const ag = new Mesh(new BoxGeometry(0.05 * S, 4e-3 * S, 0.1 * S), new MeshStandardMaterial({ color: 4146992, roughness: 0.7, metalness: 0.1 }));
-        ag.position.set(0, 0.034 * S, 0.285 * S);
+        const ag = new Mesh(new BoxGeometry(0.04 * S, 4e-3 * S, 0.1 * S), new MeshStandardMaterial({ color: 4146992, roughness: 0.7, metalness: 0.1 }));
+        ag.position.set(0, 0.028 * S, 0.285 * S);
         ag.rotation.x = 0.28;
         g.add(ag);
       }
@@ -33900,7 +33907,7 @@
       top.position.set(0, hullAt(0.15).top * S - 2e-3 * S, 0.15 * S);
       g.add(top);
       const ball = new Mesh(new SphereGeometry(0.019 * S, 10, 7), dark);
-      ball.position.set(0, -0.047 * S, -0.02 * S);
+      ball.position.set(0, -0.037 * S, -0.02 * S);
       g.add(ball);
       const tailG = new Mesh(new BoxGeometry(0.014 * S, 0.016 * S, 0.034 * S), glassM);
       tailG.position.set(0, 7e-3 * S, -0.402 * S);
@@ -33987,9 +33994,9 @@
         sh.moveTo(-0.38 * S, 0.012 * S);
         sh.lineTo(-0.1 * S, 0.042 * S);
         sh.quadraticCurveTo(-0.2 * S, 0.05 * S, -0.245 * S, 0.082 * S);
-        sh.quadraticCurveTo(-0.268 * S, 0.1 * S, -0.283 * S, 0.142 * S);
-        sh.quadraticCurveTo(-0.292 * S, 0.164 * S, -0.318 * S, 0.1645 * S);
-        sh.quadraticCurveTo(-0.344 * S, 0.165 * S, -0.352 * S, 0.145 * S);
+        sh.quadraticCurveTo(-0.258 * S, 0.112 * S, -0.279 * S, 0.146 * S);
+        sh.quadraticCurveTo(-0.289 * S, 0.157 * S, -0.318 * S, 0.1575 * S);
+        sh.quadraticCurveTo(-0.344 * S, 0.158 * S, -0.352 * S, 0.14 * S);
         sh.lineTo(-0.372 * S, 0.05 * S);
         sh.lineTo(-0.376 * S, 0.012 * S);
         sh.closePath();
@@ -34018,18 +34025,18 @@
           MB.glass.push([_bgBox(4e-3 * S, 0.014 * S, 0.026 * S), sideX(0.285, -4e-3, sd) * S, -4e-3 * S, 0.285 * S, 0, 0, 0]);
           MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sideX(0.271, -4e-3, sd) * S, -4e-3 * S, 0.271 * S, 0, 0, 0]);
           MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sideX(0.299, -4e-3, sd) * S, -4e-3 * S, 0.299 * S, 0, 0, 0]);
-          for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(18e-4 * S, 0.02 * S, 16e-4 * S), sideX(z, 0.048, sd) * S, 0.048 * S, z * S, 0, 0, 0]);
-          MB.glass.push([_bgBox(18e-4 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.048, sd) * S - sd * 4e-4 * S, 0.048 * S, 0.218 * S, 0, 0, 0]);
+          for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(18e-4 * S, 0.02 * S, 16e-4 * S), sideX(z, 0.04, sd) * S, 0.04 * S, z * S, 0, 0, 0]);
+          MB.glass.push([_bgBox(18e-4 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.04, sd) * S - sd * 4e-4 * S, 0.04 * S, 0.218 * S, 0, 0, 0]);
           MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.034 * S, 5), sd * 55e-4 * S, hullAt(0.15).top * S + 3e-3 * S, 0.172 * S, Z90, 0, 0]);
           MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), sd * 35e-4 * S, -0.038 * S, 0.305 * S, Z90, 0, 0]);
-          MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.028 * S, 5), sd * 4e-3 * S, -0.072 * S, -0.046 * S, 0.5, 0, 0]);
-          MB.dark.push([_bgCyl(16e-4 * S, 16e-4 * S, 0.04 * S, 5), sd * 0.058 * S, 0.014 * S, -0.075 * S, 0, 0, Z90]);
-          MB.dark.push([_bgBox(35e-4 * S, 12e-4 * S, 0.1 * S), sideX(-0.1, 0.0245, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]);
+          MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.028 * S, 5), sd * 4e-3 * S, -0.058 * S, -0.04 * S, 0.5, 0, 0]);
+          MB.dark.push([_bgCyl(16e-4 * S, 16e-4 * S, 0.04 * S, 5), sd * 0.044 * S, 0.012 * S, -0.075 * S, 0, 0, Z90]);
+          MB.dark.push([_bgBox(35e-4 * S, 12e-4 * S, 0.1 * S), sideX(-0.1, 0.0205, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]);
         }
-        MB.dark.push([_bgBox(0.058 * S, 16e-4 * S, 2e-3 * S), 0, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]);
-        for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(16e-4 * S, 0.02 * S, 18e-4 * S), x * S, 0.0525 * S, 0.2585 * S, -0.14, 0, 0]);
+        MB.dark.push([_bgBox(0.058 * S, 16e-4 * S, 2e-3 * S), 0, 0.0365 * S, 0.2585 * S, -0.14, 0, 0]);
+        for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(16e-4 * S, 0.02 * S, 18e-4 * S), x * S, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]);
         MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 4e-3 * S, 12), 0, hullAt(0.15).top * S - 1e-3 * S, 0.15 * S, 0, 0, 0]);
-        MB.glass.push([_bgBox(0.014 * S, 3e-3 * S, 0.03 * S), 0, 0.0505 * S, -0.03 * S, 0, 0, 0]);
+        MB.glass.push([_bgBox(0.012 * S, 3e-3 * S, 0.03 * S), 0, 0.0405 * S, -0.03 * S, 0, 0, 0]);
       }
       MT.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), 35e-4 * S, 45e-4 * S, -0.43 * S, Z90, 0, 0]);
       MT.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), -35e-4 * S, 45e-4 * S, -0.43 * S, Z90, 0, 0]);
@@ -37569,10 +37576,9 @@
       c.width = c.height = 64;
       const x = c.getContext("2d");
       const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
-      g.addColorStop(0, "rgba(255,255,255,1)");
-      g.addColorStop(0.2, "rgba(255,252,235,1)");
-      g.addColorStop(0.38, "rgba(255,205,110,0.95)");
-      g.addColorStop(0.62, "rgba(255,110,40,0.55)");
+      g.addColorStop(0, "rgba(255,250,220,1)");
+      g.addColorStop(0.18, "rgba(255,190,90,1)");
+      g.addColorStop(0.45, "rgba(255,90,30,0.75)");
       g.addColorStop(1, "rgba(160,20,0,0)");
       x.fillStyle = g;
       x.fillRect(0, 0, 64, 64);
@@ -37617,10 +37623,7 @@
       const fl = new Sprite(new SpriteMaterial({ map: flakFlashTex, transparent: true, depthWrite: false, blending: AdditiveBlending, fog: false }));
       fl.visible = false;
       scene.add(fl);
-      const bl = new Sprite(new SpriteMaterial({ map: flakBloomTex, transparent: true, depthWrite: false, blending: AdditiveBlending, fog: false }));
-      bl.visible = false;
-      scene.add(bl);
-      flakMeshes.push({ m, fl, bl, id: -1, puffs: null });
+      flakMeshes.push({ m, fl, id: -1, puffs: null });
     }
     const flakLight = new PointLight(16742960, 0, 140, 1.2);
     scene.add(flakLight);
@@ -37702,7 +37705,6 @@
         F.id = -1;
         F.m.visible = false;
         F.fl.visible = false;
-        F.bl.visible = false;
       }
       const used = new Set(flakMeshes.filter((F) => F.id >= 0).map((F) => F.id));
       for (const b of byId.values()) {
@@ -37727,7 +37729,6 @@
           oz += bz * along;
           F.puffs.push({ ox: ox * sz, oy: oy * sz, oz: oz * sz, s: (p === 0 ? 9.5 : 4 + r() * 6.5) * sz, rot: r() * 6.28, spin: (r() - 0.5) * 0.25, cell: r() * 8 | 0, lum: 0.7 + r() * 0.6, wx: (r() - 0.5) * 1.3, wz: (r() - 0.5) * 1.3, late: r() * 0.5 });
         }
-        spawnDebris(b.x, b.y, b.z, 14 + (sz * 14 | 0), sz);
       }
       let live = 0, best = null, bestD = 1e9;
       for (const F of flakMeshes) {
@@ -37759,7 +37760,7 @@
             dat[o * 4 + 1] = alpha;
             dat[o * 4 + 2] = P.rot + P.spin * t;
             dat[o * 4 + 3] = P.cell;
-            const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark) * (p === 0 ? 0.55 : 1.12);
+            const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark);
             tin[o * 3] = tr * kk * F.tint[0];
             tin[o * 3 + 1] = tg * kk * F.tint[1];
             tin[o * 3 + 2] = tb * kk * F.tint[2];
@@ -37776,13 +37777,6 @@
           F.fl.scale.set(s, s, 1);
           F.fl.material.opacity = Math.min(1, 1.25 * (1 - t / 0.16));
           flakStats.flashes++;
-        }
-        F.bl.visible = t < 0.34;
-        if (F.bl.visible) {
-          F.bl.position.set(b.x, b.y, b.z);
-          const bd = camera.position.distanceTo(F.m.position), bs = Math.min((34 + t * 160) * (b.size || 1), Math.max(6, bd * 0.8));
-          F.bl.scale.set(bs, bs, 1);
-          F.bl.material.opacity = 0.6 * Math.pow(1 - t / 0.34, 1.6);
         }
         if (t < 0.18) {
           const d = camera.position.distanceTo(F.m.position);
@@ -37866,7 +37860,7 @@
       }
       const ww = Math.max(w, dist * wMin) * 0.5 / L;
       _cw.multiplyScalar(ww);
-      const nf = dist < 30 ? 0 : dist > 150 ? 1 : (dist - 30) / 120;
+      const nf = dist < 45 ? 0 : dist > 240 ? 1 : (dist - 45) / 195;
       a *= nf * nf * (3 - 2 * nf);
       const o = (r * R.nPts + i) * 6, c = (r * R.nPts + i) * 8, u = (r * R.nPts + i) * 4;
       R.pos[o] = px2 - _cw.x;
@@ -38207,7 +38201,7 @@
             if (eng.lastEmit <= 0) {
               eng.anchor.getWorldPosition(_v);
               const dark = burning || f.spiraling;
-              ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1 : 0.6, w1: dark ? f.spiraling ? 14 : 11 : 5, life: dark ? burning ? 4.6 : 3.2 : 2.4, a: dark ? 0.62 : 0.4, col: dark ? [0.13, 0.125, 0.12] : [0.6, 0.6, 0.59], drift: 55 });
+              ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1 : 0.6, w1: dark ? f.spiraling ? 12 : 8 : 3.2, life: dark ? burning ? 4.6 : 3.2 : 2.4, a: dark ? 0.62 : 0.3, col: dark ? [0.13, 0.125, 0.12] : [0.4, 0.4, 0.39], drift: 55 });
               if (f.spiraling && Math.random() < 0.3) emitSmoke(_v, true, true);
               eng.lastEmit = 0.05;
             }
@@ -40318,6 +40312,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const _tf = new Vector3(), _tc = new Vector3();
     const trStats = { drawn: 0 };
     const TR_BLUR = 0.06;
+    const TR_FADE0 = 250, TR_FADEL = 1262;
     const TR_MINPX = 2.2;
     const _trQ = new Quaternion(), _trQprev = new Quaternion(), _trW = new Vector3(), _trDq = new Quaternion(), _trV = new Vector3();
     let _trT = 0, _trHave = false;
@@ -40416,8 +40411,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
             py2 /= pl;
             pz2 /= pl;
           }
+          const dMid = Math.hypot(mx, my, mz), dFade = dMid <= TR_FADE0 || window.__FG_NOTRFADE ? 1 : Math.max(0.08, Math.exp(-(dMid - TR_FADE0) / TR_FADEL)), wFade = 0.55 + 0.45 * dFade;
           for (let layer = 0; layer < 2; layer++) {
-            const wpx = layer ? K[2] : K[3], rgb = layer ? K[0] : K[1], a = (layer ? K[4] : K[5]) * A, keep = layer ? K[6] : 0;
+            const wpx = (layer ? K[2] : K[3]) * wFade, rgb = layer ? K[0] : K[1], a = (layer ? K[4] : K[5]) * A * dFade, keep = layer ? K[6] : 0;
             const wh = 0.5 * wpx * dh / pxPerRad, wt = 0.5 * wpx * dtl / pxPerRad;
             const v = n * 4, p3 = v * 3, c4 = v * 4;
             trPos[p3] = hx - px2 * wh;

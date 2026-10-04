@@ -22,16 +22,16 @@
   }
 
   // ===== B-17 hitboxes (local frame). Same IDs the spec lists; first box along the ray wins =====
-  const ENG_X = [-7.04, -3.52, 3.52, 7.04];             // game engine index 0..3 (x), starboard outer → port outer
+  const ENG_X = [-5.6, -3.04, 3.04, 5.6];             // game engine index 0..3 (x), starboard outer → port outer
   const ENG_ID = ["engine_4", "engine_3", "engine_2", "engine_1"]; // spec ids by game index (starboard = −X)
   const ID_ENG = { engine_1: 3, engine_2: 2, engine_3: 1, engine_4: 0 };
   const BOXES = [];
   const box = (id, lo, hi) => BOXES.push({ id, lo, hi, prop: id.startsWith("prop_") });
   box("nose", [-0.75, -0.75, 5.3], [0.75, 0.65, 6.6]);
   box("cockpit", [-0.8, -0.5, 3.0], [0.8, 0.95, 5.3]);
-  box("fuselage_fwd", [-0.85, -0.85, 1.0], [0.85, 0.8, 3.0]);
-  box("fuselage_mid", [-0.85, -0.85, -2.0], [0.85, 0.8, 1.0]);
-  box("fuselage_aft", [-0.8, -0.8, -4.6], [0.8, 0.7, -2.0]);
+  box("fuselage_fwd", [-0.7, -0.7, 1.0], [0.7, 0.68, 3.0]);
+  box("fuselage_mid", [-0.7, -0.7, -2.0], [0.7, 0.68, 1.0]);
+  box("fuselage_aft", [-0.6, -0.65, -4.6], [0.6, 0.6, -2.0]);
   box("tail", [-0.5, -0.55, -6.6], [0.5, 0.55, -4.6]);
   box("empennage", [-3.4, -0.3, -6.4], [3.4, 0.15, -5.0]);   // horizontal stabiliser
   box("empennage", [-0.2, 0.3, -7.0], [0.2, 3.0, -4.7]);     // fin
@@ -60,7 +60,7 @@
     wingroot: [1.8, 0.8, 0.8], wing_in: [1.2, 0.8, 0.7], wing_out: [1.0, 0.6, 0.5], fuel: [0.5, 1.0, 0.5],
     fuselage: [1.0, 0.6, 1.0], tail: [0.9, 0.6, 0.9], gun: [0.4, 1.4, 0.3],
   };
-  const TUNE_C = { fireExt: 0.13, hullMul: 0.75, pOut151: 0.25 }; // engine fire put out by crew / extinguisher: per-second chance (feathered engines burn out faster)
+  const TUNE_C = { fireExt: 0.13, hullMul: 0.75, pOut151: 0.35 }; // engine fire put out by crew / extinguisher: per-second chance (feathered engines burn out faster)
   function famOf(id) {
     if (id.startsWith("engine_")) return "engine";
     if (id.startsWith("prop_")) return "prop";
@@ -189,9 +189,9 @@
       if (!e.out) {
         e.hp -= fam === "prop" ? dmg * 0.5 : dmg;
         if (fam === "engine") {
-          let pOut = gunId === "m2" || gunId === "mg131" ? 0.035 : gunId === "mg151" ? TUNE_C.pOut151 : gunId === "mk108" ? 0.7 : 1;
+          let pOut = gunId === "m2" || gunId === "mg131" ? 0.08 : gunId === "mg151" ? TUNE_C.pOut151 : gunId === "mk108" ? 0.7 : 1;
           let pFire = (gunId === "mg151" ? 0.30 : gunId === "mk108" ? 0.5 : gunId === "wgr21" ? 0.7 : g.inc / 100 * 0.5) * (opts.fireMul == null ? 1 : opts.fireMul);
-          const pLeak = gunId === "m2" || gunId === "mg131" ? 0.1 : 0.1;
+          const pLeak = gunId === "m2" || gunId === "mg131" ? 0.2 : 0.1;
           if (rng() < pOut * rf) { e.hp = 0; ev.push({ t: "engine_out", i: k, how: "hit" }); }
           else if (rng() < pFire * rf && !e.fire) { e.fire = true; e.fireT = 0; ev.push({ t: "engine_fire", i: k }); }
           else if (!e.leak && rng() < pLeak * rf) { e.leak = 20 + rng() * 20; ev.push({ t: "oil_leak", i: k }); }

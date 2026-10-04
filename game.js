@@ -388,7 +388,7 @@
       else if (!q.out && q.hp < 26) e.fire = Math.max(e.fire, 0.14);
     }
     for (let side = 0; side < 2; side++) if (sd.fuel[side].fire) { const e = s.engines[side === 0 ? 3 : 0]; e.fire = Math.max(e.fire, 0.85); }
-    if (s === bomber ? !bomber.dead : !s.spiraling) s.health = Math.max(s === bomber && PLAYER_FLOOR ? 1 : 0.5, FC.health(sd));
+    if (s === bomber ? !bomber.dead : !s.spiraling) s.health = Math.max(0.5, FC.health(sd));
     if (s !== bomber) { // dead side's wing drops a few degrees
       const left = (s.engines[0].out ? 1 : 0) + (s.engines[1].out ? 1 : 0), right = (s.engines[2].out ? 1 : 0) + (s.engines[3].out ? 1 : 0);
       s.listTarget = (right - left) * 0.035;
@@ -453,7 +453,6 @@
   function destroyShip(s, why) {
     const src = s.lastSrc || "109";
     if (s === bomber) {
-      if (PLAYER_FLOOR) { if (!s.out) leaveBoxQuiet(s, why); s.health = Math.max(1, s.health); return; } // 1.5.4 beta: the player's ship cannot be destroyed
       { const dk = pickDeath(s, why); s.deathKind = dk.kind; s.deathSide = dk.side || 0; logDeath("PLAYER", dk); }
       if (!s.out) leaveBoxQuiet(s, why);
       playerShotDown(src === "own" ? "own" : src === "flak" ? "flak" : src);
@@ -494,7 +493,7 @@
 
   // ===== 1.3.4 FRIENDLY FIRE: B-17 hitboxes (matches the world3d mesh, B17_VIS = 16u span-ish) =====
   // local frame: nose +Z, +Y up; engines #1..#4 port→stbd at x = −7.0, −3.5, +3.5, +7.0
-  const FF_ENG_X = [-7.04, -3.52, 3.52, 7.04];
+  const FF_ENG_X = [-5.6, -3.04, 3.04, 5.6];
   function friendlyPartAt(lx, ly, lz) {
     for (let k = 0; k < 4; k++) {
       const dx = lx - FF_ENG_X[k], dy = ly + 0.19;
@@ -1081,6 +1080,15 @@
       a.n++; if (left) a.leave++;
     }
   }
+  function recAz190(e, T, range) { // 1.5.5 telemetry: where (clock position from the target's nose / elevation) was this 190 when it crossed 1500 u, 900 u, 800 yd (488 u), 400 yd (244 u)
+    if (e.type !== "190" || !mission) return;
+    if (!e.azRec) e.azRec = {};
+    for (const rr of [1500, 900, 488, 244]) if (range < rr && e.azRec[rr] == null) {
+      const dx = e.x - T.x, dz = e.z - T.z, ang = Math.atan2(-dx, dz), clk = (((ang / TAU) * 12) % 12 + 12) % 12, el = Math.atan2(e.y - T.y, Math.hypot(dx, dz)) * 57.2958;
+      e.azRec[rr] = { clk: +clk.toFixed(2), el: +el.toFixed(1), t: +mission.t.toFixed(1), mode: e.mode || e.phase, ship: e.tgt && e.tgt.kind === "friendly" ? "f" : "p", V: +(e.V / MPH).toFixed(0) };
+      (mission.az190 || (mission.az190 = [])).push(Object.assign({ r: rr, id: e.id }, e.azRec[rr]));
+    }
+  }
   function commitPass(e, mode) {
     mode = mode || "headon";
     e.mode = mode;
@@ -1097,6 +1105,7 @@
     let d = norm3(T.x - e.x, T.y - e.y, T.z - e.z);
     let px = rand(-1, 1), py = rand(-0.5, 0.5), pz = rand(-1, 1); // slash past, never ram
     if (mode === "fq") py = -Math.abs(py) - 0.5; // diving through, pass under
+    if (is190) e.pass190n = (e.pass190n || 0) + 1;
     if (is190) { py = -1.1; px = rand(0.7, 1) * (Math.random() < 0.5 ? -1 : 1); pz = 0; } // 190: through or under, off to one side
     const dp = px * d.x + py * d.y + pz * d.z;
     px -= dp * d.x; py -= dp * d.y; pz -= dp * d.z;
@@ -1118,7 +1127,8 @@
     e.phase = "attack"; e.phaseT = 0; e.vT = FAI.vFull; e.invert = false;
     e.fireWin = TAC.fire[mode] || TAC.fire.headon;
     e.breakR = (TAC.brk[mode] || 120) * rand(0.9, 1.1);
-    if (is190) { e.fireWin = [rand(290, 340), 80]; e.breakR = rand(74, 96); if (mission && !mission.called190) { mission.called190 = true; pushCallout("190s " + clockLabel(e.x, e.z) + " HIGH — DIVING!", 1.8, true); sfxIntercom(); } } // 1.5.4: the hammer opens at ~400 yd and presses to ~100 yd
+    if (is190) { e.fireWin = [rand(250, 366), 80]; e.breakR = rand(74, 96); if (mission && !mission.called190) { mission.called190 = true; pushCallout("FW190s " + clockLabel(e.x - T.x, e.z - T.z) + " — LOW!", 1.8, true); sfxIntercom(); } } // 1.5.5: the hammer opens at 400-600 yd (244-366 u) and presses to ~130 yd
+    e.az190 = null;
     if (e.presser && !is190) e.breakR = rand(TAC.presserBrk[0], TAC.presserBrk[1]);
     const r = Math.random();
     e.breakType = is190 ? "under" : r < 0.55 ? "splitS" : "under"; // 109: Split-S or under the box — no lazy pull-up in front of the top turret
@@ -1296,7 +1306,7 @@
       if (q.y < H.y - 330) continue;             // not down on the deck
       let sc = 0;
       const ph = q.phase;
-      if (q.type === "190" && (ph === "stack" || ph === "attack" || ph === "break" || ph === "rollin") && q.z < H.z + 180) sc = 3; // closing rear / low run
+      if (q.type === "190" && (ph === "stack" || ph === "quarter" || ph === "attack" || ph === "break" || ph === "rollin") && q.z < H.z + 180) sc = 3; // closing rear / low run
       else if (q.type === "109" && (ph === "attack" || ph === "arrive" || ph === "inbound") && q.z > H.z + 120 && q.mode !== "rear") sc = 2; // last 2,000 yd of a head-on setup
       else if ((ph === "extend" || ph === "break" || ph === "reform" || ph === "rollin") && (q.V < FAI.vSlow || q.hy > 0.15 || q.y < H.y - 60)) sc = 1; // just passed through, slow / climbing / reforming
       if (!sc) continue;
@@ -1321,7 +1331,7 @@
       if (de > (wide ? 3600 : 2600)) continue;
       const ph = q.phase;
       let sc = 1;
-      if (ph === "attack" || ph === "stack" || ph === "arrive" || ph === "inbound") sc = 3;       // pressing a run on the box: the threat
+      if (ph === "attack" || ph === "stack" || ph === "quarter" || ph === "arrive" || ph === "inbound") sc = 3;       // pressing a run on the box: the threat
       else if (ph === "break" || ph === "extend" || ph === "rollin" || ph === "setup") sc = 2;     // just passed / turning in
       else if (ph === "duel") sc = 0.5;
       const s = sc * 700 - de + (q.hp < q.maxHp ? 250 : 0) + (q.r6 ? 300 : 0) + (q.p51n ? -200 : 0) - Math.max(0, dBox - 1300) * 0.4;
@@ -1374,7 +1384,7 @@
       if (e.pbGap <= 0 && range < 400 && range > 40 && cosA > (range < 160 ? 0.93 : 0.955)) {
         e.pbOn = true; e.pbT = rand(0.45, 0.95); e.pbAcc = 0; e.shot = (e.shot || 0) + 1;
         if (mission) { mission.p51Bursts = (mission.p51Bursts || 0) + 1; if (near) mission.p51BurstsNear = (mission.p51BurstsNear || 0) + 1; }
-        if (T.phase !== "attack" && T.phase !== "stack") dfBounced(T, e);
+        dfBounced(T, e); // 1.5.5: a bounced German (even mid-run) may turn back
       }
       return false;
     }
@@ -1443,9 +1453,10 @@
       if (mission && range < 900 && Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z) < 1500 && mission.fightT !== mission.t) { mission.fightT = mission.t; mission.p51FightNearSec = (mission.p51FightNearSec || 0) + dt; }
       if (mission && range < 420 && cosA > 0.9) mission.p51FireWinSec = (mission.p51FireWinSec || 0) + dt / 3; // seconds with a German in the gun window (averaged per Mustang)
       const passed = e.minR < 150 && range > e.minR + 45 && range < 400;
-      const pressing = T.phase === "attack" || T.phase === "stack"; // 1.5.3: stay on a 190 that is still pressing his run — he can't shake us until he breaks
+      // 1.5.5 (md BUG B): once he is actually on the German (inside 420 u, nose on) he DUELS - even if that German is still pressing his run
+      if (range < 420 && cosA > 0.82 && dfCan(T) && T.y > BOX_C.y - 900) { e.duelRole = "att"; startDuel(e, T, "press"); return; }
       if (range > 330) e.passArm = true;
-      if ((range < 55 || passed) && e.passArm && !(pressing && e.phaseT < 16)) {
+      if ((range < 55 || passed) && e.passArm) {
         e.pass = (e.pass || 0) + 1; e.passArm = false; e.minR = 1e9; if (mission) mission.p51EndPass = (mission.p51EndPass || 0) + 1;
         if (dfCan(T) && Math.random() < DF.dfProb && T.y > BOX_C.y - 900) { e.duelRole = "att"; startDuel(e, T, "pass"); return; }
         if (e.pass >= 3) { endIntercept(e); return; } // three passes without a kill: he's gone; back up to station
@@ -1514,7 +1525,7 @@
   // angles flip. Fights are pulled back toward the box, end after 8–14 s, when a pilot dies, or when the loser drops away steeply.
   // Sources: USER_TACTICS.md (P-51 = sheriff, leash 520, zoom back; 109 abandons the slash and dives; "do not follow a 109 to the deck"),
   // ESCORT_TACTICS.md (energy fighting — here the fights are short, bounded, and end in a zoom or a dive away).
-  const DF = { hold: [8, 14], hitMul: 0.5, pBurst: [0.55, 1.0], dfProb: 0.85, defendProb: 0.8, pounceProb: 0.10, pounceRange: 900 };
+  const DF = { hold: [8, 14], hitMul: 0.5, pBurst: [0.55, 1.0], dfProb: 0.85, defendProb: 0.8, pounceProb: 0.55, pounceRange: 600 };
 
   // ===== 1.5.3 FRIENDLY FIRE ON MUSTANGS — our .50s and the box gunners' strays are real rounds against the P-51's mesh, per part =====
   function ffMustang(e, fhit, by) {
@@ -1548,9 +1559,10 @@
     }
     return null;
   }
-  function dfCan(g) { return g && g.alive && !g.hold && g.phase !== "debug" && g.phase !== "attack" && g.phase !== "stack" && g.phase !== "arrive" && g.phase !== "inbound" && g.phase !== "duel"; }
+  function dfCan(g) { return g && g.alive && !g.hold && g.phase !== "debug" && g.phase !== "duel"; } // 1.5.5 (md BUG B): a German in attack / quarter / arrive CAN be dueled
   function startDuel(a, b, why) { // a = aggressor, b = defender; either may already be in a duel (2v1)
     if (!a || !b || !a.alive || !b.alive || a === b) return false;
+    if (mission && mission.t - (mission.mixT == null ? -99 : mission.mixT) > 10 && ((a.type === "p51") !== (b.type === "p51")) && Math.hypot((a.x + b.x) / 2 - CAM.x, (a.y + b.y) / 2 - CAM.y, (a.z + b.z) / 2 - CAM.z) < 1500) { mission.mixT = mission.t; mission.mixCalls = (mission.mixCalls || 0) + 1; pushCallout("MIX IT UP!", 1.4, true); } // md: once per duel that starts within 1,500 u of the player
     if (mission) { mission.duelStarts = (mission.duelStarts || 0) + 1; (mission.duelWhy || (mission.duelWhy = {}))[why || "?"] = ((mission.duelWhy || {})[why || "?"] || 0) + 1; }
     const arm = (e, foe, role) => {
       if (e.phase === "duel") { if (!e.foe) e.foe = foe; return; }
@@ -1646,7 +1658,7 @@
   function dfPounce(e, dt) {
     if (!mission || mission.t < 26 || e.foe || !dfCan(e) || (e.phase !== "setup" && e.phase !== "reform" && e.phase !== "extend" && e.phase !== "rollin")) return;
     e.dfChk = (e.dfChk || 0) - dt; if (e.dfChk > 0) return; e.dfChk = rand(1.2, 2.2);
-    if (e.dfCool > mission.t || Math.random() > DF.pounceProb * (e.type === "109" ? 1.5 : 0.6)) return;
+    if (e.dfCool > mission.t || Math.random() > DF.pounceProb) return;
     let best = null, bd = DF.pounceRange;
     for (const q of enemies) { if (!q.alive || q.type !== "p51" || q.phase !== "cap") continue; const d = Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z); if (d < bd && q.y < e.y + 260 && Math.hypot(q.x - CAM.x, q.y - CAM.y, q.z - CAM.z) < 1500) { bd = d; best = q; } }
     if (!best) return;
@@ -1678,10 +1690,11 @@
   }
   function startReform(e) {
     const is190 = e.type === "190"; if (is190) e.nMax = null;
+    if (is190 && !e.hunt && (e.pass190n || 0) >= 2) { e.phase = "winchester"; e.phaseT = 0; e.setup = null; if (mission) mission.n190bingo = (mission.n190bingo || 0) + 1; return; } // doctrine: "one more pass, then empty"
     if (e.ammo <= 0) e.ammo = 1; // 1.5.2: the last few rounds in the belts — they do not leave the fight
     e.phase = "reform"; e.phaseT = 0;
     e.rSide = e.x > BOX_C.x ? 1 : -1;
-    if (is190) { e.stLat = rand(2800, 3500); e.stZ = rand(1800, 3000); e.stUp = rand(300, 650); } // 1.5.3: regroup well out and below (~3,000 ft down), not hovering next to the box  // reform ~2,500 ft below, outside gun range
+    if (is190) { e.stLat = rand(2800, 3500); e.stZ = -rand(1800, 3000); e.stUp = -rand(400, 700); } // 1.5.5: reform LOW on the rear quarter (4 / 8 o'clock), ~2,000 u out, then the second pass comes up from below again
     else { e.stLat = rand(2800, 3500); e.stZ = rand(3400, 4800); e.stUp = rand(400, 800); e.vCap = 485 * MPH; } // 1.5.4: regroup far out on the flanks (out of effective gun/visual range), never in plain sight near the box
     e.stPh = rand(0, 6.28); e.orbR = rand(110, 230); e.orbW = rand(0.12, 0.18) * (Math.random() < 0.5 ? -1 : 1); // the station is an orbit — never hovering
   }
@@ -1693,6 +1706,7 @@
   function flyStation(e, S, dt) {
     const dz = S.z - e.z, dist = Math.hypot(S.x - e.x, S.y - e.y, dz);
     e.vT = clamp(VF + 12 + dz * 0.12 + Math.max(0, dist - 250) * 0.08, VF + 8, FAI.vFull);
+    if (e.type === "190") e.vT = FAI.v190 * 0.92; // 1.5.5: a 190 never crawls on its station - it stays at speed
     if (dist > 900 && e.phase === "reform") { e.vT = e.type === "190" ? FAI.v190 : 470 * MPH; e.nMax = e.type === "190" ? 5.2 : 4.6; } // 1.5.4: the reform leg is flown FAST (a real regroup, never a crawl beside the box)
     let d = airDirTo(e, S.x + (S.x - e.x) * 0.2, S.y, S.z + 220); // aim a little ahead so they settle alongside, not orbit
     d = slopeLimit(e, d, -0.3, 0.2);
@@ -1729,16 +1743,20 @@
     if ((e.evChk = (e.evChk || 0) - dt) <= 0) { e.evChk = 0.25; if (e.phase !== "attack" && p51OnTail(e, 380)) { if (!(e.evadeT > 0) && mission) mission.evades = (mission.evades || 0) + 1; e.evadeT = 2.6; } }
     e.phaseT = (e.phaseT || 0) + dt;
     let d;
-    if (e.phase === "stack") { // 190: the company front stacks up below and astern, then presses in together
-      const An = anchorOf(e);
-      const S = { x: An.x + e.slotX, y: An.y - 110 - e.rank * 12, z: An.z - 520 - e.rank * 90 };
+    if (e.phase === "quarter" || e.phase === "stack") { // 1.5.5 (md BUG A): NO hold point. The 190 flies at v190 straight THROUGH the ship from the rear quarter and commits on range or a 4 s timer
+      if (!e.tgt) e.tgt = pick190Target(e);
+      const T = targetPoint(e.tgt);
+      const side = e.slotX >= 0 ? 1 : -1;            // 7 or 5 o'clock
+      const aim = { x: T.x + side * 40, y: T.y - 20, z: T.z - 30 }; // through the ship, not at a station
       e.vT = FAI.v190 * (e.sturm ? 0.97 : 1);
+      d = airDirTo(e, aim.x, aim.y, aim.z);
+      d = slopeLimit(e, d, -0.45, 0.25);
+      d = safeDir(e, d);
+      flyStepE(e, d.x, d.y, d.z, dt, 1.6);
+      const range = Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z);
       if (e.rockets > 0 && !e.hold) tryRockets(e);
-      { const jr = Math.hypot(S.x - e.x, S.y - e.y, S.z - e.z); d = airDirTo(e, ...(() => { const J = jinkAim(e, S, jr, 0.035 * clamp((jr - 300) / 900, 0, 1)); return [J.x, J.y, J.z]; })()); }
-      d = slopeLimit(e, d, -0.3, 0.35); d = safeDir(e, d); flyStepE(e, d.x, d.y, d.z, dt, 1.0);
-      const sd = Math.hypot(S.x - e.x, S.y - e.y, S.z - e.z);
-      if (!mission.called190 && Math.hypot(e.x - An.x, e.z - An.z) < 950) { mission.called190 = true; pushCallout("190s 6 O'CLOCK LOW", 1.8, true); sfxIntercom(); }
-      if ((sd < 240 && e.phaseT > e.holdFor) || e.phaseT > 30) { e.holdFor = 0; commitPass(e, "stern"); }
+      recAz190(e, T, range);
+      if (range < 900 || e.phaseT > 4) commitPass(e, side > 0 ? "lowq" : "stern");
       return;
     }
     if (e.phase === "inbound") { // Staffel 2: level at ~35,000 ft heading south; rolls over and dives
@@ -1788,6 +1806,7 @@
       const tx = T.x - e.x, ty = T.y - e.y, tz = T.z - e.z;
       const range = Math.hypot(tx, ty, tz) || 1;
       const cosA = (tx * e.vx + ty * e.vy + tz * e.vz) / (range * vb);
+      recAz190(e, T, range);
       const fw = e.fireWin || TAC.fire.headon;
       const fireMax = e.opening ? FAI.fireOpen * 0.66 : fw[0];
       if (e.ps && range < e.ps.minR) e.ps.minR = range;
@@ -1830,7 +1849,7 @@
       return;
     }
     if (e.phase === "extend" && e.type === "190") { // through or under, a few seconds, then down to the reform station
-      e.vT = FAI.vFull;
+      e.vT = FAI.v190;
       const so = e.brkSide || (e.x > BOX_C.x ? 1 : -1);
       d = safeDir(e, norm3(e.hx * 0.3 + so * 0.55, -0.75, e.hz * 0.3)); e.nMax = 6.3; // keeps diving away to the side
       flyStepE(e, d.x, d.y, d.z, dt, 1.2);
@@ -1847,6 +1866,13 @@
       if ((bc > 1150 && e.phaseT > 2.5) || e.phaseT > 9) reformOrEgress(e);
       return;
     }
+    if (e.phase === "winchester") { // 1.5.5: dry (two passes) - leave the area at speed, then gone
+      e.vT = FAI.v190; e.nMax = 5.2;
+      const ax = e.x - BOX_C.x, az = e.z - BOX_C.z, al = Math.hypot(ax, az) || 1;
+      d = safeDir(e, norm3(ax / al, -0.06, az / al)); flyStepE(e, d.x, d.y, d.z, dt, 0.9);
+      if (Math.hypot(ax, az) > 6500 || e.phaseT > 60) { e.alive = false; e.flash = 0; e.wreckT = 0; e.gone = true; if (mission) mission.n190gone = (mission.n190gone || 0) + 1; }
+      return;
+    }
     if (e.phase === "egress") { // out of ammo / breaking off: dive away from the box
       e.vT = FAI.vFull;
       const ax = e.x - BOX_C.x, az = e.z - BOX_C.z, al = Math.hypot(ax, az) || 1;
@@ -1860,15 +1886,7 @@
     if (e.phase === "rollin") {
       const out = e.rSide || 1;
       if (e.phaseT < 0) { flyStation(e, stationOf(e), dt); return; } // waiting for the one ahead to peel off
-      if (e.type === "190") { // 1.5.4: from the far flank station straight down the front quarter at full speed (no climbing in, no loitering)
-        if (!e.tgtPre) e.tgtPre = pick190Target(e);
-        const T = targetPoint(e.tgtPre), sd = e.x > T.x ? 1 : -1, A = { x: T.x + sd * 420, y: T.y + 360, z: T.z + 1500 };
-        e.vT = FAI.v190 * (e.sturm ? 0.97 : 1); d = airDirTo(e, A.x, A.y, A.z); d = slopeLimit(e, d, -0.55, 0.3); d = safeDir(e, d); flyStepE(e, d.x, d.y, d.z, dt, 1.2);
-        if (e.rockets > 0 && !e.hold) tryRockets(e);
-        const r = Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z), rA = Math.hypot(A.x - e.x, A.y - e.y, A.z - e.z);
-        if (r < 1750 || rA < 260 || e.phaseT > 22) commitPass(e, "fq");
-        return;
-      }
+      if (e.type === "190") { relaunch190(e); return; } // 1.5.5: 190s never roll in from a station — they re-enter as a fresh rear-quarter launch
       if (e.phaseT < 1.5) { // pull up and roll away from the box
         e.vT = FAI.vFull; d = safeDir(e, norm3(out * 0.5, 0.42, 1)); flyStepE(e, d.x, d.y, d.z, dt, 1.4);
       } else {
@@ -1882,6 +1900,7 @@
     }
     const St = stationOf(e);
     const dist = flyStation(e, St, dt);
+    if (e.phase === "reform" && e.type === "190" && !e.hold && (dist < 520 || e.phaseT > 45)) { relaunch190(e); return; } // 1.5.5: a 190 never holds on a station - it re-enters as a fresh run-in straight from the reform leg
     if (e.phase === "reform" && dist < 420 && e.phaseT > 2) { e.phase = "setup"; e.phaseT = 0; if (e.finalQ && mission && e.type === "109") { e.finalQ = false; e.mode0 = "headon"; e.side0 = e.x > BOX_C.x ? 1 : -1; e.final = true; e.phase = "arrive"; e.reattack = true; e.leader = null; } }
     if (e.phase === "reform" && e.phaseT > 110) { e.phase = "setup"; e.phaseT = 0; } // never stuck chasing the station
   }
@@ -1914,12 +1933,12 @@
       const t = L[k], hunters = enemies.filter((e) => e.alive && e.hunt && sameHunt(e.hunt, t));
       const n190 = hunters.filter((e) => e.type === "190").length, n109 = hunters.length - n190;
       const want190 = 2, want109 = t.kind === "player" ? 0 : 1;
-      const free = (ty) => enemies.filter((e) => e.alive && e.team !== "allied" && !e.hold && e.type === ty && !e.hunt && (e.phase === "setup" || e.phase === "reform" || e.phase === "extend" || e.phase === "egress" || e.phase === "stack" || e.phase === "rollin"));
+      const free = (ty) => enemies.filter((e) => e.alive && e.team !== "allied" && !e.hold && e.type === ty && !e.hunt && (e.phase === "setup" || e.phase === "reform" || e.phase === "extend" || e.phase === "egress" || e.phase === "stack" || e.phase === "quarter" || e.phase === "rollin"));
       let need = want190 - n190;
       for (const e of free("190")) {
         if (need <= 0) break;
         e.hunt = t; e.tgtPre = null; e.ammo = Math.max(e.ammo, 2);
-        e.phase = "stack"; e.phaseT = 0; e.holdFor = 0.4 * (want190 - need); e.rank = (want190 - need) & 1; e.slotX = ((want190 - need) - (want190 - 1) / 2) * 70;
+        // 1.5.5: no stack/hold behind the box - the hunter finishes whatever leg he is on and re-enters from the rear quarter (relaunch190)
         need--; if (mission) mission.huntAssign = (mission.huntAssign || 0) + 1;
       }
       need = want109 - n109;
@@ -1927,7 +1946,7 @@
     }
     // hunters that finished a pass and sit on their station go in again at once
     for (const e of enemies) if (e.alive && e.hunt && e.phase === "setup" && e.phaseT > 2.5) {
-      if (e.type === "190") { e.phase = "stack"; e.phaseT = 0; e.holdFor = 0; e.rank = (Math.random() < 0.5) ? 0 : 1; e.slotX = rand(-120, 120); e.tgtPre = null; }
+      if (e.type === "190") { startReform(e); }
       else { e.phase = "rollin"; e.phaseT = -rand(0, 1.5); e.tgtPre = e.hunt; }
     }
     if (mission) mission.stragSeen = Math.max(mission.stragSeen || 0, L.length);
@@ -1937,7 +1956,7 @@
     for (const e of enemies) {
       if (!e.alive || e.team === "allied" || e.phase === "debug") continue;
       alive++;
-      const eng = e.phase === "attack" || e.phase === "break" || e.phase === "rollin" || e.phase === "arrive" || e.phase === "inbound" || e.phase === "stack" || e.phase === "extend";
+      const eng = e.phase === "attack" || e.phase === "break" || e.phase === "rollin" || e.phase === "arrive" || e.phase === "inbound" || e.phase === "stack" || e.phase === "quarter" || e.phase === "extend";
       if (!eng) { idle++; ph[e.phase] = (ph[e.phase] || 0) + 1; }
       if (!e.hold && Math.hypot(e.x - BOX_C.x, e.y - BOX_C.y, e.z - BOX_C.z) > 1800) far++;
     }
@@ -2042,13 +2061,14 @@
       mission.nextWave = mission.t + 30;
       return;
     }
-    if (mission.t < mission.nextWave) { if ((mission.idleChk = (mission.idleChk || 0) + 1) % 30 === 0) releaseIdle(); return; }
-    // 190s: the second pass from low quarter, released together in groups of 3+ once they're regrouped below (2 passes, then empty)
-    const w190 = enemies.filter((e) => e.alive && e.type === "190" && e.phase === "setup" && e.ammo > 0);
-    if ((w190.length >= 3 || (w190.length >= 1 && mission.t >= (mission.next190 || 0) + 8)) && mission.t >= (mission.next190 || 0)) {
-      w190.forEach((e, i) => { e.phase = "rollin"; e.phaseT = -i * 0.5; e.tgtPre = null; });
-      mission.next190 = mission.t + 25; mission.waves190 = (mission.waves190 || 0) + 1;
+    { // 190s: the second pass from the low rear quarter, released as a company (>=3 regrouped, or any that waited 3 s) - 2 passes, then empty
+      const w190 = enemies.filter((e) => e.alive && e.type === "190" && e.phase === "setup" && e.ammo > 0 && !e.hunt);
+      if ((w190.length >= 3 || w190.some((e) => e.phaseT > 3)) && mission.t >= (mission.next190 || 0)) {
+        w190.forEach((e, i) => { e.phase = "rollin"; e.phaseT = -(i >> 1) * 1.2; e.tgtPre = null; });
+        mission.next190 = mission.t + 10; mission.waves190 = (mission.waves190 || 0) + 1;
+      }
     }
+    if (mission.t < mission.nextWave) { if ((mission.idleChk = (mission.idleChk || 0) + 1) % 30 === 0) releaseIdle(); return; }
     const wait = enemies.filter((e) => e.alive && e.type === "109" && e.phase === "setup" && e.ammo > 0).sort((a, b) => b.phaseT - a.phaseT);
     const pool = wait.length + enemies.filter((e) => e.alive && e.type === "109" && e.phase === "reform").length;
     if (wait.length < 1) { mission.nextWave = mission.t + 2.5; releaseIdle(); return; }
@@ -2084,6 +2104,22 @@
     return e;
   }
   const SCHWARM = [[0, 0, 0], [28, -4, 22], [-38, 0, 12], [-66, -4, 34]];
+  // 1.5.5 (md v1.5.5 BUG A): a 190 is placed ALREADY on the rear quarter - 5 o'clock (right = -X) or 7 o'clock (left = +X) - 900-1,140 u abeam and 1,100+ u aft (~1,420-1,500 u out),
+  // 140 u (~700 ft) below, nose pointed through the box, at v190 from the first frame. Used for the first launch AND for every re-entry (a fresh launch, never a hold point).
+  function placeQtr190(e, side, i, wave) { // side: +1 = +X (left, 7 o'clock), -1 = 5 o'clock; i = slot in the front; wave = row (0/1, ~2.8 s apart)
+    const An = anchorOf(e), V = FAI.v190;
+    e.x = An.x + side * (700 + (i % 4) * 70) + rand(-20, 20);
+    e.y = An.y - 140 - wave * 40 + rand(-12, 12);
+    e.z = An.z - 1100 - wave * 280 - (i >> 2) * 110 + rand(-25, 25);
+    const dv = norm3(An.x - e.x, An.y - 20 - e.y, An.z - e.z);
+    e.V = V; const bb = VF * dv.z, sB = -bb + Math.sqrt(Math.max(0, bb * bb - VF * VF + V * V));
+    initAttitude(e, { x: sB * dv.x, y: sB * dv.y, z: sB * dv.z + VF }, 0);
+    e.nMax = null; e.vT = V; e.evadeT = 0; e.slotX = side; e.phase = "quarter"; e.phaseT = 0; e.tgt = null; e.tgtPre = null; e.azRec = null;
+  }
+  function relaunch190(e) { // reform leg finished (3,000+ u aft and 3,000 ft low, far outside the turret's range): re-enter as a fresh launch on the flank he is on
+    placeQtr190(e, e.x > BOX_C.x ? 1 : -1, (Math.random() * 4) | 0, 0); e.waitT = 0;
+    if (mission) mission.relaunch190 = (mission.relaunch190 || 0) + 1;
+  }
   function spawnMissionFighters(count) {
     let n = Math.min(count, MISSION_FIGHTERS - (mission ? mission.fightersSpawned : 0));
     let leader = null;
@@ -2126,23 +2162,18 @@
       if (e.leader) e.tgt = e.leader.tgt;
       e.launchAt = 50 + sch * 12; e.hold = true; add(e); enemies.pop(); (mission.held || (mission.held = [])).push(e); // 1.5.0: second slash comes after the first Hammer wave, not with it
     }
-    // the Hammer (1.5.4): two waves of 8× Fw 190 (half Sturmbock). They arrive as Rotten from the front quarters, high, already at full dive speed
-    // (no loitering astern): ~470-520 mph, closing ~800 mph with the box, a short fast run in to ~400 yd, through/under, a hard dive-away, and gone.
+    // the Hammer (1.5.5, doctrine md v1.5.5): two companies of 8x Fw 190 (half Sturmbock) launched ALREADY on the rear quarters - 5 o'clock and 7 o'clock - nose through the box, v190 from
+    // the first frame. Each company is 4 abreast in 2 rows ~2.8 s apart; company B follows while A is still exiting under. No stack / hold point anywhere. (game +X is the turret's LEFT)
     const SCN = window.__FG_SCN || {};
     for (let w = 0; w < 2 && !SCN.no190; w++) {
-      let ld190 = null;
       for (let i = 0; i < 8 && n > 0; i++) {
         const e = makeMissionFighter("190");
-        const side = (((i >> 1) + w) & 1) ? 1 : -1, wing = i & 1; // pairs alternate 10:30 / 1:30
-        e.rank = w; e.slotX = (i - 3.5) * 62;
-        if (w === 0 && (i & 1) === 0) e.rockets = 2; // 1.5.2: WGr.21 on half of the first company front
-        e.x = BOX_C.x + side * (650 + (i >> 1) * 110 + w * 140) + rand(-30, 30); e.y = BOX_C.y + 760 + rand(-60, 90) + wing * 14; e.z = BOX_C.z + 4300 + w * 260 + (i >> 1) * 140 + wing * 40 + rand(-30, 30);
-        const dv = norm3(BOX_C.x - e.x, BOX_C.y + 60 - e.y, BOX_C.z - e.z), V = FAI.v190;
-        e.V = V; const bb = VF * dv.z, sB = -bb + Math.sqrt(Math.max(0, bb * bb - VF * VF + V * V));
-        initAttitude(e, { x: sB * dv.x, y: sB * dv.y, z: sB * dv.z + VF }, 0);
-        e.phase = "arrive"; e.mode0 = "fq"; e.side0 = side; e.wing = wing;
-        if (!wing) ld190 = e; else e.leader = ld190;
-        e.launchAt = w ? 40 : 26; e.hold = true; e.staffel = 5 + w; e.seq = 20 + w * 10 + i;
+        const side = i % 2 ? 1 : -1, row = i >> 2;
+        e.rank = w;
+        if (w === 0 && (i & 1) === 0 && row === 0) e.rockets = 2; // WGr.21 on the first company's lead pair (first wave only)
+        placeQtr190(e, side, i, row);
+        e.wing = i & 1; e.q190 = true; e.mode0 = "quarter"; e.side0 = side;
+        e.launchAt = (w ? 39 : 28); e.hold = true; e.staffel = 5 + w; e.seq = 20 + w * 10 + i;
         add(e);
         enemies.pop(); (mission.held || (mission.held = [])).push(e);
       }
@@ -2189,7 +2220,7 @@
       e.speed = Math.hypot(e.vx, e.vy, e.vz);
       if (e.type === "190" && mission) { // 1.5.2 telemetry: closing speed (box frame) while a 190 is in a pass — a sitting duck shows up as a low number
         const ph = e.phase, mph = e.speed / MPH, R = mission.r190 || (mission.r190 = { fireN: 0, fireSum: 0, fireMin: 1e9, passN: 0, passSum: 0, passMin: 1e9, loiter: 0, passT: 0 });
-        if (ph === "attack" || ph === "stack" || ph === "rollin" || ph === "extend" || ph === "break") {
+        if (ph === "attack" || ph === "stack" || ph === "quarter" || ph === "rollin" || ph === "extend" || ph === "break") {
           if (ph === "attack") { R.passN++; R.passSum += mph; if (mph < R.passMin) R.passMin = mph; }
           if (e.burst) { R.fireN++; R.fireSum += mph; if (mph < R.fireMin) R.fireMin = mph; }
           if (ph !== "break" && mph < 110 && Math.hypot(e.x - BOX_C.x, e.y - BOX_C.y, e.z - BOX_C.z) < 1500) R.loiter += dt;
@@ -2221,8 +2252,13 @@
         if (e.slip) { const S = frontSetup(e.mode0, e.side0); e.x = S.x + e.side0 * (300 + rand(0, 400)) + e.wing * 45; e.y = S.y + 700 + rand(0, 900); e.z = S.z + (TAC.arriveV + 280) * MPH * 22 + e.wing * 40; e.slipped = true; if (on190 >= 10) mission.slipOn190 = true; }
         e.hold = false; enemies.push(e);
         if (e.staffel === 1) {
-          if (!mission.inboundCalled) { mission.inboundCalled = true; pushCallout("BANDITS INBOUND — 109s HIGH · 190s 10 AND 2 O'CLOCK HIGH", 2.6, true); sfxIntercom(); }
+          if (!mission.inboundCalled) { mission.inboundCalled = true; pushCallout("BANDITS INBOUND — 109s 12 O'CLOCK HIGH · 190s 5 AND 7 O'CLOCK", 2.6, true); sfxIntercom(); }
           commitPass(e, "headon"); e.diveT = mission.t;
+        } else if (e.q190) {
+          const cq = e.slotX > 0 ? "7" : "5"; mission.calledQ = mission.calledQ || {};
+          if (!mission.calledQ[cq]) { mission.calledQ[cq] = true; mission.called190 = true; pushCallout("190s " + cq + " O'CLOCK LOW", 2.0, true); sfxIntercom(); }
+          if (mission.firstLaunch190 == null) mission.firstLaunch190 = mission.t;
+          e.phase = "quarter"; e.phaseT = 0;
         }
       }
     }
@@ -3901,11 +3937,9 @@
   function setDownHud(chute) {
     for (const id of ["topbar", "missionbar", "healthwrap", "heatwrap"]) { const el = document.getElementById(id); if (el) el.style.visibility = chute ? "hidden" : ""; }
   }
-  // 1.5.4 (beta): the player's Fortress can NOT be destroyed by damage — hull floors at 1 %. Effects, engines out, fires, list and straggling still happen.
-  const PLAYER_FLOOR = true;
+  // 1.5.5: the 1.5.4 beta 1 % hull floor is REMOVED — the player's Fortress can be shot down / bail out again (1.5.3 behaviour).
   function playerShotDown(cause) {
     if (!bomber || bomber.dead || !mission) return;
-    if (PLAYER_FLOOR && cause !== "__test") { bomber.health = Math.max(1, bomber.health); bomber.crewHp = Math.max(1, bomber.crewHp); mission.floorSaves = (mission.floorSaves || 0) + 1; return; }
     bomber.dead = true;
     bomber.health = 0;
     input.fire = false;
@@ -6409,7 +6443,7 @@
     bulletsRaw: () => bullets.map((b) => ({ x: b.x - CAM.x, y: b.y - CAM.y, z: b.z - CAM.z, vx: b.vx, vy: b.vy, vz: b.vz, trav: b.trav, life: b.life })),
     ownPart: (x, y, z) => ownPartAt(x, y, z),
     difficulty: (d) => { if (d) setDifficulty(d); return difficulty; },
-    missionInfo: () => mission ? { p51x: { bursts: mission.p51Bursts || 0, burstsNear: mission.p51BurstsNear || 0, fireSec: +(mission.p51FireSec || 0).toFixed(1), fireSecNear: +(mission.p51FireSecNear || 0).toFixed(1), fightNearSec: +(mission.p51FightNearSec || 0).toFixed(1), fireWinSec: +(mission.p51FireWinSec || 0).toFixed(1), hits: mission.p51Hits || 0, drove: mission.p51Drove || 0, jumps: mission.p51Jumps || 0, endPass: mission.p51EndPass || 0, endLost: mission.p51EndLost || 0, endT: mission.p51EndT || 0, endDive: mission.p51EndDive || 0, endLeash: mission.p51EndLeash || 0 }, rkt: mission.rkt || { fired: 0, direct: 0, burst: 0, fragHits: 0, shooters: 0 }, r190: mission.r190 || null, p51cap: mission.p51cap || null, stragInfo: { outT: mission.playerOutT != null ? +mission.playerOutT.toFixed(1) : null, why: mission.playerOutWhy || null, hp: mission.playerOutHp != null ? mission.playerOutHp : null, passes: mission.stragPasses || 0, passes190: mission.strag190Passes || 0, hunters: mission.huntAssign || 0, stragSeen: mission.stragSeen || 0, k: playerStragK() }, p51ff: { hitYou: mission.p51HitYou || 0, hitGun: mission.p51HitGun || 0, lost: mission.p51Lost || 0, lostYou: mission.p51LostYou || 0, lostGun: mission.p51LostGun || 0, lostGer: mission.p51LostGer || 0 }, duelStarts: mission.duelStarts || 0, duelWhy: mission.duelWhy || null, duelSec: mission.duelSec || 0, p51Lost: mission.p51Lost || 0, duelGerHits: mission.duelGerHits || 0, duelGerBursts: mission.duelGerBursts || 0, duelP51Bursts: mission.duelP51Bursts || 0, idleEnd: idleAxisNow(), killsBy: mission.killsBy || {}, firstSeenT: mission.firstSeenT, fireSpeeds: mission.fireSpeeds || [], evades: mission.evades || 0, waves: mission.waves || 0, finalN: mission.finalN, t: mission.t, firstShotT: mission.firstShotT, passes: mission.passes, bursts: mission.bursts, lost: mission.friendliesLost, killed: mission.fightersKilled, cpuKills, youKills: kills, cpuShots: mission.cpuShots || 0, cpuHits: mission.cpuHits || 0, ff: mission.friendlyHits || 0, ffCpu: mission.friendlyHitsCpu || 0, ffLost: mission.friendlyFFLost || 0, dropped: mission.bombersDropped, done: mission.evaluated, modeStats: mission.modeStats, heading: mission.heading || 0, post: mission.post, ownHits: mission.ownHits || 0, engHits: mission.hs || null, cpuTracers: mission.cpuTracers || 0, gunStats: mission.gunStats || null, tail: bomber ? bomber.tail.fire : 0, engFire: bomber ? bomber.engines.map((q) => +q.fire.toFixed(2)) : null, phases: enemies.filter((q) => q.alive).reduce((a, q) => { a[q.phase] = (a[q.phase] || 0) + 1; return a; }, {}), alive109: MISSION_FIGHTERS - mission.fightersKilled, state, playerDead: !!(bomber && bomber.dead), downAt: downSeq ? downSeq.missionT : null, downCause: downSeq ? downSeq.cause : null, chutesSpawned: mission.chutes || 0, health: bomber ? bomber.health : 0, flak: mission.flakStats || null, timeLeft: mission.timeLeft, outLog: mission.outLog || [], outBox: outBoxCount(), hitLog: mission.hitLog || null, hitVic: mission.hitVic || null, passAgg: mission.passAgg || null, kYou: mission.kYou || 0, kGun: mission.kGun || 0, kP51: mission.kP51 || 0, p51: { jumps: mission.p51Jumps || 0, on190: mission.p51On190 || 0, hits: mission.p51Hits || 0, kills: mission.p51Kills || 0, kills190: mission.p51Kills190 || 0, drove: mission.p51Drove || 0, abort109: mission.p51Abort || 0, bursts: mission.p51Bursts || 0, endT: mission.p51EndT || 0, endLost: mission.p51EndLost || 0, endLeash: mission.p51EndLeash || 0, endDive: mission.p51EndDive || 0, endPass: mission.p51EndPass || 0, egress: mission.p51Egress || 0 }, waves190: mission.waves190 || 0, s190: { seen: mission.n190seen || 0, killedSeen: mission.k190seen || 0, drove: mission.n190drove || 0, killed: mission.k190 || 0 }, slipOn190: !!mission.slipOn190, 
+    missionInfo: () => mission ? { az190: mission.az190 || [], n190bingo: mission.n190bingo || 0, n190gone: mission.n190gone || 0, firstLaunch190: mission.firstLaunch190, p51x: { bursts: mission.p51Bursts || 0, burstsNear: mission.p51BurstsNear || 0, fireSec: +(mission.p51FireSec || 0).toFixed(1), fireSecNear: +(mission.p51FireSecNear || 0).toFixed(1), fightNearSec: +(mission.p51FightNearSec || 0).toFixed(1), fireWinSec: +(mission.p51FireWinSec || 0).toFixed(1), hits: mission.p51Hits || 0, drove: mission.p51Drove || 0, jumps: mission.p51Jumps || 0, endPass: mission.p51EndPass || 0, endLost: mission.p51EndLost || 0, endT: mission.p51EndT || 0, endDive: mission.p51EndDive || 0, endLeash: mission.p51EndLeash || 0 }, rkt: mission.rkt || { fired: 0, direct: 0, burst: 0, fragHits: 0, shooters: 0 }, r190: mission.r190 || null, p51cap: mission.p51cap || null, stragInfo: { outT: mission.playerOutT != null ? +mission.playerOutT.toFixed(1) : null, why: mission.playerOutWhy || null, hp: mission.playerOutHp != null ? mission.playerOutHp : null, passes: mission.stragPasses || 0, passes190: mission.strag190Passes || 0, hunters: mission.huntAssign || 0, stragSeen: mission.stragSeen || 0, k: playerStragK() }, p51ff: { hitYou: mission.p51HitYou || 0, hitGun: mission.p51HitGun || 0, lost: mission.p51Lost || 0, lostYou: mission.p51LostYou || 0, lostGun: mission.p51LostGun || 0, lostGer: mission.p51LostGer || 0 }, duelStarts: mission.duelStarts || 0, duelWhy: mission.duelWhy || null, duelSec: mission.duelSec || 0, p51Lost: mission.p51Lost || 0, duelGerHits: mission.duelGerHits || 0, duelGerBursts: mission.duelGerBursts || 0, duelP51Bursts: mission.duelP51Bursts || 0, idleEnd: idleAxisNow(), killsBy: mission.killsBy || {}, firstSeenT: mission.firstSeenT, fireSpeeds: mission.fireSpeeds || [], evades: mission.evades || 0, waves: mission.waves || 0, finalN: mission.finalN, t: mission.t, firstShotT: mission.firstShotT, passes: mission.passes, bursts: mission.bursts, lost: mission.friendliesLost, killed: mission.fightersKilled, cpuKills, youKills: kills, cpuShots: mission.cpuShots || 0, cpuHits: mission.cpuHits || 0, ff: mission.friendlyHits || 0, ffCpu: mission.friendlyHitsCpu || 0, ffLost: mission.friendlyFFLost || 0, dropped: mission.bombersDropped, done: mission.evaluated, modeStats: mission.modeStats, heading: mission.heading || 0, post: mission.post, ownHits: mission.ownHits || 0, engHits: mission.hs || null, cpuTracers: mission.cpuTracers || 0, gunStats: mission.gunStats || null, tail: bomber ? bomber.tail.fire : 0, engFire: bomber ? bomber.engines.map((q) => +q.fire.toFixed(2)) : null, phases: enemies.filter((q) => q.alive).reduce((a, q) => { a[q.phase] = (a[q.phase] || 0) + 1; return a; }, {}), alive109: MISSION_FIGHTERS - mission.fightersKilled, state, playerDead: !!(bomber && bomber.dead), downAt: downSeq ? downSeq.missionT : null, downCause: downSeq ? downSeq.cause : null, chutesSpawned: mission.chutes || 0, health: bomber ? bomber.health : 0, flak: mission.flakStats || null, timeLeft: mission.timeLeft, outLog: mission.outLog || [], outBox: outBoxCount(), hitLog: mission.hitLog || null, hitVic: mission.hitVic || null, passAgg: mission.passAgg || null, kYou: mission.kYou || 0, kGun: mission.kGun || 0, kP51: mission.kP51 || 0, p51: { jumps: mission.p51Jumps || 0, on190: mission.p51On190 || 0, hits: mission.p51Hits || 0, kills: mission.p51Kills || 0, kills190: mission.p51Kills190 || 0, drove: mission.p51Drove || 0, abort109: mission.p51Abort || 0, bursts: mission.p51Bursts || 0, endT: mission.p51EndT || 0, endLost: mission.p51EndLost || 0, endLeash: mission.p51EndLeash || 0, endDive: mission.p51EndDive || 0, endPass: mission.p51EndPass || 0, egress: mission.p51Egress || 0 }, waves190: mission.waves190 || 0, s190: { seen: mission.n190seen || 0, killedSeen: mission.k190seen || 0, drove: mission.n190drove || 0, killed: mission.k190 || 0 }, slipOn190: !!mission.slipOn190, 
       fHealth: friendlies.map((f) => Math.round(f.health)), player: bomber ? Math.round(bomber.health) : null, VF, MPH } : null,
     hitEnemy: (id, n) => {
       const e = enemies.find((q) => q.id === id);

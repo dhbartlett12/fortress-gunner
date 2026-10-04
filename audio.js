@@ -16,7 +16,7 @@
   "use strict";
   const AC = window.AudioContext || window.webkitAudioContext;
   const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  const stats = { built: false, unlocked: false, errors: 0, events: {} };
+  const stats = { built: false, unlocked: false, errors: 0, events: {}, ringsThisRun: 0, ringsTotal: 0, ringTries: 0 };
   const count = (k) => { stats.events[k] = (stats.events[k] || 0) + 1; };
 
   // ---------- 1.5.4 distance model: speed of sound, spreading loss, air absorption ----------
@@ -365,7 +365,13 @@
   }
   // (b) flak -----------------------------------------------------------------------------------------
   // ear-ring + muffle: low-passes the whole mix for ~1.2 s and adds a faint 3 kHz whine that dies away
+  // 1.5.5: the ring happens AT MOST ONCE PER RUN (stats.ringsThisRun, cleared by reset()) and only for a very close, heavy burst (depth >= RING_MIN).
+  // Every other burst keeps its thump / shake / shrapnel but no muffle and no whine.
+  const RING_MIN = 0.78;
   function earDuck(G, t, depth) {
+    stats.ringTries = (stats.ringTries || 0) + 1;
+    if (depth < RING_MIN || stats.ringsThisRun >= 1) return;
+    stats.ringsThisRun = 1; stats.ringsTotal = (stats.ringsTotal || 0) + 1;
     const T = G.tame; if (!T) return;
     T.frequency.cancelScheduledValues(t); T.frequency.setValueAtTime(TAME_F, t); T.frequency.linearRampToValueAtTime(Math.max(380, 2400 - 2000 * depth), t + 0.015);
     T.frequency.setTargetAtTime(7200, t + 0.35 + depth * 0.4, 0.5 + depth * 0.4);
@@ -743,7 +749,7 @@
     bombsAway() { if (!ok()) return; sBombsAway(G, ctx.currentTime); count("bombsAway"); },
     mute(b) { muted = !!b; if (ctx && G) G.master.gain.setTargetAtTime(b ? 0.0001 : 0.35, ctx.currentTime, 0.05); },
     results() { muted = false; if (ctx && G) { restoreGraph(G, ctx.currentTime); G.master.gain.setTargetAtTime(0.35, ctx.currentTime, 0.6); } count("results"); },
-    reset() { muted = false; passes.clear(); if (ctx && G) restoreGraph(G, ctx.currentTime); count("reset"); },
+    reset() { muted = false; stats.ringsThisRun = 0; passes.clear(); if (ctx && G) restoreGraph(G, ctx.currentTime); count("reset"); },
     // offline demo: the same synth graph rendered to a buffer (verification + a listenable sample)
     renderSample(sec, part) {
       if (part === "dist") return renderDist(sec);

@@ -253,7 +253,7 @@ export function createWorld3D(canvas) {
 
   // B-17 dims in world units (1u = 100 ft) × visual scale so the box reads on a phone.
   const B17_VIS = 16;               // 1.3.3: 103 ft span → 16u (closer to own-ship scale)
-  const NACELLE_X = [-0.44, -0.22, 0.22, 0.44]; // fraction of half-span*2 → engine #1..#4 (port→stbd)
+  const NACELLE_X = [-0.35, -0.19, 0.19, 0.35]; // fraction of half-span*2 → engine #1..#4 (port→stbd)
   // 1.3.6: weathered, sun-faded olive drab (mottled, chalky patches, panel seams) with a little sheen
   const weatherTex = (() => {
     const c = document.createElement("canvas"); c.width = c.height = 256;
@@ -449,6 +449,8 @@ export function createWorld3D(canvas) {
     { z: 0.262, hw: 0.0335, top: 0.0310, bot: -0.0275, n: 2.1 }, { z: 0.280, hw: 0.0325, top: 0.0285, bot: -0.0290, n: 2.0 }, { z: 0.298, hw: 0.0295, top: 0.0220, bot: -0.0290, n: 2.0 },
     { z: 0.316, hw: 0.0245, top: 0.0140, bot: -0.0260, n: 2.0 }, { z: 0.331, hw: 0.0175, top: 0.0070, bot: -0.0205, n: 2.0 }, { z: 0.342, hw: 0.0095, top: 0.0010, bot: -0.0140, n: 2.0 }, { z: 0.348, hw: 0.0020, top: -0.0030, bot: -0.0090, n: 2.0 },
   ];
+  // 1.5.5: proportions re-measured from the real B-17F side/plan references (beam ≈ 0.033 S, depth ≈ 0.082 S) — the 1.5.4 hull was ~35% too fat and 20% too deep
+  for (const A of [b17HullSecs, b17NoseSecs]) for (const q of A) { const yM = (q.top + q.bot) * 0.5, h = (q.top - q.bot) * 0.5 * 0.84; q.top = yM * 0.92 + h; q.bot = yM * 0.92 - h; q.hw *= 0.735; if (q.z > 0) q.bot -= 0.007 * Math.min(1, q.z / 0.15) * (q.z < 0.3 ? 1 : Math.max(0, (0.348 - q.z) / 0.05)); }
   function b17Loft(secs, N, i0, i1, capEnds) {
     const S = B17_VIS, pos = [], uv = [], idx = [], rows = i1 - i0 + 1;
     for (let r = 0; r < rows; r++) {
@@ -507,12 +509,12 @@ export function createWorld3D(canvas) {
     // nose glazing (bombardier) + chin turret, cockpit greenhouse, top turret, ball turret, tail gun, waist windows
     const noseM = b17NoseGlass().clone(); mats.push(noseM); g.userData.hazeMats.push({ m: noseM, col: noseM.color.clone() });
     const nose = new THREE.Mesh(b17Loft(b17NoseSecs, 16, 0, b17NoseSecs.length - 1, false), noseM); g.add(nose);
-    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.0165 * S, 10, 7), dark); chin.scale.set(0.95, 1, 1.15); chin.position.set(0, -0.037 * S, 0.292 * S); g.add(chin);
-    const cock = new THREE.Mesh(new THREE.BoxGeometry(0.056 * S, 0.02 * S, 0.075 * S), glassM); cock.position.set(0, 0.0505 * S, 0.222 * S); cock.rotation.x = -0.14; g.add(cock);
-    const cockF = new THREE.Mesh(new THREE.BoxGeometry(0.058 * S, 0.003 * S, 0.004 * S), dark); cockF.position.set(0, 0.0605 * S, 0.222 * S); g.add(cockF);
-    if (metal) { const ag = new THREE.Mesh(new THREE.BoxGeometry(0.05 * S, 0.004 * S, 0.1 * S), new THREE.MeshStandardMaterial({ color: 0x3f4730, roughness: 0.7, metalness: 0.1 })); ag.position.set(0, 0.034 * S, 0.285 * S); ag.rotation.x = 0.28; g.add(ag); } // anti-glare panel
+    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.0165 * S, 10, 7), dark); chin.scale.set(0.95, 1, 1.15); chin.position.set(0, -0.043 * S, 0.292 * S); g.add(chin);
+    const cock = new THREE.Mesh(new THREE.BoxGeometry(0.045 * S, 0.017 * S, 0.075 * S), glassM); cock.position.set(0, 0.0425 * S, 0.222 * S); cock.rotation.x = -0.14; g.add(cock);
+    const cockF = new THREE.Mesh(new THREE.BoxGeometry(0.046 * S, 0.003 * S, 0.004 * S), dark); cockF.position.set(0, 0.0512 * S, 0.222 * S); g.add(cockF);
+    if (metal) { const ag = new THREE.Mesh(new THREE.BoxGeometry(0.04 * S, 0.004 * S, 0.1 * S), new THREE.MeshStandardMaterial({ color: 0x3f4730, roughness: 0.7, metalness: 0.1 })); ag.position.set(0, 0.028 * S, 0.285 * S); ag.rotation.x = 0.28; g.add(ag); } // anti-glare panel
     const top = new THREE.Mesh(new THREE.SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM); top.position.set(0, hullAt(0.15).top * S - 0.002 * S, 0.15 * S); g.add(top);
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.019 * S, 10, 7), dark); ball.position.set(0, -0.047 * S, -0.02 * S); g.add(ball);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.019 * S, 10, 7), dark); ball.position.set(0, -0.037 * S, -0.02 * S); g.add(ball);
     const tailG = new THREE.Mesh(new THREE.BoxGeometry(0.014 * S, 0.016 * S, 0.034 * S), glassM); tailG.position.set(0, 0.007 * S, -0.402 * S); tailG.userData.tailPart = true; g.add(tailG);
     for (const sd of [-1, 1]) for (const wz of [-0.075, -0.13]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(0.04 * S, 0.02 * S), dark); w.position.set(sideX(wz, 0.014 * S / S, sd) * S + sd * 0.0006 * S, 0.014 * S, wz * S); w.rotation.y = sd * Math.PI / 2; g.add(w); }
     // fuselage codes + insignia on both sides
@@ -536,8 +538,8 @@ export function createWorld3D(canvas) {
       const sh = new THREE.Shape();
       sh.moveTo(-0.38 * S, 0.012 * S); sh.lineTo(-0.1 * S, 0.042 * S);
       sh.quadraticCurveTo(-0.2 * S, 0.05 * S, -0.245 * S, 0.082 * S);   // long dorsal fillet rising out of the spine
-      sh.quadraticCurveTo(-0.268 * S, 0.1 * S, -0.283 * S, 0.142 * S);  // the fin's swept leading edge steepens
-      sh.quadraticCurveTo(-0.292 * S, 0.164 * S, -0.318 * S, 0.1645 * S); sh.quadraticCurveTo(-0.344 * S, 0.165 * S, -0.352 * S, 0.145 * S); // rounded tip
+      sh.quadraticCurveTo(-0.258 * S, 0.112 * S, -0.279 * S, 0.146 * S);  // the fin's swept leading edge steepens
+      sh.quadraticCurveTo(-0.289 * S, 0.157 * S, -0.318 * S, 0.1575 * S); sh.quadraticCurveTo(-0.344 * S, 0.158 * S, -0.352 * S, 0.14 * S); // rounded tip
       sh.lineTo(-0.372 * S, 0.05 * S); sh.lineTo(-0.376 * S, 0.012 * S); sh.closePath();
       const fg = new THREE.ExtrudeGeometry(sh, { depth: 0.01 * S, bevelEnabled: false });
       fg.translate(0, 0, -0.005 * S); tintGeo(fg, cTop, cBot);
@@ -553,18 +555,18 @@ export function createWorld3D(canvas) {
       for (const sd of [-1, 1]) {
         MB.glass.push([_bgBox(0.004 * S, 0.014 * S, 0.026 * S), sideX(0.285, -0.004, sd) * S, -0.004 * S, 0.285 * S, 0, 0, 0]); // cheek gun window
         MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sideX(0.271, -0.004, sd) * S, -0.004 * S, 0.271 * S, 0, 0, 0]); MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sideX(0.299, -0.004, sd) * S, -0.004 * S, 0.299 * S, 0, 0, 0]);
-        for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(0.0018 * S, 0.02 * S, 0.0016 * S), sideX(z, 0.048, sd) * S, 0.048 * S, z * S, 0, 0, 0]); // cockpit side-window frames
-        MB.glass.push([_bgBox(0.0018 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.048, sd) * S - sd * 0.0004 * S, 0.048 * S, 0.218 * S, 0, 0, 0]);
+        for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(0.0018 * S, 0.02 * S, 0.0016 * S), sideX(z, 0.04, sd) * S, 0.04 * S, z * S, 0, 0, 0]); // cockpit side-window frames
+        MB.glass.push([_bgBox(0.0018 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.04, sd) * S - sd * 0.0004 * S, 0.04 * S, 0.218 * S, 0, 0, 0]);
         MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.034 * S, 5), sd * 0.0055 * S, hullAt(0.15).top * S + 0.003 * S, 0.172 * S, Z90, 0, 0]); // top-turret twin .50s
         MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), sd * 0.0035 * S, -0.038 * S, 0.305 * S, Z90, 0, 0]); // chin turret
-        MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.028 * S, 5), sd * 0.004 * S, -0.072 * S, -0.046 * S, 0.5, 0, 0]); // ball turret
-        MB.dark.push([_bgCyl(0.0016 * S, 0.0016 * S, 0.04 * S, 5), sd * 0.058 * S, 0.014 * S, -0.075 * S, 0, 0, Z90]); // waist gun
-        MB.dark.push([_bgBox(0.0035 * S, 0.0012 * S, 0.1 * S), sideX(-0.1, 0.0245, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]); // waist window top rail
+        MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.028 * S, 5), sd * 0.004 * S, -0.058 * S, -0.04 * S, 0.5, 0, 0]); // ball turret
+        MB.dark.push([_bgCyl(0.0016 * S, 0.0016 * S, 0.04 * S, 5), sd * 0.044 * S, 0.012 * S, -0.075 * S, 0, 0, Z90]); // waist gun
+        MB.dark.push([_bgBox(0.0035 * S, 0.0012 * S, 0.1 * S), sideX(-0.1, 0.0205, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]); // waist window top rail
       }
-      MB.dark.push([_bgBox(0.058 * S, 0.0016 * S, 0.002 * S), 0, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]);
-      for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(0.0016 * S, 0.02 * S, 0.0018 * S), x * S, 0.0525 * S, 0.2585 * S, -0.14, 0, 0]); // windscreen mullions
+      MB.dark.push([_bgBox(0.058 * S, 0.0016 * S, 0.002 * S), 0, 0.0365 * S, 0.2585 * S, -0.14, 0, 0]);
+      for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(0.0016 * S, 0.02 * S, 0.0018 * S), x * S, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]); // windscreen mullions
       MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 0.004 * S, 12), 0, hullAt(0.15).top * S - 0.001 * S, 0.15 * S, 0, 0, 0]); // top-turret ring
-      MB.glass.push([_bgBox(0.014 * S, 0.003 * S, 0.03 * S), 0, 0.0505 * S, -0.03 * S, 0, 0, 0]); // radio-room hatch
+      MB.glass.push([_bgBox(0.012 * S, 0.003 * S, 0.03 * S), 0, 0.0405 * S, -0.03 * S, 0, 0, 0]); // radio-room hatch
     }
     MT.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), 0.0035 * S, 0.0045 * S, -0.43 * S, Z90, 0, 0]); MT.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), -0.0035 * S, 0.0045 * S, -0.43 * S, Z90, 0, 0]); // tail guns
     for (const sd of [-1, 1]) { MT.dark.push([_bgBox(0.0014 * S, 0.1 * S, 0.0026 * S), sd * 0.0062 * S, 0.095 * S, -0.34 * S, 0, 0, 0]); MT.dark.push([_bgBox(0.2 * S, 0.0012 * S, 0.0022 * S), sd * 0.11 * S, 0.0135 * S, -0.388 * S, 0, 0, 0]); } // rudder hinge, elevator hinge
@@ -2744,7 +2746,7 @@ export function createWorld3D(canvas) {
   const flakFlashTex = (() => {
     const c = document.createElement("canvas"); c.width = c.height = 64; const x = c.getContext("2d");
     const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, "rgba(255,255,255,1)"); g.addColorStop(0.2, "rgba(255,252,235,1)"); g.addColorStop(0.38, "rgba(255,205,110,0.95)"); g.addColorStop(0.62, "rgba(255,110,40,0.55)"); g.addColorStop(1, "rgba(160,20,0,0)"); // 1.5.4: white-hot core
+    g.addColorStop(0, "rgba(255,250,220,1)"); g.addColorStop(0.18, "rgba(255,190,90,1)"); g.addColorStop(0.45, "rgba(255,90,30,0.75)"); g.addColorStop(1, "rgba(160,20,0,0)");
     x.fillStyle = g; x.fillRect(0, 0, 64, 64);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
   })();
@@ -2772,8 +2774,7 @@ export function createWorld3D(canvas) {
     const m = new THREE.Mesh(geo, flakMat); m.frustumCulled = false; m.visible = false; scene.add(m);
     const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: flakFlashTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
     fl.visible = false; scene.add(fl);
-    const bl = new THREE.Sprite(new THREE.SpriteMaterial({ map: flakBloomTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); bl.visible = false; scene.add(bl);
-    flakMeshes.push({ m, fl, bl, id: -1, puffs: null });
+    flakMeshes.push({ m, fl, id: -1, puffs: null });
   }
   const flakLight = new THREE.PointLight(0xff7a30, 0, 140, 1.2); scene.add(flakLight);
   // 1.4.0 flak debris: dark shell fragments + a few hot sparks thrown out of each burst, falling under gravity
@@ -2816,7 +2817,7 @@ export function createWorld3D(canvas) {
     list = list || [];
     const byId = new Map(); for (const b of list) if (b.t >= 0) byId.set(b.id, b);
     // keep each burst in its mesh
-    for (const F of flakMeshes) if (F.id >= 0 && !byId.has(F.id)) { F.id = -1; F.m.visible = false; F.fl.visible = false; F.bl.visible = false; }
+    for (const F of flakMeshes) if (F.id >= 0 && !byId.has(F.id)) { F.id = -1; F.m.visible = false; F.fl.visible = false; }
     const used = new Set(flakMeshes.filter((F) => F.id >= 0).map((F) => F.id));
     for (const b of byId.values()) {
       if (used.has(b.id)) continue;
@@ -2836,7 +2837,7 @@ export function createWorld3D(canvas) {
         const along = (ox * bx + oy * by + oz * bz) * (str - 1); ox += bx * along; oy += by * along; oz += bz * along;
         F.puffs.push({ ox: ox * sz, oy: oy * sz, oz: oz * sz, s: (p === 0 ? 9.5 : 4 + r() * 6.5) * sz, rot: r() * 6.28, spin: (r() - 0.5) * 0.25, cell: (r() * 8) | 0, lum: 0.7 + r() * 0.6, wx: (r() - 0.5) * 1.3, wz: (r() - 0.5) * 1.3, late: r() * 0.5 });
       }
-      spawnDebris(b.x, b.y, b.z, 14 + ((sz * 14) | 0), sz);
+      // 1.5.5: no flak shell-fragment points (in 1.5.3 that pool was never stepped, so they were never visible)
     }
     let live = 0, best = null, bestD = 1e9;
     for (const F of flakMeshes) {
@@ -2861,7 +2862,7 @@ export function createWorld3D(canvas) {
           const o = (p * 4 + v);
           pos[o * 3] = ox; pos[o * 3 + 1] = oy; pos[o * 3 + 2] = oz;
           dat[o * 4] = size; dat[o * 4 + 1] = alpha; dat[o * 4 + 2] = P.rot + P.spin * t; dat[o * 4 + 3] = P.cell;
-          const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark) * (p === 0 ? 0.55 : 1.12); // 1.5.4: dark core, paler ragged lobes around it
+          const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark);
           tin[o * 3] = tr * kk * F.tint[0]; tin[o * 3 + 1] = tg * kk * F.tint[1]; tin[o * 3 + 2] = tb * kk * F.tint[2];
         }
       }
@@ -2870,8 +2871,6 @@ export function createWorld3D(canvas) {
       // the instant flash: bright orange-red, ~0.12 s
       F.fl.visible = t < 0.16;
       if (F.fl.visible) { F.fl.position.set(b.x, b.y, b.z); const s = (10 + t * 90) * (b.size || 1); F.fl.scale.set(s, s, 1); F.fl.material.opacity = Math.min(1, 1.25 * (1 - t / 0.16)); flakStats.flashes++; }
-      F.bl.visible = t < 0.34;
-      if (F.bl.visible) { F.bl.position.set(b.x, b.y, b.z); const bd = camera.position.distanceTo(F.m.position), bs = Math.min((34 + t * 160) * (b.size || 1), Math.max(6, bd * 0.8)); F.bl.scale.set(bs, bs, 1); F.bl.material.opacity = 0.6 * Math.pow(1 - t / 0.34, 1.6); }
       if (t < 0.18) { const d = camera.position.distanceTo(F.m.position); if (d < bestD) { bestD = d; best = { b, t }; } }
     }
     flakStats.live = live; flakStats.maxLive = Math.max(flakStats.maxLive, live);
@@ -2917,7 +2916,7 @@ export function createWorld3D(canvas) {
     _cw.set(tx, ty, tz).cross(_ca); let L = _cw.length();
     if (L < 1e-4) { _cw.set(1, 0, 0); L = 1; }
     const ww = Math.max(w, dist * wMin) * 0.5 / L; _cw.multiplyScalar(ww);
-    const nf = dist < 30 ? 0 : dist > 150 ? 1 : (dist - 30) / 120; a *= nf * nf * (3 - 2 * nf); // never smear across the lens
+    const nf = dist < 45 ? 0 : dist > 240 ? 1 : (dist - 45) / 195; a *= nf * nf * (3 - 2 * nf); // never smear across the lens
     const o = (r * R.nPts + i) * 6, c = (r * R.nPts + i) * 8, u = (r * R.nPts + i) * 4;
     R.pos[o] = px - _cw.x; R.pos[o + 1] = py - _cw.y; R.pos[o + 2] = pz - _cw.z; R.pos[o + 3] = px + _cw.x; R.pos[o + 4] = py + _cw.y; R.pos[o + 5] = pz + _cw.z;
     R.col[c] = R.col[c + 4] = red; R.col[c + 1] = R.col[c + 5] = grn; R.col[c + 2] = R.col[c + 6] = blu; R.col[c + 3] = R.col[c + 7] = a;
@@ -3152,7 +3151,7 @@ export function createWorld3D(canvas) {
           if (eng.lastEmit <= 0) { // 1.4.0: a continuous trail (ribbon) instead of spaced puffs
             eng.anchor.getWorldPosition(_v);
             const dark = burning || f.spiraling;
-            ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1.0 : 0.6, w1: dark ? (f.spiraling ? 14 : 11) : 5, life: dark ? (burning ? 4.6 : 3.2) : 2.4, a: dark ? 0.62 : 0.4, col: dark ? [0.13, 0.125, 0.12] : [0.6, 0.6, 0.59], drift: 55 });
+            ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1.0 : 0.6, w1: dark ? (f.spiraling ? 12 : 8) : 3.2, life: dark ? (burning ? 4.6 : 3.2) : 2.4, a: dark ? 0.62 : 0.3, col: dark ? [0.13, 0.125, 0.12] : [0.4, 0.4, 0.39], drift: 55 });
             if (f.spiraling && Math.random() < 0.3) emitSmoke(_v, true, true);
             eng.lastEmit = 0.05;
           }
@@ -4822,6 +4821,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   // swings, the part of that trail already "painted" moved with the old view: rotate each tail about the
   // eye by the view rotation of the last TR_BLUR seconds (low-passed, so fire-shake jitter averages out).
   const TR_BLUR = 0.06;
+  const TR_FADE0 = 250, TR_FADEL = 1262; // 1.5.5 distance fade: exp(-(d-250)/1262) -> 25 % at 2000 u
   const TR_MINPX = 2.2; // CSS px: minimum on-screen streak length (end-on rounds read as dots)
   const _trQ = new THREE.Quaternion(), _trQprev = new THREE.Quaternion(), _trW = new THREE.Vector3(), _trDq = new THREE.Quaternion(), _trV = new THREE.Vector3();
   let _trT = 0, _trHave = false;
@@ -4887,8 +4887,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         const mx = (hx + tx) * 0.5 - cx, my = (hy + ty) * 0.5 - cy, mz = (hz + tz) * 0.5 - cz;
         let px = sy * mz - sz * my, py = sz * mx - sx * mz, pz = sx * my - sy * mx;
         const pl = Math.hypot(px, py, pz); if (pl < 1e-6) { px = 0; py = 1; pz = 0; } else { px /= pl; py /= pl; pz /= pl; }
+        // 1.5.5: DISTANCE FADE for every tracer kind (own, box gunners, 109/190, P-51): full strength inside ~250 u, ~25 % alpha by 2000 u (floor 8 %),
+        // and the streak also thins (width x 0.55..1) so far tracers read as faint hairlines instead of bright pins.
+        const dMid = Math.hypot(mx, my, mz), dFade = (dMid <= TR_FADE0 || window.__FG_NOTRFADE) ? 1 : Math.max(0.08, Math.exp(-(dMid - TR_FADE0) / TR_FADEL)), wFade = 0.55 + 0.45 * dFade; // __FG_NOTRFADE disables (A/B stills)
         for (let layer = 0; layer < 2; layer++) {
-          const wpx = layer ? K[2] : K[3], rgb = layer ? K[0] : K[1], a = (layer ? K[4] : K[5]) * A, keep = layer ? K[6] : 0;
+          const wpx = (layer ? K[2] : K[3]) * wFade, rgb = layer ? K[0] : K[1], a = (layer ? K[4] : K[5]) * A * dFade, keep = layer ? K[6] : 0;
           const wh = 0.5 * wpx * dh / pxPerRad, wt = 0.5 * wpx * dtl / pxPerRad;
           const v = n * 4, p3 = v * 3, c4 = v * 4;
           trPos[p3] = hx - px * wh; trPos[p3 + 1] = hy - py * wh; trPos[p3 + 2] = hz - pz * wh;
