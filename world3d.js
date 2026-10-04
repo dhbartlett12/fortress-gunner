@@ -1402,7 +1402,7 @@ export function createWorld3D(canvas) {
   // ===== 1.4.1: OUR OWN B-17 GOING DOWN, seen from the chute =====
   // Big wing-root and engine fires, a thick black smoke trail left in the air mass, and ~6.5 s after we get out
   // the tail tears off (fin + stabilizer thrown clear, tumbling, with a burst of debris and its own smoke).
-  const wreck = { fires: [], srcs: [], tail: null, parts: [], emit: 0, on: false, last: [null, null, null], wing: null, wingHid: [], wingSide: 0 };
+  const wreck = { fires: [], srcs: [], tail: null, parts: [], emit: 0, on: false, last: [null, null, null], wing: null, wingHid: [], wingSide: 0, moved: [] }; // 1.5.9: moved = effect anchors re-parented onto a detached piece (put back on a reset)
   {
     // four fire sources (wing roots, inboard engines), each a flame on top of the wing plus a streaming tongue aft
     // and a glow under the wing; the smoke comes from the top flame
@@ -1459,6 +1459,8 @@ export function createWorld3D(canvas) {
     const on = !!(S && (FALL.phase === "chute" || (FALL.phase === "fall" && (S.burn || 0) > 0)));
     if (!S) { // back to normal: re-attach the tail, clear the pieces
       if (wreck.on || wreck.tail || wreck.wing) {
+        for (const o of wreck.moved) ownShip.add(o); // 1.5.9: fires / smoke sources / engine-out effects ride their piece; back on the airframe (local positions are unchanged)
+        wreck.moved.length = 0;
         for (const q of wreck.wingHid) q.visible = true;
         wreck.wingHid.length = 0; if (wreck.wing) scene.remove(wreck.wing); wreck.wing = null; wreck.wingSide = 0;
         for (const E of ownEngines) E.gone = false;
@@ -1501,6 +1503,11 @@ export function createWorld3D(canvas) {
       const wf2 = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.8 })); wf2.position.set(side * 8, 0.5, -0.9); wf2.scale.set(3.5, 4.5, 1); wgp.add(wf2);
       wgp.userData = { vx: side * 13 + (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 3, vz: -9, wx: (Math.random() - 0.5) * 0.8, wy: (Math.random() - 0.5) * 1.0, wz: side * (1.6 + Math.random() * 1.2), fire: wf, fire2: wf2, t: 0, lastP: null, lastQ: null };
       scene.add(wgp); wreck.wing = wgp;
+      { // 1.5.9: every fire / smoke source / engine-out effect on the severed side now belongs to the wing piece (wgp starts exactly on the ship's frame, so the local positions carry over)
+        const mv = (o) => { if (o && o.parent === ownShip) { wgp.add(o); wreck.moved.push(o); } };
+        for (let i = 0; i < wreck.srcs.length; i++) if (wreck.srcs[i].position.x * side > 0) { mv(wreck.srcs[i]); for (let k = 0; k < 4; k++) mv(wreck.fires[i * 4 + k]); }
+        for (let i = 0; i < 4; i++) if (ownEngines[i].disc.position.x * side > 0) { mv(ownEngines[i].fire); mv(ownEngines[i].smokeAt); }
+      }
       _ov.set(side * 1.6, -2, -1.2).applyMatrix4(ownShip.matrixWorld);
       spawnDebris(_ov.x, _ov.y, _ov.z, 90, 0.7); spawnDebris(_ov.x, _ov.y, _ov.z, 40, 1.2);
       emitSmoke(_ov, true, true);
@@ -1527,6 +1534,7 @@ export function createWorld3D(canvas) {
       const tf = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 })); tf.position.set(0, -0.6, -10.8); tf.scale.set(2.6, 3.4, 1); tg.add(tf);
       tg.userData = { vx: (Math.random() - 0.5) * 16, vy: 6, vz: -14, wx: (Math.random() - 0.5) * 3, wy: (Math.random() - 0.5) * 2, wz: 1.5 + Math.random() * 2, fire: tf, t: 0 };
       scene.add(tg); wreck.tail = tg;
+      for (const o of [ownTail.fire, ownTail.smokeAt]) if (o && o.parent === ownShip) { tg.add(o); wreck.moved.push(o); } // 1.5.9: the tail fire / smoke source ride the tail piece
       _ov.set(0, 0, -11).applyMatrix4(ownShip.matrixWorld);
       spawnDebris(_ov.x, _ov.y, _ov.z, 60, 0.5);
       emitSmoke(_ov, true, true);
@@ -1562,7 +1570,19 @@ export function createWorld3D(canvas) {
     const engs = (opts.own && opts.own.engines) || [];
     for (let i = 0; i < 4; i++) {
       const E = ownEngines[i], st = engs[i] || { fire: 0, out: false };
-      if (E.gone) { E.disc.visible = false; E.blades.visible = false; E.fire.visible = false; if (ownShip.userData.contrails) ownShip.userData.contrails[i].on = false; continue; }
+      if (E.gone) {
+        E.disc.visible = false; E.blades.visible = false; if (ownShip.userData.contrails) ownShip.userData.contrails[i].on = false;
+        const W = wreck.wing, wu = W && W.userData, lit = !!(W && E.fire.parent === W && !wu.hit && wu.t < 18); // 1.5.9: an engine on the severed wing keeps burning ON the wing piece (its fire and smoke source were re-parented to it)
+        E.fire.visible = lit;
+        if (lit) {
+          const s = 0.95 * (0.8 + Math.random() * 0.4); E.fire.scale.set(s * 0.7, s * (1.2 + Math.random() * 0.5), 1); E.fire.material.opacity = 0.7 + Math.random() * 0.3;
+          E.smokeAt.getWorldPosition(_ov); engineFireFx(_ov, 0.9, rdt, E.fx || (E.fx = { t: 0 }));
+          E.emit -= rdt;
+          for (let n = 0; n < 5 && E.emit <= 0; n++) { E.smokeAt.getWorldPosition(_ov); ribbonEmit("own" + i, _ov, { w0: 0.45, w1: 5.4, life: 3.6, a: 0.58, col: [0.2, 0.195, 0.19], drift: 45 }); E.emit += 0.04; }
+          if (E.emit < 0) E.emit = 0;
+        }
+        continue;
+      }
       const out = !!st.out;
       E.disc.visible = !out;
       E.blades.visible = out;
@@ -2365,9 +2385,10 @@ export function createWorld3D(canvas) {
   earth.scale.setScalar(EARTH_K);
   earth.position.set(CAM.x * (1 - EARTH_K), CAM.y * (1 - EARTH_K), CAM.z * (1 - EARTH_K));
   scene.add(earth);
+  // 1.5.9: the earth fog depends on the VIEW ANGLE again, like 1.5.7 (depth / EARTH_K, near = scene fog near) and a further 35 % clearer (depth / (1.35 x EARTH_K)). 1.5.8 fogged the raw depth from 1,575 u, i.e. ~25x thicker for the same line of sight at 25,000 ft.
   const earthFog = (sh) => {
     sh.fragmentShader = sh.fragmentShader.replace("#include <fog_fragment>",
-      "#ifdef USE_FOG\n  float fogFactor = smoothstep( fogNear * 0.45, fogFar, vFogDepth );\n  gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif");
+      "#ifdef USE_FOG\n  float fogFactor = smoothstep( fogNear, fogFar, vFogDepth / " + (EARTH_K * 1.35).toFixed(1) + " );\n  gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif");
   };
   const groundFrame = new THREE.Group();
   groundFrame.position.y = GROUND_Y;
@@ -3238,7 +3259,7 @@ export function createWorld3D(canvas) {
     // --- clouds + flak: stationary in the air → stream aft by the distance flown, swing with the turn ---
     const odo = opts.odo || 0;
     let dz = _odo == null ? 0 : odo - _odo;
-    if (dz < 0 || dz > 400) { dz = 0; _cReset = true; ambG.rotation.y = 0; if (typeof crashReset === "function" && CR.nSc + CR.sites.length) crashReset(); } // new mission / big jump
+    if (dz < 0 || dz > 400) { dz = 0; _cReset = true; if (typeof crashReset === "function" && CR.nSc + CR.sites.length) crashReset(); } // new mission / big jump
     _odo = odo;
     const hd = opts.heading || 0;
     let dH = hd - _hd; _hd = hd;
@@ -3246,7 +3267,6 @@ export function createWorld3D(canvas) {
     _cDz = dz; _cDH = dH;
     const c = Math.cos(-dH), s = Math.sin(-dH);
     const rot = (o) => { const x = o.position.x, z = o.position.z; o.position.x = x * c + z * s; o.position.z = -x * s + z * c; };
-    if (dH) ambG.rotation.y -= dH; // the ambient air war swings with the turn like the clouds
     for (const g of cloudClusters) {
       if (dH) rot(g);
       g.position.z -= dz;
@@ -3422,7 +3442,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     mat.customProgramCacheKey = () => "gunwear" + heatK;
   }
   // 3D brass + links: each shot kicks a case out of the bottom of the receiver and a link out beside it
-  const EJ_N = 56, ejPool = [];
+  const EJ_N = 0, ejPool = []; // 1.5.9: 3D ejected cases + links REMOVED (EJ_N 56 -> 0, ejectFrom is a no-op): in the aft / side views they stream from the receivers at the bottom centre and read as a trail of brown/orange and dark SQUARES
   const caseGeo = new THREE.CylinderGeometry(0.0105, 0.0105, 0.099, 10);
   const linkGeo = new THREE.BoxGeometry(0.03, 0.006, 0.022);
   const caseMat = new THREE.MeshPhysicalMaterial({ color: 0xb8964c, metalness: 0.9, roughness: 0.3, clearcoat: 0.3, envMapIntensity: 0.8, emissive: 0x1a1206, emissiveIntensity: 0.15 });
@@ -3431,6 +3451,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   let ejIdx = 0;
   const _ejQ = new THREE.Quaternion(), _ejV = new THREE.Vector3();
   function ejectFrom(gg, sgn) {
+    if (EJ_N === 0) return;
     for (let k = 0; k < 2; k++) {
       // even slots = cases, odd = links
       let p = ejPool[ejIdx];
@@ -5114,111 +5135,12 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   const FARL = 2; let _farTag = 0, _frameN = 0;
   function tagFar() { earth.traverse((o) => { o.layers.set(FARL); }); skyMesh.layers.set(FARL); for (const L of [hemi, sun, fill, key2]) L.layers.enable(FARL); }
 
-  // ===== 1.5.8 AMBIENT DISTANT AIR WAR: contrails only (no aircraft sprites). One static mesh / ONE draw call / no CPU per-frame work except 3 uniforms. =====
-  // The geometry is baked once at start-up (deterministic seed): ribbons for (a) parallel formation contrail bundles on far tracks (4-14 km out, same altitude band as the box), (b) tangled
-  // two-ship dogfight arcs that GROW along a looped schedule, hold and fade, with a 1-px black dot at each arc head, and (c) occasional faint tracer hairlines near an arc head.
-  // Everything is animated in the vertex shader from the sim clock (loops, head position, density streaming, slow formation drift); nothing is pickable, collidable or counted, and nothing
-  // sits inside 6.5 km of the box (the real fighters' stations reach ~6 km), so it can never be a target. Ribbon width has a 1-px floor that FADES (not thickens) with distance; haze tint
-  // + alpha falloff keep it consistent with the 25,000 ft look.
-  const ambG = new THREE.Group(); ambG.name = "ambientAirWar"; scene.add(ambG);
-  const AMB = { tris: 0, verts: 0, nStrands: 0, nArcs: 0, nDots: 0, nHair: 0, on: true };
-  {
-    let sd = 158803; const R = () => { sd = (sd * 1664525 + 1013904223) >>> 0; return sd / 4294967296; }, RR = (a, b) => a + (b - a) * R();
-    const pos = [], tan = [], aA = [], aB = [], aC = [], idx = []; let nV = 0;
-    const strip = (pts, w0, w1, kind, per, ph, alpha, seed, col) => {
-      const n = pts.length, base = nV;
-      for (let i = 0; i < n; i++) {
-        const s = i / (n - 1), a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
-        let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2]; const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
-        for (const side of [-1, 1]) { pos.push(pts[i][0], pts[i][1], pts[i][2]); tan.push(tx, ty, tz); aA.push(s, side, w0 + (w1 - w0) * s, seed); aB.push(kind, per, ph, alpha); aC.push(col[0], col[1], col[2]); }
-      }
-      for (let i = 0; i < n - 1; i++) { const o = base + i * 2; idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2); }
-      nV += n * 2;
-    };
-    const dot = (p, s, px, kind, per, ph, alpha, seed, col) => { // screen-aligned square (4 verts), corner index in aA.y = 0..3
-      const base = nV;
-      for (let c = 0; c < 4; c++) { pos.push(p[0], p[1], p[2]); tan.push(0, 0, 1); aA.push(s, c, px, seed); aB.push(kind, per, ph, alpha); aC.push(col[0], col[1], col[2]); }
-      idx.push(base, base + 1, base + 2, base + 1, base + 3, base + 2); nV += 4;
-    };
-    const y0 = CAM.y;
-    const WH = [0.95, 0.97, 1.0], GR = [0.88, 0.91, 0.96], BK = [0.04, 0.04, 0.05], TR = [1.0, 0.86, 0.55];
-    // (a) formation bundles: 6 groups, each 4 strands 38-70 u apart (a box of bombers leaves several parallel trails)
-    const FG = [[-1, 6200, 3500], [-1, 9800, -1500], [1, 5600, 6500], [1, 8800, 600], [1, 12800, 4200], [-1, 13500, 7000]];
-    for (const [sg, lat, zH] of FG) {
-      const len = RR(4200, 8200), ph = R();
-      for (let k = 0; k < 4; k++) {
-        const ox = (k - 1.5) * RR(38, 70), oy = RR(-30, 30) + (k & 1) * 22, pts = [], N = 30;
-        for (let i = 0; i < N; i++) { const s = i / (N - 1); pts.push([sg * lat + ox + Math.sin(s * 5 + k) * 14, y0 + RR(60, 260) * 0 + oy + (sg * lat > 0 ? 120 : 60) - s * 40 + Math.sin(s * 3.1 + ph * 9) * 16, zH - s * len]); }
-        strip(pts, 5, 52, 0, 40, 0, 0.30, R(), WH); AMB.nStrands++;
-      }
-      dot([sg * lat + 20, y0 + (sg * lat > 0 ? 130 : 70), zH + 20], 0, 1.5, 4, 40, 0, 0.5, R(), BK); AMB.nDots++; // a single dark pixel at the head of the bundle (the lead ship, a speck)
-    }
-    // (b) dogfights: 7 sets of two ships at 7-14 km, loops 20-34 s
-    const DF = [[-1, 7200, 1800], [1, 8600, 4800], [-1, 10400, 6400], [1, 11800, -800], [-1, 13400, 2600], [1, 7600, -2600], [-1, 9000, -3600]];
-    for (const [sg, rng, zc] of DF) {
-      const per = RR(20, 34), ph = R(), Rd = RR(240, 420), cx = sg * rng * 0.9, cy = y0 + RR(-260, 340), Pk = RR(1.2, 1.9);
-      for (let k = 0; k < 2; k++) {
-        const pts = [], N = 72, f0 = k * RR(0.55, 1.1), ph2 = RR(0, 6.28), wob = RR(0.25, 0.4);
-        for (let i = 0; i < N; i++) {
-          const s = i / (N - 1), u = s * 6.2832 * Pk + f0;
-          pts.push([cx + Rd * (Math.cos(u) * 0.95 + wob * Math.cos(2.3 * u + ph2)), cy + Rd * 0.55 * Math.sin(0.9 * u + ph2) + s * 90, zc + Rd * (Math.sin(u) * 0.95 + wob * Math.sin(1.7 * u))]);
-        }
-        strip(pts, 4, 26, 1, per, ph, k ? 0.34 : 0.40, R(), GR); AMB.nArcs++;
-        for (let i = 0; i < N; i += 2) dot(pts[i], i / (N - 1), 1.5, 3, per, ph, 0.62, R(), BK); // the dot "hops" along the samples: only the one at the head is visible
-        AMB.nDots += 1;
-        if (k === 0) for (let h = 0; h < 2; h++) { // faint tracer hairlines: a short thin line from the pursuer toward the quarry, flashing briefly twice per loop
-          const i0 = Math.floor(RR(16, N - 8)), a = pts[i0], b = pts[i0 + 6], d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], dl = Math.hypot(d[0], d[1], d[2]) || 1;
-          const L2 = RR(140, 260), ex = [a[0] + d[0] / dl * L2, a[1] + d[1] / dl * L2 + RR(-12, 12), a[2] + d[2] / dl * L2];
-          strip([a, [(a[0] + ex[0]) / 2, (a[1] + ex[1]) / 2, (a[2] + ex[2]) / 2], ex], 1.6, 1.2, 2, per * RR(0.2, 0.34), R(), 0.45, R(), TR); AMB.nHair++;
-        }
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute("tangent", new THREE.Float32BufferAttribute(tan, 3));
-    geo.setAttribute("aA", new THREE.Float32BufferAttribute(aA, 4)); geo.setAttribute("aB", new THREE.Float32BufferAttribute(aB, 4)); geo.setAttribute("aC", new THREE.Float32BufferAttribute(aC, 3));
-    geo.setIndex(idx); AMB.tris = idx.length / 3; AMB.verts = nV;
-    const mat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uPx: { value: 0.002 }, uVF: { value: AIR_DRIFT }, uHaze: { value: new THREE.Color(0.80, 0.87, 0.95) } },
-      vertexShader: `uniform float uT, uPx, uVF; attribute vec3 tangent; attribute vec4 aA, aB; attribute vec3 aC; varying vec4 vC; varying float vSide;
-        void main(){
-          float kind = aB.x, per = aB.y, ph = aB.z, a = aB.w, s = aA.x, side = aA.y, w = aA.z, seed = aA.w;
-          float g = fract(uT / per + ph); vec3 p = position; float minPx = 1.0; bool isDot = false;
-          if (kind < 0.5) { p.x += sin(uT * 0.031 + seed * 6.28) * 110.0; p.y += sin(uT * 0.047 + seed * 9.0) * 16.0;
-            a *= (0.76 + 0.24 * sin(s * 150.0 - uT * 1.2 + seed * 6.28)) * (1.0 - 0.88 * s); }
-          else if (kind < 1.5) { float head = min(g / 0.6, 1.0), fade = 1.0 - smoothstep(0.78, 1.0, g); p.z -= uVF * g * per;
-            float age = max(head - s, 0.0); a *= step(s, head) * fade * (1.0 - clamp(age * 1.5, 0.0, 0.88)); w *= 1.0 + 2.2 * age; }
-          else if (kind < 2.5) { float on = step(g, 0.06) * (1.0 - g / 0.06); a *= on; minPx = 0.7; }
-          else if (kind < 3.5) { isDot = true; float head = min(g / 0.6, 1.0), fade = 1.0 - smoothstep(0.78, 1.0, g); p.z -= uVF * g * per;
-            a *= step(abs(s - head), 0.0145) * step(g, 0.62) * fade; }
-          else { isDot = true; p.x += sin(uT * 0.031 + 0.0) * 110.0; }
-          vec4 wp = modelMatrix * vec4(p, 1.0); vec3 toP = wp.xyz - cameraPosition; float d = length(toP); vec3 vd = toP / d;
-          float px = uPx * d; vec3 off;
-          if (isDot) { vec3 cr = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]), cu = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
-            float c = side; vec2 q = vec2(mod(c, 2.0) * 2.0 - 1.0, floor(c / 2.0) * 2.0 - 1.0); off = (cr * q.x + cu * q.y) * px * w * 0.5; vSide = 0.0; }
-          else { vec3 tw = normalize(mat3(modelMatrix) * tangent); vec3 sv = normalize(cross(tw, vd)); float wmin = px * minPx;
-            float wd = max(w, wmin); a *= clamp(w / wmin, 0.30, 1.0); off = sv * side * wd * 0.5; vSide = side; }
-          float h = smoothstep(5000.0, 28000.0, d); vec3 col = mix(aC, isDot ? aC : vec3(0.80, 0.87, 0.95), 0.40 * h);
-          a *= 1.0 - 0.55 * h; vC = vec4(col, a);
-          gl_Position = projectionMatrix * viewMatrix * vec4(wp.xyz + off, 1.0); }`,
-      fragmentShader: `varying vec4 vC; varying float vSide; void main(){ float e = 1.0 - 0.55 * vSide * vSide; if (vC.a * e < 0.004) discard; gl_FragColor = vec4(vC.rgb, vC.a * e); }`,
-      transparent: true, depthTest: true, depthWrite: false, side: THREE.DoubleSide,
-    });
-    const mesh = new THREE.Mesh(geo, mat); mesh.frustumCulled = false; mesh.renderOrder = 1; mesh.layers.set(2); mesh.userData.noHit = true;
-    ambG.add(mesh); AMB.mesh = mesh; AMB.mat = mat;
-  }
-  function ambUpdate() {
-    const m = AMB.mesh; if (!m) return;
-    const on = !window.__FG_NOAMB; if (m.visible !== on) m.visible = on; if (!on) return;
-    AMB.mat.uniforms.uT.value = window.__FG_SIMT != null ? window.__FG_SIMT : performance.now() * 0.001;
-    AMB.mat.uniforms.uPx.value = 2 * Math.tan(camera.fov * Math.PI / 360) / (window.innerHeight || 540);
-  }
   function render() {
     prWatch();
-    ambUpdate();
     buildTracers();
     if (!window.__FG_NO2PASS) {
       if (_frameN++ % 30 === 0) tagFar();
-      camera.near = 30; camera.far = 80000; camera.updateProjectionMatrix();
+      camera.near = 30; camera.far = 320000; camera.updateProjectionMatrix();
       camera.layers.set(FARL);
       renderer.render(scene, camera);
       renderer.autoClear = false;
@@ -5278,7 +5200,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     detPieces: () => { const o = []; for (let i = 0; i < friendlyPool.length; i++) { const g = friendlyPool[i]; for (const d of (g.userData.dets || [])) if (!d.userData.dead) { const q = d.position.clone().project(camera); o.push({ slot: i, kind: d.userData.kind, side: d.userData.side, x: d.position.x, y: d.position.y, z: d.position.z, sx: (q.x * 0.5 + 0.5) * innerWidth, sy: (-q.y * 0.5 + 0.5) * innerHeight, d: d.position.distanceTo(camera.position) }); } } return o; },
     projCam: (x, y, z) => { const q = new THREE.Vector3(x, y, z).project(camera); return { sx: (q.x * 0.5 + 0.5) * innerWidth, sy: (-q.y * 0.5 + 0.5) * innerHeight, z: q.z }; },
     crashFx: (x, z, size) => { crashImpact(new THREE.Vector3(x, groundWY(), z), size || 1, "hull"); detStats.crashed.hull++; },
-    get ambStats() { return { tris: AMB.tris, verts: AMB.verts, strands: AMB.nStrands, arcs: AMB.nArcs, dots: AMB.nDots, hair: AMB.nHair }; }, get decalStats() { return decalStats; }, decalDump() { const o = []; for (const g of [ownShip, ...friendlyPool]) { const L = (g.userData.decals || []).concat(g.userData.tears || []); if (!L.length) continue; g.updateMatrixWorld(true);
+    get decalStats() { return decalStats; }, decalDump() { const o = []; for (const g of [ownShip, ...friendlyPool]) { const L = (g.userData.decals || []).concat(g.userData.tears || []); if (!L.length) continue; g.updateMatrixWorld(true);
       o.push({ vis: g.visible, n: L.length, items: L.map((m) => { const bb = new THREE.Box3().setFromObject(m); const c = bb.getCenter(new THREE.Vector3()); return { v: m.visible, vc: m.geometry.attributes.position.count, x: +c.x.toFixed(2), y: +c.y.toFixed(2), z: +c.z.toFixed(2), sz: +bb.getSize(new THREE.Vector3()).length().toFixed(2) }; }) }); } return o; }, get detStats() { return JSON.parse(JSON.stringify(detStats)); }, get crashStats() { return Object.assign({ decals: Math.min(CR.nSc, CR.SC_N), sites: CR.sites.length, fire: CR.fire.filter((f) => f.life > 0).length, smoke: CR.smoke.filter((p) => p.life > 0).length }, CR.stats); }, groundWY,
     townGeom: { X: TOWN_X, Z: TOWN_Z, K: K_LAND, S: 1.5, wy: CAM.y * (1 - EARTH_K) + EARTH_K * (GROUND_Y + 0.05) },
     townLayout: () => TL,
@@ -5286,6 +5208,26 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     townReset,
     get bombStats() { return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) }); },
     get glintStats() { return { n: glStats.n, max: glStats.max }; },
+    get aiAnchors() { // test hook (1.5.9): per AI ship that has detached pieces: owner (hull / piece key) + world position of every engine fire anchor
+      const out = [];
+      for (let i = 0; i < friendlyPool.length; i++) {
+        const g = friendlyPool[i], ds = g.userData.dets; if (!ds || !ds.length) continue;
+        const P = (o) => { o.updateWorldMatrix(true, false); const v = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld); return [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]; };
+        out.push({ i, hull: P(g), pieces: ds.map((d) => ({ kind: d.userData.kind, side: d.userData.side, dead: d.userData.dead, pos: P(d) })), eng: g.userData.engines.map((E) => ({ own: E.anchor.parent === g ? "hull" : (ds.find((d) => d === E.anchor.parent) ? "piece:" + E.anchor.parent.userData.kind + (E.anchor.parent.userData.side || "") : "other"), vis: E.fire.visible, pos: P(E.anchor) })) });
+      }
+      return out;
+    },
+    get ejDbg() { // test hook (1.5.9): active ejected cases / links with their screen position (px of the current viewport)
+      const w = window.innerWidth, h = window.innerHeight, o = [];
+      for (const p of ejPool) { if (p.life <= 0) continue; const v = p.m.position.clone().project(camera); o.push({ k: p.m.geometry === linkGeo ? "link" : "case", life: +p.life.toFixed(2), x: Math.round((v.x * 0.5 + 0.5) * w), y: Math.round((-v.y * 0.5 + 0.5) * h), z: +v.z.toFixed(3), d: +p.m.position.distanceTo(camera.position).toFixed(2) }); }
+      return o;
+    },
+    get wreckAnchors() { // test hook (1.5.9): world position + owner of every wreck effect anchor on the player's ship
+      const own = (o) => (o.parent === wreck.wing ? "wing" : o.parent === wreck.tail ? "tail" : o.parent === ownShip ? "ship" : "other");
+      const P = (o) => { o.updateWorldMatrix(true, false); const v = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld); return [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]; };
+      const it = (o, vis) => ({ own: own(o), pos: P(o), vis: vis == null ? !!o.visible : vis });
+      return { ship: P(ownShip), wing: wreck.wing ? P(wreck.wing) : null, tail: wreck.tail ? P(wreck.tail) : null, side: wreck.wingSide, fires: wreck.fires.map((f) => it(f)), srcs: wreck.srcs.map((f) => it(f, true)), engFire: ownEngines.map((E) => it(E.fire)), engSmoke: ownEngines.map((E) => it(E.smokeAt, true)), tailFire: it(ownTail.fire), tailSmoke: it(ownTail.smokeAt, true) };
+    },
     get wreckStats() { return { puffs: wpStats.live, fires: wreck.fires.filter((f) => f.visible).length, tail: !!wreck.tail, wing: !!wreck.wing, wingSide: wreck.wingSide, aiDet: friendlyPool.filter((g) => g.userData.det).map((g) => g.userData.det.userData.isWing ? "wing" : "tail") }; },
     lodOf: (id) => { const i = slotOf.get(id); return i == null || !fighterPool[i] ? null : fighterPool[i].lod || null; },
     get pixelRatio() { return renderer.getPixelRatio(); },
