@@ -36922,8 +36922,8 @@
     );
     ground.rotation.x = -Math.PI / 2;
     groundFrame.add(ground);
-    const TOWN_Z = 1653;
-    const TOWN_X = 18;
+    const TOWN_Z = 1048;
+    const TOWN_X = -2;
     const town = new Group();
     town.position.set(TOWN_X, 0.05, TOWN_Z);
     town.scale.set(1.5, 1.5, 1.5);
@@ -37806,7 +37806,7 @@
         flakLight.intensity = 140 * (1 - best.t / 0.18);
       } else flakLight.intensity = 0;
     }
-    const AIR_DRIFT = 83.4;
+    const AIR_DRIFT = 53.6;
     const conTex = (() => {
       const W = 64, H = 128, c = document.createElement("canvas");
       c.width = W;
@@ -39140,12 +39140,12 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         P.id = r.id;
         P.g.visible = true;
         P.g.position.set(r.x, r.y, r.z);
-        _rkD.set(r.vx, r.vy, r.vz + 83.4).normalize();
+        _rkD.set(r.vx, r.vy, r.vz + AIR_DRIFT).normalize();
         P.g.quaternion.setFromUnitVectors(_rkUp, _rkD);
         const f = 3.2 + Math.random() * 1.4;
         P.fl.scale.set(f, f, 1);
         _rkP.set(r.x, r.y, r.z);
-        ribbonEmit("rk" + r.id, _rkP, { w0: 0.9, w1: 6.5, life: 4.2, a: 0.85, col: [0.93, 0.93, 0.9], drift: 83.4 });
+        ribbonEmit("rk" + r.id, _rkP, { w0: 0.9, w1: 6.5, life: 4.2, a: 0.85, col: [0.93, 0.93, 0.9], drift: AIR_DRIFT });
       }
     }
     function cloneFighter(kind) {

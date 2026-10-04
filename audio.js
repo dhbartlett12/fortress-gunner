@@ -1,4 +1,6 @@
-/* Fortress Gunner 1.5.6 — gun sound rebuilt against a real M60 reference (sample-led round: crack + body + chest thump + outdoor echo; steady belt cadence; one trigger-release end sound per release);
+/* Fortress Gunner 1.5.7 — every NON-player machine gun (box gunners, P-51 six-.50, German MG 131/151, distant chute-bed fire) is now the player's own per-round sample, delayed by distance / speed of sound,
+ * low-passed to a muffled 500–1200 Hz, ~-27…-45 dB below the player's gun, inaudible past 2600 u, thinned (random skips, min spacing) and capped at 6 concurrent voices. (1.5.6 header follows.)
+ * Fortress Gunner 1.5.6 — gun sound rebuilt against a real M60 reference (sample-led round: crack + body + chest thump + outdoor echo; steady belt cadence; one trigger-release end sound per release);
  * ear-ring only on a direct flak hit (once per run, ~10 s: whine + muffle easing back). (1.5.4 header follows.) Fortress Gunner 1.5.4 — procedural WebAudio sound design + a tiny rendered sample layer (.50 bark, flak thump; synthesised once at unlock, ~0.3 MB).
  * 1.5.4: speed-of-sound delay + 1/(1+d/ref) gain + air-absorption low-pass for every distant source; noise-based engines (no tonal drone); phone-speaker EQ;
  * wind-through-holes bed that scales with the hole count; noise-based radio intercom (no beeps).
@@ -211,6 +213,33 @@
   // (heavier low-pass, a late soft "slap" echo off the neighbouring ships), our own rounds + brass clinks.
   let lastBark = -1;
   function pickBark(G) { const n = G.smp.bark.length; let k = (Math.random() * n) | 0; if (k === lastBark) k = (k + 1 + ((Math.random() * (n - 1)) | 0)) % n; lastBark = k; return G.smp.bark[k]; } // never the same take twice in a row
+  // ---------- 1.5.7 distant-gun model: the SAME per-round sample as the player's gun (pickBark), nothing else ----------
+  // Muffled: two cascaded low-passes (24 dB/oct) at 500–1200 Hz falling with distance, so the crack is gone and only a dull thud-patter remains.
+  // Faint: -27 dB re the player's round at 0 u, then 1/(1+d/300) spreading (measured RMS vs the player burst: about -29 dB at 100 u, -33 dB at 500 u, -35 dB at 1500 u); a linear fade to silence between 2000 and 2600 u (inaudible beyond).
+  // Not incessant: rounds are thinned (keep probability falls with distance) and rate/voice limited in aiGunAllowed (min spacing, max AI_MAX_VOICES concurrent).
+  const AI_MAX_VOICES = 6, AI_VOICE_LEN = 0.45, AI_MIN_GAP = 0.05, AI_CUTOFF = 2600;
+  function aiGunGain(d) { return 0.7 * Math.pow(10, -27 / 20) / (1 + d / 300) * Math.max(0, Math.min(1, (AI_CUTOFF - d) / 600)); } // 0.7 = the player's round gain in sGun(own)
+  function aiGunLP(d) { return 500 + 700 * Math.exp(-d / 900); }
+  function aiGunKeep(d) { return Math.max(0.12, 0.9 * Math.exp(-d / 1400)); }
+  const aiVoices = []; let aiLast = -9;
+  function aiGunAllowed(t, d) { // live gate: thinning + minimum spacing + concurrent-voice cap
+    if (d >= AI_CUTOFF) return false;
+    if (Math.random() > aiGunKeep(d)) { stats.aiSkipThin = (stats.aiSkipThin || 0) + 1; return false; }
+    if (t - aiLast < AI_MIN_GAP) { stats.aiSkipGap = (stats.aiSkipGap || 0) + 1; return false; }
+    let n = 0; for (let i = aiVoices.length - 1; i >= 0; i--) { if (aiVoices[i] < t - 1) aiVoices.splice(i, 1); else if (aiVoices[i] - AI_VOICE_LEN <= t && aiVoices[i] > t) n++; }
+    if (n >= AI_MAX_VOICES) { stats.aiSkipCap = (stats.aiSkipCap || 0) + 1; return false; }
+    aiVoices.push(t + AI_VOICE_LEN); aiLast = t; stats.aiRounds = (stats.aiRounds || 0) + 1; return true;
+  }
+  function aiRound(G, t, d, pan) { // one distant round: t already includes the speed-of-sound delay
+    const ctx = G.ctx, g = aiGunGain(d); if (g < 0.0004) return;
+    if (!G.smp) { const lv = 0.9 + Math.random() * 0.2; noiseHit(G, t, 0.1, 520, 0.7, g * lv * 0.6, pan, aiGunLP(d), 0.004); return; } // no-sample fallback: a dull noise tap
+    const s = ctx.createBufferSource(); s.buffer = pickBark(G); s.playbackRate.value = 0.95 + Math.random() * 0.12; // the player's rate jitter
+    const lv = ctx.createGain(); lv.gain.value = g * (0.88 + Math.random() * 0.24);
+    const f1 = ctx.createBiquadFilter(), f2 = ctx.createBiquadFilter(); f1.type = f2.type = "lowpass"; f1.frequency.value = f2.frequency.value = aiGunLP(d); f1.Q.value = f2.Q.value = 0.55;
+    s.connect(lv); lv.connect(f1); f1.connect(f2);
+    if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan || 0)) * 0.8; f2.connect(p); p.connect(G.sfx); } else f2.connect(G.sfx);
+    s.start(t); s.stop(t + 0.5);
+  }
   function sGun(G, t, dist, pan, own) { // one .50 cal round (1.5.6: sample-led — real crack + body + chest thump + outdoor tail, each take different; the 1.5.3 noise-burst synth is the no-sample fallback)
     const v = 0.88 + Math.random() * 0.24, lv = 0.88 + Math.random() * 0.24;
     if (G.smp) {
@@ -219,9 +248,7 @@
         thump(G, t, 150 * v, 62, 0.07, 0.05 * lv, pan, 1800);
         return;
       }
-      const near = DM ? 1 : 1 / (1 + dist / 55);
-      playSample(G, pickBark(G), t, 0.5 * near * lv, pan, 0.9 + Math.random() * 0.14);
-      if (dist > 60) noiseHit(G, t + 0.07 + dist / 3000, 0.16, 420, 0.6, 0.10 * near, -pan * 0.5, 900, 0.02); // distant slap
+      aiRound(G, t, dist, pan); // 1.5.7: every non-player MG round = the player's sample through the distant-gun model
       return;
     }
     if (own) {
@@ -267,15 +294,8 @@
     thump(G, t, 180 + Math.random() * 60, 70, 0.08, 0.22, (Math.random() - 0.5) * 0.3, 1400);
     noiseHit(G, t, 0.05, 900, 0.9, 0.12, 0, 2200);
   }
-  function sEnemyGun(G, t, dist, pan) { // MG 131 / MG 151/20 burst (~0.5 s). 1.5.6: the same real-round samples — MG 131 pitched up and snappy, the 20 mm every 3rd round pitched down with a heavy thump — on a steady belt cadence
-    const near = DM ? 1 : 1 / (1 + dist / 90), lp = DM ? 9000 : Math.max(600, 3500 - dist * 4);
-    for (let k = 0; k < 9; k++) {
-      const tt = t + k * 0.055 + (Math.random() - 0.5) * 0.004, cannon = k % 3 === 0;
-      if (G.smp) {
-        playSample(G, pickBark(G), tt, (cannon ? 0.36 : 0.23) * near * (0.9 + Math.random() * 0.2), pan, cannon ? 0.74 + Math.random() * 0.06 : 1.22 + Math.random() * 0.14);
-        if (cannon) thump(G, tt, 90, 38, 0.12, 0.3 * near, pan, lp);
-      } else { if (cannon) thump(G, tt, 90, 38, 0.12, 0.5 * near, pan, lp); noiseHit(G, tt, 0.05, 1100, 1.0, 0.3 * near, pan, lp); }
-    }
+  function sEnemyGun(G, t, dist, pan, live) { // 1.5.7: German MG 131 / MG 151 fire = the player's round sample, 3 rounds at the belt cadence (live: each passes the thinning/voice gate)
+    for (let k = 0; k < 3; k++) { const tt = t + k * 0.062 + (Math.random() - 0.5) * 0.004; if (live && !aiGunAllowed(tt, dist)) continue; aiRound(G, tt, dist, pan); }
   }
   // 1.4.1: rounds hitting OUR ship — sharp metallic cracks, tearing aluminium, a debris rattle and a low thud through
   // the airframe; every hit different (which layers, pitch, length, pan). 1.4.0 was two polite tinks.
@@ -720,7 +740,7 @@
         if (s.down === "chute") { // under the canopy: the battle recedes — wind fades, the box's drone recedes, far flak
           const k = 1 / (1 + (s.boxDist || 0) / 350);
           chuteBed(G, t, s.chuteT || 0, s.boxDist || 0);
-          if (t - lastDistGun > 0.5 + Math.random() * 1.2 && k > 0.18) { lastDistGun = t; const d = (s.boxDist || 300) + Math.random() * 200; for (let q = 0; q < 3; q++) withDM(d, 260, () => sGun(G, t + q * 0.07, d, (Math.random() - 0.5) * 0.6, false)); }
+          if (t - lastDistGun > 0.5 + Math.random() * 1.2 && k > 0.18) { lastDistGun = t; const d = (s.boxDist || 300) + Math.random() * 200; for (let q = 0; q < 3; q++) withDM(d, 260, () => sGun(G, t + Math.min(DELAY_CAP, d / U_PER_S) + q * 0.07, d, (Math.random() - 0.5) * 0.6, false)); }
           if (t > nextFarFlak) { nextFarFlak = t + 2.2 + Math.random() * 4.5; sFarFlak(G, t, 700 + Math.random() * 1400, (Math.random() - 0.5) * 1.4); count("farFlak"); }
           return;
         }
@@ -739,19 +759,17 @@
         }
       } catch (e) { stats.errors++; stats.lastError = String(e); }
     },
-    gun(x, y, z) { // another Fortress's gunner fires a round (throttled, attenuated, panned) — 1.5.4: delayed by d / speed of sound
+    gun(x, y, z) { // another Fortress's gunner fires a round: 1.5.7 → the player's round sample through the distant-gun model (delay = d / speed of sound, muffled, faint, thinned, capped)
       if (!ok()) return;
-      const t = ctx.currentTime; if (t - budget.t > 0.1) { budget.t = t; budget.n = 0; }
-      const q = panOf(x, y, z); if (q.d > 2600) return;
-      const cap = q.d < 80 ? 4 : 2; if (budget.n >= cap) return; budget.n++;
-      withDM(q.d, 260, (m) => sGun(G, t + m.delay + Math.random() * 0.02, q.d, q.pan, false)); count("boxGun");
+      const q = panOf(x, y, z); if (q.d >= AI_CUTOFF) return;
+      const t = ctx.currentTime + distModel(q.d, 260).delay + Math.random() * 0.02;
+      if (!aiGunAllowed(t, q.d)) return; aiRound(G, t, q.d, q.pan); count("boxGun");
     },
-    p51Gun(x, y, z) { // a P-51's six .50s: same gun, but allied escorts are throttled harder
+    p51Gun(x, y, z) { // a P-51's six .50s: the same distant-gun model (the caller already fires every other tick)
       if (!ok()) return;
-      const t = ctx.currentTime; if (t - budget.t > 0.1) { budget.t = t; budget.n = 0; }
-      const q = panOf(x, y, z); if (q.d > 2600) return;
-      const cap = q.d < 80 ? 4 : 2; if (budget.n >= cap) return; budget.n++;
-      withDM(q.d, 300, (m) => sGun(G, t + m.delay + Math.random() * 0.02, q.d, q.pan, false)); count("p51Gun");
+      const q = panOf(x, y, z); if (q.d >= AI_CUTOFF) return;
+      const t = ctx.currentTime + distModel(q.d, 300).delay + Math.random() * 0.02;
+      if (!aiGunAllowed(t, q.d)) return; aiRound(G, t, q.d, q.pan); count("p51Gun");
     },
     intercom() { if (!ok()) return; sIntercom(G, ctx.currentTime); count("intercom"); },
     ownShot(side) { // 1.5.6: rounds ride a steady belt clock (real guns are mechanical: ~6 % timing jitter, not the 20 % the frame loop gives), re-synced after a pause
@@ -787,7 +805,7 @@
       else if (kind === "wingOff") sBreakOff(G, t, "wing"); else if (kind === "tailOff") sBreakOff(G, t, "tail");
       count("struct_" + kind);
     },
-    enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d > 2600) return; withDM(q.d, 320, (m) => sEnemyGun(G, ctx.currentTime + m.delay, q.d, q.pan)); count("enemyGun"); },
+    enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d >= AI_CUTOFF) return; sEnemyGun(G, ctx.currentTime + distModel(q.d, 320).delay, q.d, q.pan, true); count("enemyGun"); },
     boom(x, y, z, big) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, big ? 900 : 650, (m) => sBoom(G, ctx.currentTime + m.delay, q.d, q.pan, big)); count("boom"); },
     rocket(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 420, (m) => sRocket(G, ctx.currentTime + m.delay, q.d, q.pan)); count("rocket"); },
     flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 700, (m) => sFlak2(G, ctx.currentTime + m.delay, q.d, q.pan)); count("flak"); },

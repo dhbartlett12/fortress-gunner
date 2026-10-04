@@ -2309,8 +2309,8 @@ export function createWorld3D(canvas) {
   // 1.3.6 TARGET: a small German town with a railway depot (local units: 1 = 10 world u ≈ 15 m).
   // Rail yard (12 tracks, wagons), engine shed, roundhouse + turntable, station, a river with a
   // bridge, streets with gabled roofs, a church, a few sheds/works along the yard.
-  const TOWN_Z = 1653;          // ground-frame local z: 25 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
-  const TOWN_X = 18;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
+  const TOWN_Z = 1048;          // ground-frame local z (1.5.7: 1653 → 1048 for the 180 mph box): ~24 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
+  const TOWN_X = -2;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
   const town = new THREE.Group();
   town.position.set(TOWN_X, 0.05, TOWN_Z);
   town.scale.set(1.5, 1.5, 1.5); // a readable town from 5 km (≈1.4 km across)
@@ -2890,7 +2890,7 @@ export function createWorld3D(canvas) {
   // (air-fixed, so they all run parallel and converge on the horizon); distant bomber groups add more; every fighter draws a thin curving trail along its
   // real path (P-51 brighter/bolder, Germans subtler; it thickens on hard pulls). Three merged ribbon meshes = 3 draw calls, bounded vertex pools,
   // vertex alpha fades them out near the lens so they never smear across the guns/reticle.
-  const AIR_DRIFT = 83.4; // the air mass streams aft at the formation speed (280 mph) in the box frame
+  const AIR_DRIFT = 53.6; // the air mass streams aft at the formation speed (1.5.7: 180 mph = 53.6 u/s; was 83.4 at 280 mph) in the box frame
   const conTex = (() => {
     const W = 64, H = 128, c = document.createElement("canvas"); c.width = W; c.height = H;
     const x = c.getContext("2d"); const img = x.createImageData(W, H);
@@ -3730,11 +3730,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       if (!P) continue;
       P.id = r.id; P.g.visible = true;
       P.g.position.set(r.x, r.y, r.z);
-      _rkD.set(r.vx, r.vy, r.vz + 83.4).normalize();
+      _rkD.set(r.vx, r.vy, r.vz + AIR_DRIFT).normalize();
       P.g.quaternion.setFromUnitVectors(_rkUp, _rkD);
       const f = 3.2 + Math.random() * 1.4; P.fl.scale.set(f, f, 1);
       _rkP.set(r.x, r.y, r.z);
-      ribbonEmit("rk" + r.id, _rkP, { w0: 0.9, w1: 6.5, life: 4.2, a: 0.85, col: [0.93, 0.93, 0.9], drift: 83.4 });
+      ribbonEmit("rk" + r.id, _rkP, { w0: 0.9, w1: 6.5, life: 4.2, a: 0.85, col: [0.93, 0.93, 0.9], drift: AIR_DRIFT });
     }
   }
 
