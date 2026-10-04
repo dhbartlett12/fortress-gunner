@@ -806,6 +806,13 @@
       count("struct_" + kind);
     },
     enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d >= AI_CUTOFF) return; sEnemyGun(G, ctx.currentTime + distModel(q.d, 320).delay, q.d, q.pan, true); count("enemyGun"); },
+    // 1.5.8: a B-17 (or a piece of one) hits the ground thousands of units below: a low, muffled thump + long rumble, delayed by the distance (d / 228.7 u/s, capped at 7 s), quiet but never lost
+    crash(x, y, z, size) {
+      if (!ok()) return; const q = panOf(x, y, z), sz = Math.max(0.3, size || 1), delay = Math.min(7, q.d / U_PER_S), gain = 0.9 / (1 + q.d / 3500), lp = 300 + 900 * Math.exp(-q.d / 3000);
+      DM = { d: q.d, delay, gain, lp }; const t = ctx.currentTime + delay;
+      try { thump(G, t, 52, 19, 1.5 + sz, 1.25 * sz, q.pan, 420); noiseHit(G, t, 2.6 + 1.6 * sz, 150, 0.4, 0.95 * sz, q.pan, 380, 0.06); noiseHit(G, t + 0.22, 1.3, 320, 0.5, 0.45 * sz, q.pan, 600, 0.02); } finally { DM = null; }
+      count("crash");
+    },
     boom(x, y, z, big) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, big ? 900 : 650, (m) => sBoom(G, ctx.currentTime + m.delay, q.d, q.pan, big)); count("boom"); },
     rocket(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 420, (m) => sRocket(G, ctx.currentTime + m.delay, q.d, q.pan)); count("rocket"); },
     flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 700, (m) => sFlak2(G, ctx.currentTime + m.delay, q.d, q.pan)); count("flak"); },
