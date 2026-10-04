@@ -27,9 +27,10 @@
     const G = { ctx };
     G.master = ctx.createGain(); G.master.gain.value = 0.0001;
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -14; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.004; comp.release.value = 0.25;
+    comp.threshold.value = -16; comp.knee.value = 10; comp.ratio.value = 5; comp.attack.value = 0.004; comp.release.value = 0.25;
     const tame = ctx.createBiquadFilter(); tame.type = "lowpass"; tame.frequency.value = 7200; tame.Q.value = 0.5; // no ice-pick highs
-    G.master.connect(tame); tame.connect(comp); comp.connect(ctx.destination);
+    const sat = ctx.createWaveShaper(); { const n = 2048, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(1.5 * x) / Math.tanh(1.5) * 0.94; } sat.curve = c; } // 1.5.3: soft ceiling at -0.5 dBFS, never hard-clips
+    G.master.connect(tame); tame.connect(comp); comp.connect(sat); sat.connect(ctx.destination); G.tame = tame; G.vox = [];
     G.noise = makeNoise(ctx, 2.0);
     G.sfx = ctx.createGain(); G.sfx.gain.value = 1.5; G.sfx.connect(G.master);
     // --- engine drone: 4 radials, each: prop sawtooth (~45 Hz, detuned → slow beats) + firing buzz (~172 Hz)
@@ -107,18 +108,21 @@
   // sound events --------------------------------------------------------------------------------
   // 1.4.0: every round a little different (pitch, length, level), box gunners duller and further off
   // (heavier low-pass, a late soft "slap" echo off the neighbouring ships), our own rounds + brass clinks.
-  function sGun(G, t, dist, pan, own) { // one .50 cal round
+  function sGun(G, t, dist, pan, own) { // one .50 cal round (1.5.3: retuned to the user's B-17 shredding clips — bassy "bark" with mid body, short crack on top)
     const v = 0.88 + Math.random() * 0.24, lv = 0.85 + Math.random() * 0.3;
     if (own) {
-      noiseHit(G, t, 0.05 + Math.random() * 0.025, 1300 * v, 0.8, 0.34 * lv, pan, 6000);
-      thump(G, t, 150 * v, 45, 0.07, 0.36 * lv, pan, 6000);
+      noiseHit(G, t, 0.07 + Math.random() * 0.03, 620 * v, 0.8, 0.72 * lv, pan, 3200, 0.002); // chesty bark (300–1k)
+      noiseHit(G, t, 0.045, 1250 * v, 0.8, 0.34 * lv, pan, 5000, 0.001); // body
+      noiseHit(G, t, 0.022, 2600 * v, 0.7, 0.2 * lv, pan, 8000, 0.0006); // crack
+      thump(G, t, 125 * v, 48, 0.085, 0.18 * lv, pan, 5000);
       return;
     }
     const near = 1 / (1 + dist / 55);
-    const lp = Math.max(450, 2400 - dist * 4.5); // duller than 1.3.9 (4200 − 5d)
-    noiseHit(G, t, 0.1 + Math.random() * 0.05, 700 * v, 0.7, 0.42 * near * lv, pan, lp, 0.006);
-    thump(G, t, 95 * v, 40, 0.12, 0.3 * near * lv, pan, lp * 0.7);
-    if (dist > 60) noiseHit(G, t + 0.07 + dist / 3000, 0.16, 420, 0.6, 0.1 * near, -pan * 0.5, 900, 0.02); // distant slap
+    const lp = Math.max(500, 2800 - dist * 4.5);
+    noiseHit(G, t, 0.1 + Math.random() * 0.05, 640 * v, 0.7, 0.8 * near * lv, pan, lp, 0.004);
+    noiseHit(G, t, 0.05, 1300 * v, 0.7, 0.3 * near * lv, pan, lp, 0.002);
+    thump(G, t, 105 * v, 42, 0.12, 0.16 * near * lv, pan, lp * 0.7);
+    if (dist > 60) noiseHit(G, t + 0.07 + dist / 3000, 0.16, 420, 0.6, 0.12 * near, -pan * 0.5, 900, 0.02); // distant slap
   }
   function sBrass(G, t, pan) { // spent .50 cases rattling off the turret floor / ring
     const ctx = G.ctx, n = 1 + ((Math.random() * 2) | 0);
@@ -188,6 +192,208 @@
     if (heavy || Math.random() < 0.5) tear(G, t + 0.015 + Math.random() * 0.03, (heavy ? 0.35 : 0.16) + Math.random() * 0.22, (heavy ? 0.45 : 0.28) * v, pan);
     if (heavy || Math.random() < 0.65) rattle(G, t + 0.03, heavy ? 8 + ((Math.random() * 6) | 0) : 3 + ((Math.random() * 4) | 0), heavy ? 0.4 : 0.28, pan, heavy ? 0.55 : 0.3);
   }
+
+  // ===== 1.5.3 HIT / FLAK / STRUCTURE SOUNDS (reworked; tuned against two reference clips of show flak audio, see ITERATION_LOG) =====
+  // Phone-cheap: every effect is a handful of oscillators + filtered noise bursts; a voice budget (room()) drops the
+  // lowest-value layers when too many are alive at once, so a long strafing burst or a flak barrage never piles up.
+  const VOX_CAP = 36;
+  function room(G, t, cost, dur) { // reserve `cost` voices for `dur` s starting at t; false if over the cap
+    const v = G.vox; for (let i = v.length - 1; i >= 0; i--) if (v[i][0] < t - 0.02) v.splice(i, 1);
+    let n = 0; for (const q of v) if (q[1] <= t + 0.05) n += q[2];
+    if (n + cost > VOX_CAP) return false;
+    v.push([t + dur, t, cost]); return true;
+  }
+  function env(G, t, a, peak, dur) { const e = G.ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + a); e.gain.exponentialRampToValueAtTime(0.0001, t + dur); return e; }
+  function ring(G, t, freqs, dur, gain, pan, lp, jit) { // inharmonic metal ring (partials with their own decays)
+    const ctx = G.ctx;
+    for (const [m, a] of freqs) {
+      const o = ctx.createOscillator(); o.type = "sine"; o.frequency.value = m * (1 + (Math.random() - 0.5) * (jit || 0.04));
+      const d = dur * (0.35 + 0.65 / (1 + m / 1500)); const e = env(G, t, 0.0012, a, d);
+      o.connect(e); e.connect(out(G, t, gain, pan, lp)); o.start(t); o.stop(t + d + 0.03);
+    }
+  }
+  // (a) rounds on the airframe ------------------------------------------------------------------
+  // MG (.50 / 7.9 / 13 mm): bright metallic "ping" (stiff inharmonic ring 1.6–4.5 kHz) over a sheet-metal snap + a short thud; ~1 in 4 ricochets (a
+  // downward-whining zing). 20 mm cannon: lower, heavier — a splitting crack, a clang at 400–900 Hz, a "whump" and the shell bursting inside the skin.
+  function hitMG(G, t, pan, v, ric) {
+    if (!room(G, t, 6, 0.3)) return;
+    const base = 1500 + Math.random() * 2200;
+    ring(G, t, [[base, 0.5], [base * 1.52, 0.3], [base * 2.31, 0.2], [base * 3.7, 0.08]], 0.16, 0.5 * v, pan, 9000);
+    noiseHit(G, t, 0.014 + Math.random() * 0.012, 2600 + Math.random() * 1800, 0.8, 0.8 * v, pan, 8000, 0.0006); // the snap
+    thump(G, t + 0.002, 118 + Math.random() * 40, 52, 0.09, 0.95 * v, pan * 0.4, 700); // thud through the structure (ref hits: ~55% of energy < 150 Hz)
+    if (ric) { const o = G.ctx.createOscillator(); o.type = "triangle"; o.frequency.setValueAtTime(5200 + Math.random() * 1500, t + 0.01); o.frequency.exponentialRampToValueAtTime(1100, t + 0.2); const e = env(G, t + 0.01, 0.004, 0.16 * v, 0.2); o.connect(e); e.connect(out(G, t, 1, pan * 1.2, 7000)); o.start(t + 0.01); o.stop(t + 0.24); }
+  }
+  function hitCannon(G, t, pan, v) {
+    if (!room(G, t, 9, 0.6)) return hitMG(G, t, pan, v, false);
+    noiseHit(G, t, 0.03, 1900 + Math.random() * 900, 0.6, 1.0 * v, pan, 6500, 0.0007); // the crack
+    thump(G, t + 0.002, 105 + Math.random() * 25, 34, 0.3, 1.05 * v, pan * 0.4, 520); // whump
+    noiseHit(G, t + 0.012, 0.22, 380, 0.7, 0.7 * v, pan * 0.6, 1400, 0.003); // the shell bursting inside
+    const b = 380 + Math.random() * 380;
+    ring(G, t + 0.004, [[b, 0.55], [b * 2.76, 0.32], [b * 5.4, 0.18], [b * 8.9, 0.08]], 0.38, 0.5 * v, pan, 6000, 0.06); // clang of torn skin
+    tear(G, t + 0.02, 0.18 + Math.random() * 0.16, 0.3 * v, pan);
+    rattle(G, t + 0.035, 4 + ((Math.random() * 3) | 0), 0.3 * v, pan, 0.4);
+  }
+  function sHitOwn2(G, t, kind, pan0, side) {
+    const pan = pan0 != null ? pan0 : (Math.random() - 0.5) * 1.1, v = 0.8 + Math.random() * 0.4;
+    if (kind === "flak") return flakFragments(G, t, 0.8, pan);
+    if (kind === "cannon" || kind === "engine") { hitCannon(G, t, pan, v); if (kind === "engine") sEngineHit(G, t + 0.05); return; }
+    hitMG(G, t, pan, kind === "self" ? v * 0.75 : v, Math.random() < 0.25);
+    if (Math.random() < 0.4) hitMG(G, t + 0.03 + Math.random() * 0.05, pan + (Math.random() - 0.5) * 0.3, v * 0.7, false);
+    if (Math.random() < 0.55) rattle(G, t + 0.02, 3 + ((Math.random() * 3) | 0), 0.25 * v, pan, 0.25);
+  }
+  // a strafing pass: n hits at ~45–75 ms (20 mm cannon every 3rd), walking along the skin (pan sweeps), tapering off; one call = the whole burst
+  // shred bed: while a burst chews through the skin, a continuous chopped band of torn-metal noise (≈12 Hz flutter) sits under the individual hits — the "shredded" texture of the user's clips
+  function shredBed(G, t, dur, gain, panA, panB) {
+    if (!room(G, t, 6, dur)) return;
+    const ctx = G.ctx, s = ctx.createBufferSource(); s.buffer = G.noise; s.playbackRate.value = 0.9 + Math.random() * 0.2;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 0.9; bp.frequency.setValueAtTime(1500, t); bp.frequency.linearRampToValueAtTime(700, t + dur);
+    const e = ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.linearRampToValueAtTime(1, t + 0.05); e.gain.setValueAtTime(1, t + dur * 0.7); e.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    const ch = ctx.createGain(); ch.gain.value = 0.55; const lfo = ctx.createOscillator(); lfo.type = "sawtooth"; lfo.frequency.value = 11 + Math.random() * 3;
+    const lg = ctx.createGain(); lg.gain.value = 0.45; lfo.connect(lg); lg.connect(ch.gain);
+    const o = out(G, t, gain, panA, 5000); if (G.ctx.createStereoPanner) { /* pan sweep follows the skin */ }
+    s.connect(bp); bp.connect(ch); ch.connect(e); e.connect(o); s.start(t, Math.random() * 1.2); s.stop(t + dur + 0.05); lfo.start(t); lfo.stop(t + dur + 0.05);
+  }
+  function sStrafe(G, t, n, cannon, panA, panB) {
+    let tt = t;
+    if (n >= 6) shredBed(G, t, Math.min(2.2, n * 0.075), cannon ? 0.5 : 0.32, (panA + panB) / 2, 0);
+    for (let k = 0; k < n; k++) {
+      const pan = panA + (panB - panA) * (n > 1 ? k / (n - 1) : 0) + (Math.random() - 0.5) * 0.2, v = 0.9 - 0.25 * (k / Math.max(1, n));
+      if (cannon && k % 3 === 1) hitCannon(G, tt, pan, v); else hitMG(G, tt, pan, v, Math.random() < 0.15);
+      tt += 0.058 + Math.random() * 0.05; // ref patter: median 85 ms between hits (p10 63, p90 125–156)
+    }
+    return tt;
+  }
+  // (b) flak -----------------------------------------------------------------------------------------
+  // ear-ring + muffle: low-passes the whole mix for ~1.2 s and adds a faint 3 kHz whine that dies away
+  function earDuck(G, t, depth) {
+    const T = G.tame; if (!T) return;
+    T.frequency.cancelScheduledValues(t); T.frequency.setValueAtTime(7200, t); T.frequency.linearRampToValueAtTime(Math.max(380, 2400 - 2000 * depth), t + 0.015);
+    T.frequency.setTargetAtTime(7200, t + 0.35 + depth * 0.4, 0.5 + depth * 0.4);
+    const o = G.ctx.createOscillator(); o.type = "sine"; o.frequency.value = 3100; const e = G.ctx.createGain();
+    e.gain.setValueAtTime(0.0001, t + 0.05); e.gain.linearRampToValueAtTime(0.045 * depth, t + 0.18); e.gain.exponentialRampToValueAtTime(0.0001, t + 1.8 + depth);
+    o.connect(e); e.connect(G.sfx); o.start(t + 0.05); o.stop(t + 2.8 + depth);
+  }
+  function flakFragments(G, t, v, pan) { // shrapnel peppering the skin: fast gravelly ticks + a few tinks, thinning out over ~0.6 s
+    const n = 14 + ((Math.random() * 10) | 0);
+    for (let k = 0; k < n; k++) {
+      const tt = t + Math.pow(Math.random(), 1.8) * 0.65, g = v * (0.9 - 0.7 * (tt - t) / 0.65);
+      if (!room(G, tt, 2, 0.08)) continue;
+      const p = pan + (Math.random() - 0.5) * 0.9;
+      noiseHit(G, tt, 0.006 + Math.random() * 0.012, 1800 + Math.random() * 3200, 1.1, 1.4 * g, p, 7000, 0.0004);
+      if (k % 3 === 0) tink(G, tt, 0.34 * g, p);
+      else thump(G, tt, 190 + Math.random() * 90, 80, 0.035, 0.18 * g, p * 0.4, 900);
+    }
+  }
+  function sFlakClose(G, t, dist, pan) { // d < ~120 u: a sharp concussive CRACK-BOOM, low thump, shrapnel, ear-ring
+    const k = Math.max(0, 1 - dist / 140), vv = 0.55 + 0.45 * k;
+    room(G, t, 10, 1.5);
+    noiseHit(G, t, 0.1, 900, 0.3, 2.6 * vv, pan, 7500, 0.0005); // the crack (broadband, instant)
+    noiseHit(G, t, 0.05, 2600, 0.5, 1.4 * vv, pan, 8000, 0.0004);
+    noiseHit(G, t, 0.32, 320, 0.5, 1.7 * vv, pan, 1400, 0.003); // the boom body
+    thump(G, t, 78, 26, 0.75, 1.05 * vv, pan * 0.3, 380); // low thump
+    thump(G, t + 0.03, 46, 24, 0.9, 0.7 * vv, 0, 200); // sub
+    flakFragments(G, t + 0.02 + dist / 700, 0.6 + 0.6 * k, pan);
+    earDuck(G, t + 0.01, 0.35 + 0.65 * k);
+  }
+  function sFlakDistant(G, t, dist, pan) { // far burst: the thump arrives late and soft ("crump"): sub-120 Hz body, no crack, a faint lumpy tail
+    const near = 1 / (1 + dist / 380);
+    const o = G.ctx.createOscillator(); o.type = "sine"; o.frequency.setValueAtTime(74, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.55);
+    const e = G.ctx.createGain(); const a = 0.05 + Math.min(0.14, dist / 7000); // soft onset grows with distance (ref: 60–180 ms rises)
+    e.gain.setValueAtTime(0.0001, t); e.gain.linearRampToValueAtTime(1, t + a); e.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+    o.connect(e); e.connect(out(G, t, 1.5 * near + 0.15, pan * 0.5, 260)); o.start(t); o.stop(t + 1);
+    noiseHit(G, t, 0.7, 210, 0.5, 1.1 * near + 0.1, pan, 520, a * 0.7);
+    if (dist < 700) noiseHit(G, t + 0.18, 0.5, 520, 0.5, 0.22 * near, pan, 900, 0.08);
+  }
+
+  // 1.5.3 WGr.21 rocket (tuned on a reference rocket-attack clip): launch thump + hiss; FLIGHT = a band-limited whoosh swelling ~+11 dB over ~1 s
+  // (mid 400–2k dominant, sizzle above 2k); IMPACT on the airframe = metal bang + a very low (<150 Hz) concussion ~10 dB over the mid band that holds ~1 s
+  // then falls ~6 dB per 0.3 s, thumping fragments every ~100 ms, shrapnel on the skin, ear-ring. Far impacts are just a flak-style crump.
+  function sRocketFlight(G, t, dist, pan, dur) {
+    if (!room(G, t, 3, dur + 0.5)) return;
+    const ctx = G.ctx, near = 1 / (1 + dist / 500);
+    const s = ctx.createBufferSource(); s.buffer = G.noise; s.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.3; bp.frequency.setValueAtTime(650, t); bp.frequency.exponentialRampToValueAtTime(2300, t + dur);
+    const e = ctx.createGain(); e.gain.setValueAtTime(0.03, t); e.gain.exponentialRampToValueAtTime(1, t + dur); e.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.45);
+    s.connect(bp); bp.connect(e); e.connect(out(G, t, 1.3 * near + 0.18, pan, 6000)); s.start(t); s.stop(t + dur + 0.5);
+    const sz = ctx.createBufferSource(); sz.buffer = G.noise; sz.playbackRate.value = 1.3; sz.loop = true;
+    const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 2600; const e2 = ctx.createGain(); e2.gain.setValueAtTime(0.02, t); e2.gain.exponentialRampToValueAtTime(0.5, t + dur); e2.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.4);
+    sz.connect(hp); hp.connect(e2); e2.connect(out(G, t, 0.1 * near + 0.015, pan, 8000)); sz.start(t); sz.stop(t + dur + 0.45);
+  }
+  function sRocketImpact(G, t, dist, pan) {
+    if (dist > 120) return sFlakDistant(G, t, dist, pan);
+    const k = Math.max(0.25, 1 - dist / 160);
+    room(G, t, 12, 2.0);
+    noiseHit(G, t, 0.012, 2000, 0.6, 1.6 * k, pan, 7500, 0.0004); // the skin cracking open
+    ring(G, t, [[520, 0.6], [1250, 0.35], [2600, 0.2]], 0.35, 0.6 * k, pan, 6000, 0.05);
+    { // concussion: held ~0.9 s then falling (ref: -13..-15 dBFS for ~1 s, -21 by 1.4 s)
+      const o = G.ctx.createOscillator(); o.type = "sine"; o.frequency.setValueAtTime(85, t); o.frequency.exponentialRampToValueAtTime(34, t + 1.6);
+      const e = G.ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.linearRampToValueAtTime(1, t + 0.03); e.gain.exponentialRampToValueAtTime(0.4, t + 0.7); e.gain.exponentialRampToValueAtTime(0.1, t + 1.2); e.gain.exponentialRampToValueAtTime(0.0001, t + 1.9);
+      o.connect(e); e.connect(out(G, t, 0.62 * k, pan * 0.3, 320)); o.start(t); o.stop(t + 1.95);
+    }
+    noiseHit(G, t, 1.0, 200, 0.5, 0.9 * k, pan, 500, 0.004);
+    noiseHit(G, t + 0.01, 0.6, 900, 0.5, 6.0 * k, pan, 2200, 0.004); // mid body of the blast (ref: mid ~11–13 dB under the low band)
+    for (let i = 0; i < 6; i++) thump(G, t + 0.08 + i * (0.09 + Math.random() * 0.05), 95 - i * 8, 38, 0.14, (0.8 - i * 0.1) * k, pan * 0.5, 400); // secondary thumps
+    flakFragments(G, t + 0.04, 0.9 * k, pan);
+    earDuck(G, t + 0.01, 0.6 * k);
+  }
+  function sFlak2(G, t, dist, pan) { if (dist < 120) sFlakClose(G, t, dist, pan); else sFlakDistant(G, t, dist, pan); }
+  // (c) structural damage ---------------------------------------------------------------------------
+  function sEngineHit(G, t) { // sputter-bang, a grinding rattle with the pitch falling away
+    if (!room(G, t, 8, 1.6)) return;
+    const ctx = G.ctx;
+    for (let k = 0; k < 5; k++) thump(G, t + k * (0.07 + Math.random() * 0.05), 120 - k * 14, 45, 0.07, 0.45 - k * 0.05, (Math.random() - 0.5) * 0.4, 700);
+    const o = ctx.createOscillator(); o.type = "sawtooth"; o.frequency.setValueAtTime(95, t + 0.1); o.frequency.exponentialRampToValueAtTime(34, t + 1.5);
+    const am = ctx.createOscillator(); am.type = "square"; am.frequency.setValueAtTime(34, t); am.frequency.exponentialRampToValueAtTime(11, t + 1.5); const amg = ctx.createGain(); amg.gain.value = 0.5;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t + 0.1); g.gain.linearRampToValueAtTime(0.5, t + 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.55); amg.connect(g.gain);
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 480; o.connect(lp); lp.connect(g); g.connect(out(G, t, 0.7, 0, null));
+    o.start(t + 0.1); o.stop(t + 1.6); am.connect(amg); am.start(t + 0.1); am.stop(t + 1.6);
+    noiseHit(G, t + 0.15, 0.9, 1400, 2.5, 0.12, 0, 3000, 0.1); // metal on metal grind
+  }
+  function sCreak(G, t, dur, gain, pan) { // wing / tail under load: a groaning, swept narrow noise band + a wavering low tone
+    if (!room(G, t, 4, dur)) return;
+    const ctx = G.ctx, s = ctx.createBufferSource(); s.buffer = G.noise; s.playbackRate.value = 0.5;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 9; const f0 = 260 + Math.random() * 200;
+    bp.frequency.setValueAtTime(f0, t); bp.frequency.linearRampToValueAtTime(f0 * 1.9, t + dur * 0.5); bp.frequency.linearRampToValueAtTime(f0 * 1.15, t + dur);
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 5 + Math.random() * 4; const lg = ctx.createGain(); lg.gain.value = 0.35; const e = ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.linearRampToValueAtTime(0.6, t + dur * 0.3); e.gain.linearRampToValueAtTime(0.0001, t + dur);
+    lfo.connect(lg); lg.connect(e.gain); s.connect(bp); bp.connect(e); e.connect(out(G, t, gain, pan, 2400));
+    s.start(t, Math.random()); s.stop(t + dur + 0.05); lfo.start(t); lfo.stop(t + dur + 0.05);
+    const o = ctx.createOscillator(); o.type = "triangle"; o.frequency.setValueAtTime(118, t); o.frequency.linearRampToValueAtTime(96, t + dur); const e2 = env(G, t, dur * 0.4, 0.25, dur);
+    o.connect(e2); e2.connect(out(G, t, gain * 0.7, pan * 0.5, 400)); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function sWindRoar(G, t, dur, gain) { // air tearing through the new holes: a rising broadband roar that lingers
+    if (!room(G, t, 3, dur)) return;
+    const ctx = G.ctx, s = ctx.createBufferSource(); s.buffer = G.noise; s.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 0.5; bp.frequency.setValueAtTime(420, t); bp.frequency.linearRampToValueAtTime(1200, t + dur * 0.4); bp.frequency.linearRampToValueAtTime(600, t + dur);
+    const e = ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.linearRampToValueAtTime(1, t + dur * 0.25); e.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(bp); bp.connect(e); e.connect(out(G, t, gain, 0, 4000)); s.start(t); s.stop(t + dur + 0.05);
+  }
+  function sFireWhoosh(G, t, gain) { // flames catching: a soft rushing whoomph then crackle
+    if (!room(G, t, 4, 1.4)) return;
+    const ctx = G.ctx, s = ctx.createBufferSource(); s.buffer = G.noise; s.playbackRate.value = 0.7;
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.setValueAtTime(300, t); lp.frequency.exponentialRampToValueAtTime(1500, t + 0.35); lp.frequency.exponentialRampToValueAtTime(420, t + 1.3);
+    const e = env(G, t, 0.18, 1, 1.35); s.connect(lp); lp.connect(e); e.connect(out(G, t, gain, 0, null)); s.start(t, 0.3); s.stop(t + 1.4);
+    thump(G, t, 70, 32, 0.4, 0.5 * gain, 0, 300);
+    for (let k = 0; k < 9; k++) noiseHit(G, t + 0.3 + Math.random() * 1.0, 0.01 + Math.random() * 0.012, 2000 + Math.random() * 3000, 1.2, 0.12 * gain, (Math.random() - 0.5) * 0.4, 6000);
+  }
+  function sDecomp(G, t, gain) { // a window / skin goes: a bang, then wind hissing through the hole
+    if (!room(G, t, 6, 1.6)) return;
+    noiseHit(G, t, 0.05, 1500, 0.5, 0.9 * gain, 0, 6000, 0.001); thump(G, t, 90, 40, 0.22, 0.8 * gain, 0, 600);
+    const ctx = G.ctx, s = ctx.createBufferSource(); s.buffer = G.noise; s.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.4; bp.frequency.setValueAtTime(2800, t); bp.frequency.exponentialRampToValueAtTime(500, t + 1.5);
+    const e = env(G, t, 0.03, 0.9, 1.6); s.connect(bp); bp.connect(e); e.connect(out(G, t, 0.55 * gain, 0, 5000)); s.start(t); s.stop(t + 1.65);
+  }
+  function sBreakOff(G, t, kind) { // the wing / tail tears off: sheet-metal shriek + crunch, a deep boom, clanging debris
+    room(G, t, 12, 2.2);
+    noiseHit(G, t, 0.05, 1200, 0.5, 1.2, 0, 7000, 0.0008);
+    thump(G, t, 70, 24, 1.0, 1.4, 0, 320);
+    for (let k = 0; k < 4; k++) tear(G, t + 0.02 + k * 0.09, 0.4 + Math.random() * 0.4, 0.5, (Math.random() - 0.5) * 0.8);
+    const b = kind === "wing" ? 240 : 330;
+    ring(G, t + 0.02, [[b, 0.6], [b * 2.4, 0.4], [b * 4.9, 0.25], [b * 7.7, 0.12]], 1.2, 0.5, 0, 5000, 0.08);
+    noiseHit(G, t + 0.05, 1.3, 300, 0.4, 0.7, 0, 900, 0.03);
+    sWindRoar(G, t + 0.1, 2.0, 0.5);
+    for (let k = 0; k < 10; k++) { const tt = t + 0.25 + Math.pow(Math.random(), 1.5) * 1.3; tink(G, tt, 0.2 * (1 - (tt - t) / 1.7), (Math.random() - 0.5) * 0.9); }
+  }
+
   function sBoom(G, t, dist, pan, big) {
     const near = 1 / (1 + dist / 150), lp = Math.max(300, 1800 - dist * 1.2);
     thump(G, t, big ? 60 : 80, 22, big ? 1.4 : 0.9, (big ? 1.3 : 0.9) * near, pan, lp);
@@ -202,6 +408,7 @@
     const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 2.2; bp.frequency.setValueAtTime(700, t); bp.frequency.exponentialRampToValueAtTime(2600, t + 0.5); bp.frequency.exponentialRampToValueAtTime(900, t + 1.6);
     const e = ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(0.55 * near + 0.02, t + 0.08); e.gain.setValueAtTime(0.55 * near + 0.02, t + 0.7); e.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);
     s.connect(bp); bp.connect(e); e.connect(out(G, t, 0.5, pan)); s.start(t); s.stop(t + 1.9);
+    sRocketFlight(G, t + 0.15, dist, pan, 1.0 + Math.min(0.5, dist / 800));
   }
   function sFlak(G, t, dist, pan) { // the "crump": dull boom, then a short crackle of fragments
     const near = 1 / (1 + dist / 220);
@@ -380,11 +587,27 @@
       if (Math.random() < 0.28) { sBrass(G, t + 0.18 + Math.random() * 0.25, side ? 0.35 : -0.35); count("brass"); }
     },
     hitEnemy() { if (!ok()) return; const t = ctx.currentTime + 0.05; tink(G, t, 0.12, 0); sHitThump(G, t + 0.01); count("hitEnemy"); },
-    hitOwn(kind) { if (!ok()) return; sHitOwn(G, ctx.currentTime, kind || "mg"); count("hitOwn"); },
+    hitOwn(kind, pan, n) { // 1.5.3: kind mg|cannon|engine|self|flak; pan -1..1 = which side of the ship; n>1 = a strafing burst (hit count)
+      if (!ok()) return; const t = ctx.currentTime;
+      if (n > 1 && kind !== "flak") sStrafe(G, t, Math.min(14, n), kind === "cannon" || kind === "engine", (pan || 0) - 0.3, (pan || 0) + 0.3); else sHitOwn2(G, t, kind || "mg", pan);
+      count("hitOwn");
+    },
+    rocketImpact(onShip, x, y, z) { // 1.5.3: a WGr.21 detonating on / near our airframe (onShip) or somewhere in the box
+      if (!ok()) return; const t = ctx.currentTime;
+      if (onShip) sRocketImpact(G, t, 8, (Math.random() - 0.5) * 0.8); else { const q = panOf(x, y, z); sRocketImpact(G, t + Math.min(1.5, q.d / 340), q.d, q.pan); }
+      count("rocketImpact");
+    },
+    structure(kind, pan) { // 1.5.3: engine | creak | wind | fire | decomp | wingOff | tailOff
+      if (!ok()) return; const t = ctx.currentTime;
+      if (kind === "engine") sEngineHit(G, t); else if (kind === "creak") sCreak(G, t, 1.6 + Math.random() * 0.8, 0.5, pan || 0);
+      else if (kind === "wind") sWindRoar(G, t, 2.2, 0.35); else if (kind === "fire") sFireWhoosh(G, t, 0.7); else if (kind === "decomp") sDecomp(G, t, 0.8);
+      else if (kind === "wingOff") sBreakOff(G, t, "wing"); else if (kind === "tailOff") sBreakOff(G, t, "tail");
+      count("struct_" + kind);
+    },
     enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d > 1200) return; sEnemyGun(G, ctx.currentTime + q.d / 230 * 0.3, q.d, q.pan); count("enemyGun"); },
     boom(x, y, z, big) { if (!ok()) return; const q = panOf(x, y, z); sBoom(G, ctx.currentTime + Math.min(1.5, q.d / 230), q.d, q.pan, big); count("boom"); },
     rocket(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); sRocket(G, ctx.currentTime + Math.min(1.5, q.d / 340), q.d, q.pan); count("rocket"); },
-    flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); sFlak(G, ctx.currentTime + Math.min(2, q.d / 230), q.d, q.pan); count("flak"); },
+    flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); sFlak2(G, ctx.currentTime + Math.min(2, q.d / 230), q.d, q.pan); count("flak"); },
     fallStart(cause) { if (!ok()) return; sFallStart(G, ctx.currentTime); count("fall"); },
     bell() { if (!ok()) return; sBell(G, ctx.currentTime); count("bell"); },
     bail() { if (!ok()) return; sBail(G, ctx.currentTime); count("bail"); },
@@ -397,6 +620,7 @@
     renderSample(sec, part) {
       if (part === "bailout") return renderBailout(sec);
       if (part === "hits141") return renderHits141(sec);
+      if (part === "gun153" || part === "gun153x") return renderGun153(sec, part === "gun153x"); if (part === "hits153") return renderHits153(sec); if (part === "hits153x") return renderHits153(sec, true);
       sec = sec || 28;
       const oc = new OAC(2, Math.floor(44100 * sec), 44100);
       const g = Graph(oc); g.master.gain.value = 0.8;
@@ -462,6 +686,39 @@
     for (const [t, d, p] of [[14.0, 900, 0.5], [16.8, 1400, -0.6], [19.1, 1100, 0.2], [22.4, 1800, -0.3], [25.0, 1600, 0.6]]) if (t < sec - 1) sFarFlak(g, t, d, p);
     return oc.startRendering();
   }
+
+  // 1.5.3 demo / verification mix: drone bed + airframe hits, a 190 strafing pass, flak (distant → close), structural damage. LABELS gives the timeline.
+  const LABELS153 = [[0.6, "MG hit"], [1.6, "MG pair"], [2.7, "20 mm cannon hit"], [3.9, "Fw 190 strafing pass (cannon + MG)"], [6.6, "ricochet MGs"], [8.0, "flak: distant crump (900 u)"], [9.6, "flak: far (500 u)"], [11.2, "flak: mid (200 u)"], [12.9, "flak: CLOSE burst + shrapnel + ear-ring"], [16.2, "flak: very close + fragments hit skin"], [19.6, "engine hit: sputter + grind"], [21.4, "wing / tail creak"], [23.4, "wind roar through holes"], [25.2, "fire whoosh"], [26.8, "decompression"], [28.2, "WING tears off"], [31.0, "TAIL tears off"], [33.6, "ROCKET: launch + flight whoosh"], [36.0, "ROCKET: impact on airframe"]];
+  function renderHits153(sec, noBed) {
+    sec = sec || 39;
+    const oc = new OAC(2, Math.floor(44100 * sec), 44100);
+    const g = Graph(oc); g.master.gain.value = 0.8;
+    if (noBed) { g.busE.gain.value = 0; g.wind.gain.value = 0; g.rumble.gain.value = 0; }
+    hitMG(g, 0.6, -0.3, 1, false);
+    sStrafe(g, 1.6, 2, false, 0.2, 0.3);
+    hitCannon(g, 2.7, 0.4, 1);
+    sStrafe(g, 3.9, 12, true, -0.8, 0.8);
+    for (const [t, p] of [[6.6, -0.5], [6.95, 0.1], [7.2, 0.6]]) hitMG(g, t, p, 1, true);
+    sFlak2(g, 8.0, 900, 0.4); sFlak2(g, 9.6, 500, -0.5); sFlak2(g, 11.2, 200, 0.2); sFlak2(g, 12.9, 70, -0.3);
+    sFlak2(g, 16.2, 22, 0.1); sHitOwn2(g, 16.3, "flak", 0.1);
+    sEngineHit(g, 19.6); sCreak(g, 21.4, 1.8, 0.6, -0.3); sCreak(g, 22.0, 1.6, 0.5, 0.4); sWindRoar(g, 23.4, 2.2, 0.4);
+    sFireWhoosh(g, 25.2, 0.7); sDecomp(g, 26.8, 0.8); sBreakOff(g, 28.2, "wing"); sBreakOff(g, 31.0, "tail");
+    sRocket(g, 33.6, 260, -0.4); sRocketImpact(g, 36.0, 8, 0.2);
+    return oc.startRendering();
+  }
+
+  // 1.5.3 gun verification mix: 0.5–3.5 s our twin .50s (12.5 Hz per gun, alternating), 4–7 s a strafing pass on the airframe (cannon + MG), 7.5–10.5 s box gunners at 80–500 u
+  function renderGun153(sec, noBed) {
+    sec = sec || 11;
+    const oc = new OAC(2, Math.floor(44100 * sec), 44100);
+    const g = Graph(oc); g.master.gain.value = 0.8;
+    if (noBed) { g.busE.gain.value = 0; g.wind.gain.value = 0; g.rumble.gain.value = 0; }
+    for (let k = 0; k < 75; k++) { sGun(g, 0.5 + k / 25, 0, k % 2 ? 0.25 : -0.25, true); if (k % 4 === 0) sBrass(g, 0.7 + k / 25, 0.3); }
+    sStrafe(g, 4.0, 22, true, -0.7, 0.7); sStrafe(g, 5.6, 18, true, 0.6, -0.6);
+    for (let k = 0; k < 90; k++) { const d = 80 + Math.random() * 420; sGun(g, 7.5 + Math.random() * 3.0, d, Math.random() * 2 - 1, false); }
+    return oc.startRendering();
+  }
+  API.hits153Labels = LABELS153;
   window.FGAudio = API;
   const unlock = () => API.unlock();
   ["pointerdown", "touchstart", "mousedown", "keydown"].forEach((ev) => window.addEventListener(ev, unlock, { passive: true }));
