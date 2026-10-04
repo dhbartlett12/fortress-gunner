@@ -33755,6 +33755,99 @@
     const b17SeamMat = new MeshBasicMaterial({ color: 1316111, transparent: true, opacity: 0.38, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
     const _bgBox = (w, h, d) => new BoxGeometry(w, h, d), _bgCyl = (r0, r1, h, sg) => new CylinderGeometry(r0, r1, h, sg || 6);
     let _b17ConeG = null;
+    const b17HullSecs = [
+      { z: -0.414, hw: 4e-3, top: 0.0135, bot: 45e-4, n: 2.2 },
+      { z: -0.404, hw: 85e-4, top: 0.0185, bot: 15e-4, n: 2.2 },
+      { z: -0.37, hw: 0.0135, top: 0.0235, bot: -55e-4, n: 2.2 },
+      { z: -0.32, hw: 0.0195, top: 0.0295, bot: -0.0165, n: 2.3 },
+      { z: -0.26, hw: 0.0285, top: 0.0365, bot: -0.0245, n: 2.3 },
+      { z: -0.19, hw: 0.0385, top: 0.0435, bot: -0.0365, n: 2.4 },
+      { z: -0.12, hw: 0.0455, top: 0.0485, bot: -0.0485, n: 2.5 },
+      { z: -0.02, hw: 0.0458, top: 0.0495, bot: -0.0495, n: 2.5 },
+      { z: 0.07, hw: 0.0445, top: 0.0495, bot: -0.0475, n: 2.4 },
+      { z: 0.135, hw: 0.0425, top: 0.0505, bot: -0.0415, n: 2.3 },
+      { z: 0.17, hw: 0.0405, top: 0.0515, bot: -0.0365, n: 2.2 },
+      { z: 0.205, hw: 0.0385, top: 0.0535, bot: -0.0335, n: 2.1 },
+      { z: 0.24, hw: 0.0355, top: 0.0535, bot: -0.03, n: 2.1 },
+      { z: 0.262, hw: 0.0335, top: 0.0505, bot: -0.0275, n: 2.1 }
+    ];
+    function b17HullAt(z) {
+      const A = z > 0.262 ? b17NoseSecs : b17HullSecs;
+      if (z <= A[0].z) return A[0];
+      if (z >= A[A.length - 1].z) return A[A.length - 1];
+      for (let i = 0; i < A.length - 1; i++) {
+        const a = A[i], b = A[i + 1];
+        if (z <= b.z) {
+          const t = (z - a.z) / (b.z - a.z);
+          return { hw: a.hw + (b.hw - a.hw) * t, top: a.top + (b.top - a.top) * t, bot: a.bot + (b.bot - a.bot) * t, n: a.n + (b.n - a.n) * t };
+        }
+      }
+      return A[A.length - 1];
+    }
+    const b17NoseSecs = [
+      { z: 0.262, hw: 0.0335, top: 0.031, bot: -0.0275, n: 2.1 },
+      { z: 0.28, hw: 0.0325, top: 0.0285, bot: -0.029, n: 2 },
+      { z: 0.298, hw: 0.0295, top: 0.022, bot: -0.029, n: 2 },
+      { z: 0.316, hw: 0.0245, top: 0.014, bot: -0.026, n: 2 },
+      { z: 0.331, hw: 0.0175, top: 7e-3, bot: -0.0205, n: 2 },
+      { z: 0.342, hw: 95e-4, top: 1e-3, bot: -0.014, n: 2 },
+      { z: 0.348, hw: 2e-3, top: -3e-3, bot: -9e-3, n: 2 }
+    ];
+    function b17Loft(secs, N, i0, i1, capEnds) {
+      const S = B17_VIS, pos = [], uv = [], idx = [], rows = i1 - i0 + 1;
+      for (let r = 0; r < rows; r++) {
+        const q = secs[i0 + r], yM = (q.top + q.bot) * 0.5, hH = Math.max(1e-4, (q.top - q.bot) * 0.5);
+        for (let i = 0; i <= N; i++) {
+          const a = i / N * Math.PI * 2, c = Math.cos(a), sn = Math.sin(a), e = 2 / q.n;
+          pos.push(Math.sign(c) * Math.pow(Math.abs(c), e) * q.hw * S, (yM + Math.sign(sn) * Math.pow(Math.abs(sn), e) * hH) * S, q.z * S);
+          uv.push(i / N, (q.z + 0.42) / 0.78);
+        }
+      }
+      const W = N + 1;
+      for (let r = 0; r < rows - 1; r++) for (let i = 0; i < N; i++) {
+        const a = r * W + i, b = a + 1, c = a + W, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+      const geo = new BufferGeometry();
+      geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      if (capEnds) {
+        const base = pos.length / 3, q = secs[i0], yM = (q.top + q.bot) * 0.5;
+        pos.push(0, yM * S, q.z * S);
+        uv.push(0.5, 0);
+        geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
+        geo.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+        for (let i = 0; i < N; i++) idx.push(base, i + 1, i);
+        geo.setIndex(idx);
+      }
+      geo.computeVertexNormals();
+      return geo;
+    }
+    let _b17NoseMat = null;
+    function b17NoseGlass() {
+      if (_b17NoseMat) return _b17NoseMat;
+      const c = document.createElement("canvas");
+      c.width = 128;
+      c.height = 64;
+      const x = c.getContext("2d");
+      const gr = x.createLinearGradient(0, 0, 0, 64);
+      gr.addColorStop(0, "#9eb3bd");
+      gr.addColorStop(0.5, "#6f8793");
+      gr.addColorStop(1, "#4e626c");
+      x.fillStyle = gr;
+      x.fillRect(0, 0, 128, 64);
+      x.fillStyle = "#1f2418";
+      for (let i = 0; i < 8; i++) x.fillRect(i * 16 - 1, 0, 3, 64);
+      for (const yy of [14, 30, 46]) x.fillRect(0, yy - 1, 128, 3);
+      x.fillStyle = "rgba(255,255,255,0.25)";
+      for (let i = 0; i < 8; i++) x.fillRect(i * 16 + 3, 3, 5, 9);
+      const tex = new CanvasTexture(c);
+      tex.wrapS = RepeatWrapping;
+      if (SRGBColorSpace) tex.colorSpace = SRGBColorSpace;
+      _b17NoseMat = new MeshStandardMaterial({ map: tex, roughness: 0.2, metalness: 0.35, envMapIntensity: 0.8 });
+      return _b17NoseMat;
+    }
     function buildB17() {
       const S = B17_VIS;
       const g = new Group();
@@ -33771,48 +33864,51 @@
       const mats = [skin, dark, glassM];
       if (patchKind) mats.push(skinPatch);
       g.userData.hazeMats = mats.map((m) => ({ m, col: m.color.clone() }));
-      const prof = [[-0.405, 4e-3], [-0.39, 0.011], [-0.35, 0.016], [-0.28, 0.024], [-0.18, 0.034], [-0.06, 0.043], [0.06, 0.048], [0.18, 0.05], [0.26, 0.048], [0.3, 0.044]];
-      const lp = prof.map(([z, r]) => new Vector2(r * S, z * S));
-      const lg = new LatheGeometry(lp, 14);
-      lg.rotateX(Math.PI / 2);
-      lg.scale(0.94, 1.02, 1);
+      const hull = b17HullSecs, hullAt = b17HullAt;
+      const lg = b17Loft(hull, 16, 0, hull.length - 1, true);
       tintGeo(lg, cTop, cBot);
       const fus = new Mesh(lg, skin);
       g.add(fus);
-      const nose = new Mesh(new SphereGeometry(0.044 * S, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), glassM);
-      nose.rotation.x = Math.PI / 2;
-      nose.scale.set(0.94, 1, 1.1);
-      nose.position.z = 0.298 * S;
+      const sideX = (z, y, k2) => {
+        const q = hullAt(z), yM = (q.top + q.bot) * 0.5, hH = (q.top - q.bot) * 0.5;
+        const r = Math.min(0.999, Math.abs(y - yM) / hH);
+        return Math.sign(k2 || 1) * q.hw * Math.pow(1 - Math.pow(r, q.n), 1 / q.n);
+      };
+      const noseM = b17NoseGlass().clone();
+      mats.push(noseM);
+      g.userData.hazeMats.push({ m: noseM, col: noseM.color.clone() });
+      const nose = new Mesh(b17Loft(b17NoseSecs, 16, 0, b17NoseSecs.length - 1, false), noseM);
       g.add(nose);
-      const chin = new Mesh(new SphereGeometry(0.016 * S, 8, 6), dark);
-      chin.position.set(0, -0.04 * S, 0.3 * S);
+      const chin = new Mesh(new SphereGeometry(0.0165 * S, 10, 7), dark);
+      chin.scale.set(0.95, 1, 1.15);
+      chin.position.set(0, -0.037 * S, 0.292 * S);
       g.add(chin);
-      const cock = new Mesh(new BoxGeometry(0.06 * S, 0.022 * S, 0.07 * S), glassM);
-      cock.position.set(0, 0.046 * S, 0.215 * S);
-      cock.rotation.x = -0.12;
+      const cock = new Mesh(new BoxGeometry(0.056 * S, 0.02 * S, 0.075 * S), glassM);
+      cock.position.set(0, 0.0505 * S, 0.222 * S);
+      cock.rotation.x = -0.14;
       g.add(cock);
-      const cockF = new Mesh(new BoxGeometry(0.062 * S, 4e-3 * S, 4e-3 * S), dark);
-      cockF.position.set(0, 0.058 * S, 0.215 * S);
+      const cockF = new Mesh(new BoxGeometry(0.058 * S, 3e-3 * S, 4e-3 * S), dark);
+      cockF.position.set(0, 0.0605 * S, 0.222 * S);
       g.add(cockF);
       if (metal) {
         const ag = new Mesh(new BoxGeometry(0.05 * S, 4e-3 * S, 0.1 * S), new MeshStandardMaterial({ color: 4146992, roughness: 0.7, metalness: 0.1 }));
-        ag.position.set(0, 0.047 * S, 0.29 * S);
+        ag.position.set(0, 0.034 * S, 0.285 * S);
         ag.rotation.x = 0.28;
         g.add(ag);
       }
       const top = new Mesh(new SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM);
-      top.position.set(0, 0.049 * S, 0.165 * S);
+      top.position.set(0, hullAt(0.15).top * S - 2e-3 * S, 0.15 * S);
       g.add(top);
-      const ball = new Mesh(new SphereGeometry(0.022 * S, 8, 6), dark);
-      ball.position.set(0, -0.05 * S, -0.02 * S);
+      const ball = new Mesh(new SphereGeometry(0.019 * S, 10, 7), dark);
+      ball.position.set(0, -0.047 * S, -0.02 * S);
       g.add(ball);
-      const tailG = new Mesh(new BoxGeometry(0.018 * S, 0.02 * S, 0.035 * S), glassM);
-      tailG.position.set(0, 4e-3 * S, -0.405 * S);
+      const tailG = new Mesh(new BoxGeometry(0.014 * S, 0.016 * S, 0.034 * S), glassM);
+      tailG.position.set(0, 7e-3 * S, -0.402 * S);
       tailG.userData.tailPart = true;
       g.add(tailG);
-      for (const sd of [-1, 1]) {
-        const w = new Mesh(new PlaneGeometry(0.05 * S, 0.018 * S), dark);
-        w.position.set(sd * 0.0405 * S, 0.012 * S, -0.1 * S);
+      for (const sd of [-1, 1]) for (const wz of [-0.075, -0.13]) {
+        const w = new Mesh(new PlaneGeometry(0.04 * S, 0.02 * S), dark);
+        w.position.set(sideX(wz, 0.014 * S / S, sd) * S + sd * 6e-4 * S, 0.014 * S, wz * S);
         w.rotation.y = sd * Math.PI / 2;
         g.add(w);
       }
@@ -33822,7 +33918,7 @@
         g.userData.hazeMats.push({ m: cm, col: cm.color.clone() });
         for (const sd of [-1, 1]) {
           const d = new Mesh(new PlaneGeometry(0.2 * S, 0.05 * S), cm);
-          d.position.set(sd * 0.0435 * S, 4e-3 * S, -0.02 * S);
+          d.position.set(sideX(-0.02, 4e-3, sd) * S + sd * 7e-4 * S, 4e-3 * S, -0.02 * S);
           d.rotation.y = sd * Math.PI / 2;
           g.add(d);
         }
@@ -33888,26 +33984,28 @@
       }
       {
         const sh = new Shape();
-        sh.moveTo(-0.415 * S, 0);
-        sh.lineTo(-0.15 * S, 0);
-        sh.quadraticCurveTo(-0.26 * S, 0.03 * S, -0.3 * S, 0.075 * S);
-        sh.lineTo(-0.35 * S, 0.19 * S);
-        sh.quadraticCurveTo(-0.38 * S, 0.205 * S, -0.41 * S, 0.195 * S);
-        sh.lineTo(-0.425 * S, 0.1 * S);
+        sh.moveTo(-0.38 * S, 0.012 * S);
+        sh.lineTo(-0.1 * S, 0.042 * S);
+        sh.quadraticCurveTo(-0.2 * S, 0.05 * S, -0.245 * S, 0.082 * S);
+        sh.quadraticCurveTo(-0.268 * S, 0.1 * S, -0.283 * S, 0.142 * S);
+        sh.quadraticCurveTo(-0.292 * S, 0.164 * S, -0.318 * S, 0.1645 * S);
+        sh.quadraticCurveTo(-0.344 * S, 0.165 * S, -0.352 * S, 0.145 * S);
+        sh.lineTo(-0.372 * S, 0.05 * S);
+        sh.lineTo(-0.376 * S, 0.012 * S);
         sh.closePath();
         const fg = new ExtrudeGeometry(sh, { depth: 0.01 * S, bevelEnabled: false });
         fg.translate(0, 0, -5e-3 * S);
         tintGeo(fg, cTop, cBot);
         const fin = new Mesh(fg, patchKind === "tail" ? skinPatch : skin);
         fin.rotation.y = -Math.PI / 2;
-        fin.position.set(0, 0.03 * S, 0);
+        fin.position.set(0, 0, 0);
         fin.userData.tailPart = true;
         g.add(fin);
         const tt = b17TailTex(k, metal), tm = new MeshStandardMaterial({ map: tt, transparent: true, alphaTest: 0.08, roughness: 0.6, metalness: metal ? 0.5 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
         g.userData.hazeMats.push({ m: tm, col: tm.color.clone() });
         for (const sd of [-1, 1]) {
           const d = new Mesh(new PlaneGeometry(0.06 * S, 0.075 * S), tm);
-          d.position.set(sd * 56e-4 * S, 0.03 * S + 0.13 * S, -0.383 * S);
+          d.position.set(sd * 56e-4 * S, 0.1 * S, -0.322 * S);
           d.rotation.y = sd * Math.PI / 2;
           d.userData.tailPart = true;
           g.add(d);
@@ -33916,34 +34014,27 @@
       const MB = { skin: [], dark: [], glass: [] }, MT = { dark: [] }, MW = { "-1": { skin: [], dark: [], seam: [], stain: [] }, "1": { skin: [], dark: [], seam: [], stain: [] } };
       const Z90 = Math.PI / 2;
       {
-        for (const z of [0.32, 0.335]) {
-          const rr = z < 0.33 ? 0.0385 : 0.0285;
-          const tg = new TorusGeometry(rr * S, 11e-4 * S, 4, 14);
-          MB.dark.push([tg, 0, 0, (z + 0) * S, 0, 0, 0, 0.94, 1, 1]);
-        }
-        MB.dark.push([_bgBox(14e-4 * S, 0.07 * S, 14e-4 * S), 0, 0, 0.332 * S, -0, 0, 0]);
-        MB.dark.push([_bgBox(0.066 * S, 14e-4 * S, 14e-4 * S), 0, 0, 0.332 * S, 0, 0, 0]);
         for (const sd of [-1, 1]) {
-          MB.glass.push([_bgBox(5e-3 * S, 0.014 * S, 0.026 * S), sd * 0.0432 * S, -2e-3 * S, 0.262 * S, 0, 0, 0]);
-          MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sd * 0.0436 * S, -2e-3 * S, 0.249 * S, 0, 0, 0]);
-          MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sd * 0.0436 * S, -2e-3 * S, 0.275 * S, 0, 0, 0]);
-          for (const z of [0.19, 0.2, 0.226, 0.246]) MB.dark.push([_bgBox(18e-4 * S, 0.02 * S, 16e-4 * S), sd * 0.0305 * S, 0.044 * S, z * S, 0, 0, 0]);
-          MB.glass.push([_bgBox(18e-4 * S, 0.015 * S, 0.05 * S), sd * 0.0302 * S, 0.044 * S, 0.218 * S, 0, 0, 0]);
-          MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.034 * S, 5), sd * 55e-4 * S, 0.0585 * S, 0.19 * S, Z90, 0, 0]);
-          MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), sd * 35e-4 * S, -0.045 * S, 0.322 * S, Z90, 0, 0]);
+          MB.glass.push([_bgBox(4e-3 * S, 0.014 * S, 0.026 * S), sideX(0.285, -4e-3, sd) * S, -4e-3 * S, 0.285 * S, 0, 0, 0]);
+          MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sideX(0.271, -4e-3, sd) * S, -4e-3 * S, 0.271 * S, 0, 0, 0]);
+          MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sideX(0.299, -4e-3, sd) * S, -4e-3 * S, 0.299 * S, 0, 0, 0]);
+          for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(18e-4 * S, 0.02 * S, 16e-4 * S), sideX(z, 0.048, sd) * S, 0.048 * S, z * S, 0, 0, 0]);
+          MB.glass.push([_bgBox(18e-4 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.048, sd) * S - sd * 4e-4 * S, 0.048 * S, 0.218 * S, 0, 0, 0]);
+          MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.034 * S, 5), sd * 55e-4 * S, hullAt(0.15).top * S + 3e-3 * S, 0.172 * S, Z90, 0, 0]);
+          MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), sd * 35e-4 * S, -0.038 * S, 0.305 * S, Z90, 0, 0]);
           MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.028 * S, 5), sd * 4e-3 * S, -0.072 * S, -0.046 * S, 0.5, 0, 0]);
-          MB.dark.push([_bgCyl(16e-4 * S, 16e-4 * S, 0.04 * S, 5), sd * 0.0575 * S, 0.014 * S, -0.103 * S, 0, 0, Z90]);
-          MB.dark.push([_bgBox(45e-4 * S, 12e-4 * S, 0.056 * S), sd * 0.0412 * S, 0.0235 * S, -0.1 * S, 0, 0, 0]);
+          MB.dark.push([_bgCyl(16e-4 * S, 16e-4 * S, 0.04 * S, 5), sd * 0.058 * S, 0.014 * S, -0.075 * S, 0, 0, Z90]);
+          MB.dark.push([_bgBox(35e-4 * S, 12e-4 * S, 0.1 * S), sideX(-0.1, 0.0245, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]);
         }
-        MB.dark.push([_bgBox(0.062 * S, 16e-4 * S, 2e-3 * S), 0, 0.047 * S, 0.2508 * S, -0.12, 0, 0]);
-        for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(16e-4 * S, 0.022 * S, 18e-4 * S), x * S, 0.047 * S, 0.2508 * S, -0.12, 0, 0]);
-        MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 4e-3 * S, 12), 0, 0.0485 * S, 0.165 * S, 0, 0, 0]);
+        MB.dark.push([_bgBox(0.058 * S, 16e-4 * S, 2e-3 * S), 0, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]);
+        for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(16e-4 * S, 0.02 * S, 18e-4 * S), x * S, 0.0525 * S, 0.2585 * S, -0.14, 0, 0]);
+        MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 4e-3 * S, 12), 0, hullAt(0.15).top * S - 1e-3 * S, 0.15 * S, 0, 0, 0]);
         MB.glass.push([_bgBox(0.014 * S, 3e-3 * S, 0.03 * S), 0, 0.0505 * S, -0.03 * S, 0, 0, 0]);
       }
       MT.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), 35e-4 * S, 45e-4 * S, -0.43 * S, Z90, 0, 0]);
       MT.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), -35e-4 * S, 45e-4 * S, -0.43 * S, Z90, 0, 0]);
       for (const sd of [-1, 1]) {
-        MT.dark.push([_bgBox(14e-4 * S, 0.115 * S, 26e-4 * S), sd * 62e-4 * S, 0.15 * S, -0.376 * S, 0, 0, 0]);
+        MT.dark.push([_bgBox(14e-4 * S, 0.1 * S, 26e-4 * S), sd * 62e-4 * S, 0.095 * S, -0.34 * S, 0, 0, 0]);
         MT.dark.push([_bgBox(0.2 * S, 12e-4 * S, 22e-4 * S), sd * 0.11 * S, 0.0135 * S, -0.388 * S, 0, 0, 0]);
       }
       {
@@ -34041,7 +34132,7 @@
           mats.push(am);
           g.userData.hazeMats.push({ m: am, col: am.color.clone() });
           const art = new Mesh(new PlaneGeometry(0.1 * S, 0.05 * S), am);
-          art.position.set(-0.0455 * S, 0 * S, 0.222 * S);
+          art.position.set(sideX(0.222, 0, -1) * S - 6e-4 * S, 0 * S, 0.222 * S);
           art.rotation.y = -Z90;
           g.add(art);
         }
@@ -34064,6 +34155,56 @@
         if (q.m.envMapIntensity != null && q.env == null) q.env = q.m.envMapIntensity;
         if (q.env != null) q.m.envMapIntensity = q.env * (1 - h);
       }
+    }
+    function b17Ortho(idx, view, W, H, span, silhouette) {
+      const g = friendlyPool[idx];
+      if (!g) return null;
+      const ts = new Scene();
+      ts.background = new Color(16777215);
+      ts.add(new AmbientLight(16777215, 1.1));
+      const dl = new DirectionalLight(16777215, 1.6);
+      dl.position.set(40, 80, 60);
+      ts.add(dl);
+      const oldParent = g.parent, oldVis = g.visible, oldPos = g.position.clone(), oldQ = g.quaternion.clone(), oldS = g.scale.clone();
+      ts.add(g);
+      g.visible = true;
+      g.position.set(0, 0, 0);
+      g.quaternion.identity();
+      g.scale.set(1, 1, 1);
+      g.updateMatrixWorld(true);
+      const hh = span * 0.5, aspect2 = W / H, cam = new OrthographicCamera(-hh * aspect2 * 0, hh, hh / aspect2 * 0.5, -hh / aspect2 * 0.5, 0.1, 400);
+      const cx = view === "side" ? [60, 0, 0] : view === "top" ? [0, 60, 0] : [0, 0, 60];
+      cam.left = -hh;
+      cam.right = hh;
+      cam.top = hh / aspect2;
+      cam.bottom = -hh / aspect2;
+      cam.position.set(cx[0], cx[1], cx[2]);
+      cam.up.set(0, view === "top" ? 0 : 1, view === "top" ? -1 : 0);
+      cam.lookAt(0, 0, 0);
+      cam.updateProjectionMatrix();
+      if (silhouette) ts.overrideMaterial = new MeshBasicMaterial({ color: 0 });
+      const rt = new WebGLRenderTarget(W, H);
+      renderer.setRenderTarget(rt);
+      renderer.render(ts, cam);
+      renderer.setRenderTarget(null);
+      const px2 = new Uint8Array(W * H * 4);
+      renderer.readRenderTargetPixels(rt, 0, 0, W, H, px2);
+      rt.dispose();
+      if (oldParent) oldParent.add(g);
+      else scene.add(g);
+      g.visible = oldVis;
+      g.position.copy(oldPos);
+      g.quaternion.copy(oldQ);
+      g.scale.copy(oldS);
+      g.updateMatrixWorld(true);
+      const c = document.createElement("canvas");
+      c.width = W;
+      c.height = H;
+      const x = c.getContext("2d"), id = x.createImageData(W, H);
+      for (let y = 0; y < H; y++) id.data.set(px2.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+      if (!silhouette) for (let i = 0; i < id.data.length; i += 4) for (let c3 = 0; c3 < 3; c3++) id.data[i + c3] = Math.round(255 * Math.pow(id.data[i + c3] / 255, 1 / 2.2));
+      x.putImageData(id, 0, 0);
+      return c.toDataURL("image/png");
     }
     function detachB17(g, f) {
       const S = B17_VIS, isWing = f.deathKind === "wing", side = f.deathSide > 0 ? 1 : -1;
@@ -34214,6 +34355,82 @@
         polygonOffsetUnits: -4,
         side: DoubleSide
       }));
+    }
+    const tearTexs = [];
+    for (let v = 0; v < 3; v++) {
+      const c = document.createElement("canvas");
+      c.width = c.height = 128;
+      const x = c.getContext("2d");
+      x.translate(64, 64);
+      const g = x.createRadialGradient(0, 0, 10, 0, 0, 62);
+      g.addColorStop(0, "rgba(18,14,10,0.62)");
+      g.addColorStop(0.6, "rgba(26,22,16,0.26)");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      x.fillStyle = g;
+      x.beginPath();
+      x.arc(0, 0, 62, 0, Math.PI * 2);
+      x.fill();
+      const n = 11 + v * 2, rx = 30 + v * 3, ry = 18 + v * 5, pts = [];
+      for (let k = 0; k < n * 2; k++) {
+        const a = k / (n * 2) * Math.PI * 2 + (Math.random() - 0.5) * 0.18, r = k % 2 ? 0.62 + Math.random() * 0.18 : 0.9 + Math.random() * 0.35;
+        pts.push([Math.cos(a) * rx * r, Math.sin(a) * ry * r]);
+      }
+      x.beginPath();
+      pts.forEach((p, i) => {
+        const q = [p[0] * 1.28, p[1] * 1.28];
+        i ? x.lineTo(q[0], q[1]) : x.moveTo(q[0], q[1]);
+      });
+      x.closePath();
+      const mg = x.createLinearGradient(-30, -20, 30, 20);
+      mg.addColorStop(0, "rgb(190,188,178)");
+      mg.addColorStop(0.5, "rgb(128,126,116)");
+      mg.addColorStop(1, "rgb(70,68,60)");
+      x.fillStyle = mg;
+      x.fill();
+      x.strokeStyle = "rgba(34,32,28,0.9)";
+      x.lineWidth = 1.2;
+      x.stroke();
+      x.beginPath();
+      pts.forEach((p, i) => {
+        i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1]);
+      });
+      x.closePath();
+      x.fillStyle = "rgb(5,4,3)";
+      x.fill();
+      x.save();
+      x.clip();
+      x.strokeStyle = "rgba(168,166,150,0.95)";
+      x.lineWidth = 3;
+      for (let k = 0; k < 2 + (v > 0 ? 1 : 0); k++) {
+        const ox = -rx * 0.55 + k * rx * 0.55 + (Math.random() - 0.5) * 5;
+        x.beginPath();
+        x.moveTo(ox, -ry * 1.4);
+        x.quadraticCurveTo(ox + (Math.random() - 0.5) * 10, 0, ox + (Math.random() - 0.5) * 6, ry * 1.4);
+        x.stroke();
+      }
+      x.lineWidth = 1.6;
+      x.strokeStyle = "rgba(120,118,104,0.9)";
+      for (let k = 0; k < 2; k++) {
+        const oy = -ry * 0.35 + k * ry * 0.7;
+        x.beginPath();
+        x.moveTo(-rx * 1.3, oy);
+        x.lineTo(rx * 1.3, oy + (Math.random() - 0.5) * 4);
+        x.stroke();
+      }
+      x.restore();
+      x.strokeStyle = "rgba(150,148,138,0.7)";
+      x.lineWidth = 1;
+      for (let k = 0; k < 4; k++) {
+        const a = Math.random() * Math.PI * 2;
+        x.beginPath();
+        x.moveTo(Math.cos(a) * rx * 1.25, Math.sin(a) * ry * 1.25);
+        x.lineTo(Math.cos(a) * (rx + 18), Math.sin(a) * (ry + 14));
+        x.stroke();
+      }
+      const t = new CanvasTexture(c);
+      t.colorSpace = SRGBColorSpace;
+      t.anisotropy = 4;
+      tearTexs.push(new MeshStandardMaterial({ map: t, transparent: true, alphaTest: 0.04, depthWrite: false, depthTest: true, roughness: 0.6, metalness: 0.3, polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5, side: DoubleSide }));
     }
     const holeGeo = new PlaneGeometry(1, 1);
     const ownHoles = [];
@@ -35618,13 +35835,17 @@
           E.fire.scale.set(s * 0.7, s * (1.2 + Math.random() * 0.5), 1);
           E.fire.material.opacity = 0.7 + Math.random() * 0.3;
         }
+        if (burning) {
+          E.smokeAt.getWorldPosition(_ov);
+          engineFireFx(_ov, Math.min(1, st.fire), rdt, E.fx || (E.fx = { t: 0 }));
+        }
         const smoking = st.fire > 0.1 || out;
         if (smoking) {
           E.emit -= rdt;
           for (let n = 0; n < 5 && E.emit <= 0; n++) {
             E.smokeAt.getWorldPosition(_ov);
             const dk = burning || out;
-            ribbonEmit("own" + i, _ov, { w0: 0.45, w1: dk ? 4.2 : 3, life: 2.4, a: dk ? 0.58 : 0.42, col: dk ? [0.2, 0.195, 0.19] : [0.6, 0.6, 0.58], drift: 45 });
+            ribbonEmit("own" + i, _ov, { w0: 0.45, w1: dk ? 5.4 : 3, life: dk ? 3.6 : 2.4, a: dk ? 0.58 : 0.42, col: dk ? [0.2, 0.195, 0.19] : [0.6, 0.6, 0.58], drift: 45 });
             E.emit += 0.04;
           }
           if (E.emit < 0) E.emit = 0;
@@ -35769,10 +35990,43 @@
       list.push(m);
       return true;
     }
+    function addTear(which, h, size) {
+      const g = shipGroup(which);
+      if (!g || !h || h.prop) return false;
+      g.updateMatrixWorld(true);
+      const list = g.userData.tears || (g.userData.tears = []);
+      const cap = which === "own" ? 14 : 5;
+      let m;
+      if (list.length >= cap) {
+        m = list.shift();
+      } else {
+        m = new Mesh(holeGeo, tearTexs[0]);
+        m.userData.decal = true;
+        m.userData.noHit = true;
+        m.renderOrder = 3;
+        g.add(m);
+      }
+      m.material = tearTexs[Math.random() * 3 | 0];
+      _hl.set(h.x, h.y, h.z);
+      g.worldToLocal(_hl);
+      g.getWorldQuaternion(_gq).invert();
+      _hn.set(h.nx, h.ny, h.nz).applyQuaternion(_gq).normalize();
+      m.position.copy(_hl).addScaledVector(_hn, 0.012);
+      _rq.setFromUnitVectors(_rz, _hn);
+      m.quaternion.copy(_rq);
+      m.rotateZ(Math.random() * Math.PI * 2);
+      const sc = (size || 0.5) * (0.8 + Math.random() * 0.4);
+      m.scale.set(sc, sc * (0.65 + Math.random() * 0.3), 1);
+      m.visible = true;
+      list.push(m);
+      return true;
+    }
     function clearDamage() {
       for (const g of [ownShip, ...friendlyPool]) {
         const list = g.userData.decals || [];
         for (const m of list) g.remove(m);
+        for (const m of g.userData.tears || []) g.remove(m);
+        g.userData.tears = [];
         g.userData.decals = [];
         g.userData.fxDone = false;
       }
@@ -36101,31 +36355,7 @@
       }
       ownChute.add(new LineSegments(new BufferGeometry().setAttribute("position", new Float32BufferAttribute(p, 3)), new LineBasicMaterial({ color: 9078136 })));
       const legs = new Group();
-      ownChute.add(legs);
-      const suitM = new MeshLambertMaterial({ color: 4867377 }), bootM = new MeshLambertMaterial({ color: 2760470 }), soleM = new MeshLambertMaterial({ color: 1183242 });
-      const limb = (a, b, r, m) => {
-        const d = new Vector3().subVectors(b, a), L = d.length();
-        const g = new CapsuleGeometry(r, L, 4, 12);
-        const me = new Mesh(g, m);
-        me.position.copy(a).addScaledVector(d, 0.5);
-        me.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), d.normalize());
-        legs.add(me);
-        return me;
-      };
-      for (const sx of [-0.13, 0.13]) {
-        const hip = new Vector3(sx, -0.62, -0.1), knee = new Vector3(sx * 1.2, -0.78, 0.2), ank = new Vector3(sx * 1.15, -1.22, 0.24);
-        limb(hip, knee, 0.068, suitM);
-        limb(knee, ank, 0.052, suitM);
-        const boot = new Mesh(new CapsuleGeometry(0.058, 0.14, 4, 10), bootM);
-        boot.rotation.x = Math.PI / 2 - 0.25;
-        boot.position.set(ank.x, ank.y - 0.06, ank.z + 0.08);
-        boot.scale.set(1, 1, 0.8);
-        legs.add(boot);
-        const sole = new Mesh(new BoxGeometry(0.1, 0.025, 0.24), soleM);
-        sole.rotation.x = -0.25;
-        sole.position.set(ank.x, ank.y - 0.13, ank.z + 0.09);
-        legs.add(sole);
-      }
+      legs.visible = false;
       const streamer = new Mesh(canopyGeo, chuteMatUS);
       streamer.scale.set(0.35, 3.2, 0.35);
       streamer.position.y = 3;
@@ -36320,6 +36550,70 @@
         p.sp.scale.set(s, s, 1);
         p.sp.material.opacity = p.a * (1 - k) * Math.min(1, k * 6 + 0.2);
       }
+    }
+    const flamePool = [];
+    for (let i = 0; i < 150; i++) {
+      const sp = new Sprite(new SpriteMaterial({ map: flameTex, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0, fog: false }));
+      sp.visible = false;
+      sp.center.set(0.5, 0.5);
+      scene.add(sp);
+      flamePool.push({ sp, life: 0, max: 1, vx: 0, vy: 0, vz: 0, s0: 1, s1: 0.5 });
+    }
+    let flameIdx = 0;
+    const flameStats = { emitted: 0, frags: 0 };
+    function emitFlame(pos, fire) {
+      const p = flamePool[flameIdx];
+      flameIdx = (flameIdx + 1) % flamePool.length;
+      p.sp.position.copy(pos);
+      p.life = p.max = 0.32 + Math.random() * 0.22 + 0.2 * fire;
+      p.vx = (Math.random() - 0.5) * 2.4;
+      p.vy = 0.8 + Math.random() * 1.6;
+      p.vz = -(20 + Math.random() * 12 + 14 * fire);
+      p.s0 = (0.9 + 1.1 * fire) * (0.8 + Math.random() * 0.4);
+      p.s1 = p.s0 * 0.35;
+      p.sp.visible = true;
+      flameStats.emitted++;
+    }
+    function updateFlames(dt) {
+      for (const p of flamePool) {
+        if (p.life <= 0) continue;
+        p.life -= dt;
+        if (p.life <= 0) {
+          p.sp.visible = false;
+          continue;
+        }
+        const k = 1 - p.life / p.max;
+        p.sp.position.x += p.vx * dt;
+        p.sp.position.y += p.vy * dt;
+        p.sp.position.z += p.vz * dt;
+        const s = p.s0 + (p.s1 - p.s0) * k;
+        p.sp.scale.set(s * 0.8, s * 1.6, 1);
+        p.sp.material.color.setRGB(1, 1 - 0.62 * k, 0.55 - 0.5 * k);
+        p.sp.material.opacity = 0.95 * (1 - k * k);
+      }
+    }
+    function emitFragment(pos, hot) {
+      const d = deb[debNext];
+      debNext = (debNext + 1) % DEB_N;
+      d.x = pos.x;
+      d.y = pos.y;
+      d.z = pos.z;
+      d.vx = (Math.random() - 0.5) * 7;
+      d.vy = (Math.random() - 0.4) * 6;
+      d.vz = -(5 + Math.random() * 18);
+      d.hot = !!hot;
+      d.t = 0;
+      d.life = hot ? 0.5 + Math.random() * 0.5 : 1.8 + Math.random() * 1.6;
+      flameStats.frags++;
+    }
+    function engineFireFx(pos, fire, dt, acc) {
+      acc.t -= dt;
+      for (let n = 0; n < 3 && acc.t <= 0; n++) {
+        emitFlame(pos, fire);
+        acc.t += 0.028;
+      }
+      if (acc.t < 0) acc.t = 0;
+      if (Math.random() < 5.5 * dt) emitFragment(pos, Math.random() < 0.4);
     }
     const GROUND_Y = -192;
     const farmTex = (() => {
@@ -37275,12 +37569,29 @@
       c.width = c.height = 64;
       const x = c.getContext("2d");
       const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
-      g.addColorStop(0, "rgba(255,250,220,1)");
-      g.addColorStop(0.18, "rgba(255,190,90,1)");
-      g.addColorStop(0.45, "rgba(255,90,30,0.75)");
+      g.addColorStop(0, "rgba(255,255,255,1)");
+      g.addColorStop(0.2, "rgba(255,252,235,1)");
+      g.addColorStop(0.38, "rgba(255,205,110,0.95)");
+      g.addColorStop(0.62, "rgba(255,110,40,0.55)");
       g.addColorStop(1, "rgba(160,20,0,0)");
       x.fillStyle = g;
       x.fillRect(0, 0, 64, 64);
+      const t = new CanvasTexture(c);
+      t.colorSpace = SRGBColorSpace;
+      return t;
+    })();
+    const flakBloomTex = (() => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 128;
+      const x = c.getContext("2d");
+      const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+      g.addColorStop(0, "rgba(255,255,250,0.95)");
+      g.addColorStop(0.12, "rgba(255,248,225,0.6)");
+      g.addColorStop(0.35, "rgba(240,238,235,0.22)");
+      g.addColorStop(0.7, "rgba(200,215,240,0.07)");
+      g.addColorStop(1, "rgba(200,215,240,0)");
+      x.fillStyle = g;
+      x.fillRect(0, 0, 128, 128);
       const t = new CanvasTexture(c);
       t.colorSpace = SRGBColorSpace;
       return t;
@@ -37306,7 +37617,10 @@
       const fl = new Sprite(new SpriteMaterial({ map: flakFlashTex, transparent: true, depthWrite: false, blending: AdditiveBlending, fog: false }));
       fl.visible = false;
       scene.add(fl);
-      flakMeshes.push({ m, fl, id: -1, puffs: null });
+      const bl = new Sprite(new SpriteMaterial({ map: flakBloomTex, transparent: true, depthWrite: false, blending: AdditiveBlending, fog: false }));
+      bl.visible = false;
+      scene.add(bl);
+      flakMeshes.push({ m, fl, bl, id: -1, puffs: null });
     }
     const flakLight = new PointLight(16742960, 0, 140, 1.2);
     scene.add(flakLight);
@@ -37339,7 +37653,7 @@
       }
     }
     let debLast = pnow();
-    function updateDebris(dz) {
+    function updateFlakDebris(dz) {
       const now2 = pnow(), dt = Math.min(0.05, (now2 - debLast) / 1e3);
       debLast = now2;
       for (let i = 0; i < DEB_N; i++) {
@@ -37388,6 +37702,7 @@
         F.id = -1;
         F.m.visible = false;
         F.fl.visible = false;
+        F.bl.visible = false;
       }
       const used = new Set(flakMeshes.filter((F) => F.id >= 0).map((F) => F.id));
       for (const b of byId.values()) {
@@ -37444,7 +37759,7 @@
             dat[o * 4 + 1] = alpha;
             dat[o * 4 + 2] = P.rot + P.spin * t;
             dat[o * 4 + 3] = P.cell;
-            const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark);
+            const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark) * (p === 0 ? 0.55 : 1.12);
             tin[o * 3] = tr * kk * F.tint[0];
             tin[o * 3 + 1] = tg * kk * F.tint[1];
             tin[o * 3 + 2] = tb * kk * F.tint[2];
@@ -37461,6 +37776,13 @@
           F.fl.scale.set(s, s, 1);
           F.fl.material.opacity = Math.min(1, 1.25 * (1 - t / 0.16));
           flakStats.flashes++;
+        }
+        F.bl.visible = t < 0.34;
+        if (F.bl.visible) {
+          F.bl.position.set(b.x, b.y, b.z);
+          const bd = camera.position.distanceTo(F.m.position), bs = Math.min((34 + t * 160) * (b.size || 1), Math.max(6, bd * 0.8));
+          F.bl.scale.set(bs, bs, 1);
+          F.bl.material.opacity = 0.6 * Math.pow(1 - t / 0.34, 1.6);
         }
         if (t < 0.18) {
           const d = camera.position.distanceTo(F.m.position);
@@ -37582,83 +37904,79 @@
       R.g.index.needsUpdate = true;
     }
     const _ca = new Vector3(), _cp = new Vector3(), _cw = new Vector3();
-    const conStats = { bomberRibs: 0, ghostRibs: 0, fighterRibs: 0, verts: 0, cap: 0 };
-    const CB_S = [0, 22, 55, 110, 200, 340, 540, 820, 1200, 1700];
-    const CB_N = CB_S.length, CB_LEN = CB_S[CB_N - 1];
-    const bomberR = ribMesh(18 * 4, CB_N), conAnchors = [];
+    const conStats = { bomberRibs: 0, fighterRibs: 0, verts: 0, bomberVerts: 0, fighterVerts: 0, ms: 0, cap: 0 };
+    const CB_PTS = 72, CB_DT = 0.5, CB_LIFE = 35;
+    const bomberR = ribMesh(18 * 4, CB_PTS), conAnchors = [];
+    let _cDz = 0, _cDH = 0, _cReset = false;
     function addContrails(group, pts) {
       const arr = [];
       for (const q of pts) {
         const anchor = new Object3D();
         anchor.position.set(q[0], q[1], q[2]);
         group.add(anchor);
-        const c = { anchor, group, on: true, sx: 0, sy: 0, sz: 0, init: false };
+        const c = { anchor, group, on: true, pts: [], acc: 0, seeded: false };
         conAnchors.push(c);
         arr.push(c);
       }
       group.userData.contrails = arr;
     }
-    function bomberSections(R, r, px2, py2, pz2, sx, sy, sz, len, wEnd, aMax, wMin, colv) {
-      for (let k = 0; k < CB_N; k++) {
-        const t = CB_S[k] / CB_LEN, s = t * len;
-        const sm = Math.min(1, s / 90), sm2 = sm * sm * (3 - 2 * sm);
-        const x = px2 + (sx - px2) * sm2, y = py2 + (sy - py2) * sm2 - 7 * t * t, z = pz2 - s;
-        const fadeIn = Math.min(1, Math.max(0, (s - 16) / 60));
-        const a = aMax * fadeIn * Math.pow(1 - t, 1.5);
-        const w = 0.3 + wEnd * Math.pow(t, 0.72);
-        rmSec(R, r, k, x, y, z, 0, 0, -1, w, wMin, colv, colv, colv, a, s / 36);
-      }
-      rmLink(R, r, CB_N);
-    }
-    const ghostN = 14 * 5 * 2, ghostR = ribMesh(ghostN, CB_N), ghostPts = [];
-    const ghostShips = [];
-    {
-      let sd = 77;
-      const R = () => {
-        sd = sd * 16807 % 2147483647;
-        return sd / 2147483647;
-      };
-      let r = 0;
-      for (let gI = 0; gI < 14; gI++) {
-        const side = gI % 2 ? 1 : -1, cx = side * (320 + R() * 1900), cy = -220 + R() * 640, cz = 150 + R() * 3e3;
-        for (let sI = 0; sI < 5; sI++) {
-          const ox = (sI % 2 ? 1 : -1) * (24 + sI * 12) + (R() - 0.5) * 8, oy = -sI * 3 + (R() - 0.5) * 5, oz = -sI * 22 + (R() - 0.5) * 10;
-          const sx = cx + ox, sy = cy + oy, sz = cz + oz;
-          ghostShips.push(sx, sy, sz);
-          for (const ex of [-7, 7]) {
-            ghostPts.push([sx + ex, sy, sz, 0.7 + R() * 0.3]);
-            r++;
+    function stepBomberTrails(dt0) {
+      const dt = _cDz / AIR_DRIFT;
+      const R = bomberR;
+      rmBegin(R);
+      let r = 0, nv = 0;
+      const cs = Math.cos(-_cDH), sn = Math.sin(-_cDH);
+      for (const c of conAnchors) {
+        const vis = c.on && c.group.visible, P = c.pts;
+        if (_cReset) {
+          P.length = 0;
+          c.seeded = false;
+        }
+        if (vis) {
+          c.anchor.getWorldPosition(_cp);
+          if (!c.seeded) {
+            c.seeded = true;
+            P.length = 0;
+            for (let a = CB_LIFE - 0.3; a > 0; a -= CB_DT) P.push({ x: _cp.x + (Math.random() - 0.5) * 0.6, y: _cp.y + (Math.random() - 0.5) * 0.5, z: _cp.z - AIR_DRIFT * a, age: a });
           }
         }
+        for (const p of P) {
+          p.age += dt;
+          if (_cDH) {
+            const x = p.x, z = p.z;
+            p.x = x * cs + z * sn;
+            p.z = -x * sn + z * cs;
+          }
+          p.z -= _cDz;
+        }
+        while (P.length && P[0].age >= CB_LIFE) P.shift();
+        if (vis) {
+          c.acc -= dt;
+          if (c.acc <= 0) {
+            c.acc = CB_DT;
+            P.push({ x: _cp.x, y: _cp.y, z: _cp.z, age: 0 });
+            if (P.length > CB_PTS) P.shift();
+          }
+        }
+        const n = P.length;
+        if (n < 2 || r >= R.nRib) continue;
+        let vco = 0;
+        for (let i = 0; i < n; i++) {
+          const p = P[i], pa = P[Math.max(0, i - 1)], pb = P[Math.min(n - 1, i + 1)];
+          if (i) vco += Math.hypot(p.x - pa.x, p.y - pa.y, p.z - pa.z) / 36;
+          const k = Math.min(1, p.age / CB_LIFE), fadeIn = Math.min(1, Math.max(0, (p.age - 0.2) / 0.7));
+          const al = 0.55 * fadeIn * Math.pow(1 - k, 1.5), w = 0.3 + 14 * Math.pow(k, 0.72);
+          rmSec(R, r, i, p.x, p.y, p.z, pb.x - pa.x, pb.y - pa.y, pb.z - pa.z, w, 18e-4, 1, 1, 1, al, vco);
+        }
+        rmLink(R, r, n);
+        r++;
+        nv += n * 2;
       }
-    }
-    const ghostDots = (() => {
-      const c = document.createElement("canvas");
-      c.width = c.height = 32;
-      const x = c.getContext("2d");
-      x.fillStyle = "#1c2430";
-      x.fillRect(14, 4, 4, 24);
-      x.fillRect(3, 12, 26, 5);
-      x.fillRect(10, 25, 12, 3);
-      const t = new CanvasTexture(c);
-      t.colorSpace = SRGBColorSpace;
-      const g = new BufferGeometry();
-      g.setAttribute("position", new Float32BufferAttribute(ghostShips, 3));
-      const pt = new Points(g, new PointsMaterial({ size: 17, map: t, transparent: true, alphaTest: 0.2, sizeAttenuation: true, depthWrite: false, fog: false, opacity: 0.85 }));
-      pt.frustumCulled = false;
-      scene.add(pt);
-      return pt;
-    })();
-    let _ghostCx = 1e9, _ghostCy = 0, _ghostCz = 0;
-    function buildGhosts() {
-      rmBegin(ghostR);
-      for (let r = 0; r < ghostPts.length; r++) {
-        const q = ghostPts[r];
-        bomberSections(ghostR, r, q[0], q[1], q[2], q[0], q[1], q[2], 2300 * q[3], 5.5, 0.5, 16e-4, 1);
-        ghostR.used++;
-      }
-      rmEnd(ghostR);
-      conStats.ghostRibs = ghostPts.length;
+      _cReset = false;
+      R.used = r;
+      rmEnd(R);
+      conStats.bomberRibs = r;
+      conStats.bomberVerts = nv;
     }
     const CF_P = 56, CF_R = 64;
     const fighterR = ribMesh(CF_R, CF_P), fTrails = /* @__PURE__ */ new Map(), fFree = [];
@@ -37703,9 +38021,17 @@
       for (const [id, T] of fTrails) {
         T.live = activeIds.has(id);
         const P = T.pts, life = T.p51 ? 8.5 : 6.5;
-        for (const p of P) {
-          p.age += dt;
-          p.z -= AIR_DRIFT * dt;
+        {
+          const cs = Math.cos(-_cDH), sn = Math.sin(-_cDH);
+          for (const p of P) {
+            p.age += dt;
+            if (_cDH) {
+              const x = p.x, z = p.z;
+              p.x = x * cs + z * sn;
+              p.z = -x * sn + z * cs;
+            }
+            p.z -= _cDz;
+          }
         }
         while (P.length && P[0].age >= life) P.shift();
         if (P.length < 2) {
@@ -37735,51 +38061,18 @@
     let _conT = pnow(), _conActive = /* @__PURE__ */ new Set(), _conDtLast = 0.016;
     function updateContrails() {
       if (window.__FG_NOCON) {
-        bomberR.m.visible = ghostR.m.visible = fighterR.m.visible = ghostDots.visible = false;
+        bomberR.m.visible = fighterR.m.visible = false;
         return;
       }
-      ghostDots.visible = true;
-      ghostR.m.visible = ghostR.ni > 0;
+      const t0 = performance.now();
       const now2 = pnow(), dt = Math.min(0.1, Math.max(0, (now2 - _conT) / 1e3));
       _conT = now2;
       _conDtLast = dt || 0.016;
-      const R = bomberR;
-      rmBegin(R);
-      let r = 0;
-      const kS = Math.min(1, dt / 5);
-      for (const c of conAnchors) {
-        const vis = c.on && c.group.visible;
-        if (!vis) {
-          c.init = false;
-          continue;
-        }
-        if (r >= R.nRib) break;
-        c.anchor.getWorldPosition(_cp);
-        if (!c.init) {
-          c.sx = _cp.x;
-          c.sy = _cp.y;
-          c.sz = _cp.z;
-          c.init = true;
-        } else {
-          c.sx += (_cp.x - c.sx) * kS;
-          c.sy += (_cp.y - c.sy) * kS;
-          c.sz = _cp.z;
-        }
-        bomberSections(R, r, _cp.x, _cp.y, _cp.z, c.sx, c.sy, c.sz, CB_LEN, 13, 0.55, 18e-4, 1);
-        r++;
-      }
-      R.used = r;
-      rmEnd(R);
-      conStats.bomberRibs = r;
-      if (Math.abs(camera.position.x - _ghostCx) + Math.abs(camera.position.y - _ghostCy) + Math.abs(camera.position.z - _ghostCz) > 0.6) {
-        _ghostCx = camera.position.x;
-        _ghostCy = camera.position.y;
-        _ghostCz = camera.position.z;
-        buildGhosts();
-      }
+      stepBomberTrails(dt);
       updateFighterTrails(dt, _conActive);
       _conActive = /* @__PURE__ */ new Set();
-      conStats.verts = R.ni / 3 + ghostR.ni / 3 + fighterR.ni / 3;
+      conStats.verts = bomberR.ni / 3 + fighterR.ni / 3;
+      conStats.ms += (performance.now() - t0 - conStats.ms) * 0.05;
     }
     for (const g of friendlyPool) addContrails(g, NACELLE_X.map((nx) => [nx * B17_VIS, -0.01 * B17_VIS, -0.05 * B17_VIS]));
     if (false) addContrails(ownShip, [[8.3, -2.3, -2.5], [4.3, -2.5, -3], [-4.3, -2.5, -3], [-8.3, -2.3, -2.5]]);
@@ -37795,12 +38088,17 @@
       groundFrame.rotation.y = geo.rot || 0;
       const odo = opts.odo || 0;
       let dz = _odo == null ? 0 : odo - _odo;
-      if (dz < 0 || dz > 400) dz = 0;
+      if (dz < 0 || dz > 400) {
+        dz = 0;
+        _cReset = true;
+      }
       _odo = odo;
       const hd = opts.heading || 0;
       let dH = hd - _hd;
       _hd = hd;
       if (Math.abs(dH) > 0.5) dH = 0;
+      _cDz = dz;
+      _cDH = dH;
       const c = Math.cos(-dH), s = Math.sin(-dH);
       const rot = (o) => {
         const x = o.position.x, z = o.position.z;
@@ -37831,6 +38129,7 @@
       updateFlakBursts(opts.flakBursts);
       updateRockets(opts.rockets);
       updateDebris(dz);
+      updateFlakDebris(dz);
       updateChutes3D(opts.chutes);
       const sd = sunDir0.clone().applyAxisAngle(new Vector3(0, 1, 0), -hd);
       skyU.uSun.value.copy(sd);
@@ -37898,13 +38197,17 @@
           eng.blades.visible = !!dead;
           if (g.userData.contrails) g.userData.contrails[k].on = !dead && !f.spiraling;
           if (!dead) eng.disc.rotation.z += dt * 31;
+          if (burning) {
+            eng.anchor.getWorldPosition(_v);
+            engineFireFx(_v, Math.min(1, fire + (f.spiraling ? 0.4 : 0)), dt, eng.fx || (eng.fx = { t: 0 }));
+          }
           const smoking = fire > 0.12 || st && st.out || f.spiraling;
           if (smoking) {
             eng.lastEmit -= dt;
             if (eng.lastEmit <= 0) {
               eng.anchor.getWorldPosition(_v);
               const dark = burning || f.spiraling;
-              ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1 : 0.6, w1: dark ? f.spiraling ? 12 : 8 : 5, life: dark ? 3.2 : 2.4, a: dark ? 0.62 : 0.4, col: dark ? [0.13, 0.125, 0.12] : [0.6, 0.6, 0.59], drift: 55 });
+              ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1 : 0.6, w1: dark ? f.spiraling ? 14 : 11 : 5, life: dark ? burning ? 4.6 : 3.2 : 2.4, a: dark ? 0.62 : 0.4, col: dark ? [0.13, 0.125, 0.12] : [0.6, 0.6, 0.59], drift: 55 });
               if (f.spiraling && Math.random() < 0.3) emitSmoke(_v, true, true);
               eng.lastEmit = 0.05;
             }
@@ -37912,6 +38215,7 @@
         }
       }
       updateSmoke(dt);
+      updateFlames(dt);
       updateWreckPuffs(dt);
       updateBombs(dt);
       updateRibbons(dt);
@@ -39402,6 +39706,66 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       camera.aspect = w / Math.max(1, h);
       camera.updateProjectionMatrix();
     }
+    const _mzList = [];
+    const MZ_N = 30, mzPool = [];
+    let mzPrev = 0;
+    const MZ_GUNS = {
+      // [x as fraction of the half-span, forward fraction of the length from the nose, size k]
+      p51: [[-0.3, 0.34, 1], [-0.38, 0.34, 1], [-0.46, 0.34, 1], [0.3, 0.34, 1], [0.38, 0.34, 1], [0.46, 0.34, 1]],
+      "190": [[-0.17, 0.3, 1.25], [0.17, 0.3, 1.25], [-0.42, 0.32, 1.25], [0.42, 0.32, 1.25], [-0.05, 0.05, 0.8], [0.05, 0.05, 0.8]],
+      "109": [[-0.04, 0.12, 0.9], [0.04, 0.12, 0.9], [0, 0, 1.3]]
+    };
+    const mzBox = {}, _mzv = new Vector3(), _mzB = new Box3();
+    function mzLocalBox(mesh, kind) {
+      if (mzBox[kind]) return mzBox[kind];
+      const p = mesh.position.clone(), q = mesh.quaternion.clone(), sc = mesh.scale.clone();
+      mesh.position.set(0, 0, 0);
+      mesh.quaternion.identity();
+      mesh.scale.set(1, 1, 1);
+      mesh.updateMatrixWorld(true);
+      _mzB.setFromObject(mesh);
+      const b = _mzB.clone();
+      mesh.position.copy(p);
+      mesh.quaternion.copy(q);
+      mesh.scale.copy(sc);
+      mesh.updateMatrixWorld(true);
+      return mzBox[kind] = b;
+    }
+    function muzzleFlashes(list) {
+      let used = 0;
+      for (let li = 0; li < list.length; li += 4) {
+        const e = list[li], mesh = list[li + 1], kind = list[li + 2], dist = list[li + 3];
+        const G = MZ_GUNS[kind];
+        if (!G) continue;
+        const bx = mzLocalBox(mesh, kind), hs = (bx.max.x - bx.min.x) * 0.5, len = bx.max.z - bx.min.z, cy = (bx.max.y + bx.min.y) * 0.5;
+        mesh.updateMatrixWorld(true);
+        for (let gi = 0; gi < G.length; gi++) {
+          if (used >= MZ_N) break;
+          if (Math.random() > 0.62) continue;
+          const g = G[gi];
+          let sp = mzPool[used];
+          if (!sp) {
+            sp = new Sprite(new SpriteMaterial({ map: flashTex, transparent: true, depthWrite: false, depthTest: true, blending: AdditiveBlending, color: 16771248 }));
+            sp.renderOrder = 6;
+            scene.add(sp);
+            mzPool[used] = sp;
+          }
+          _mzv.set(g[0] * hs, cy - 0.03 * len, bx.min.z + g[1] * len - 0.05 * len);
+          mesh.localToWorld(_mzv);
+          sp.position.copy(_mzv);
+          const sz = Math.max(1.3, dist * 42e-4) * g[2] * (0.75 + Math.random() * 0.6);
+          sp.scale.set(sz, sz, 1);
+          sp.material.rotation = Math.random() * 6.28;
+          sp.material.opacity = 0.55 + 0.4 * Math.random();
+          sp.visible = true;
+          used++;
+        }
+      }
+      for (let i = used; i < mzPrev; i++) if (mzPool[i]) mzPool[i].visible = false;
+      mzPrev = used;
+      mzStats.n = used;
+    }
+    const mzStats = { n: 0 };
     function ensureKind(slot, kind) {
       const k = kind === "110" ? "109" : kind;
       if (slot.kind === k && slot.mesh) return;
@@ -39685,7 +40049,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const sy = (Math.cos(pnow() * 0.113) * 0.072 + Math.sin(pnow() * 0.203) * 0.038) * shake;
       const FALL = opts.fall;
       if (FALL && FALL.eye) camera.position.set(FALL.eye.x + sx, FALL.eye.y + sy, FALL.eye.z);
-      else camera.position.set(CAM.x + sx, CAM.y + sy + recoil * 0.07 + (gunnerState.lift || 0), CAM.z);
+      else camera.position.set(CAM.x + sx + (gunnerState.kx || 0), CAM.y + sy + (gunnerState.ky || 0) + recoil * 0.07 + (gunnerState.lift || 0), CAM.z);
       _lift = FALL ? 0 : gunnerState.lift || 0;
       _liftP = FALL ? 0 : gunnerState.liftP || 0;
       const FC = window.__FG_FREECAM;
@@ -39746,6 +40110,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       turretFill.color.setHex(muzzle > 0.08 ? 16752736 : 16771272);
       updateGuns(opts);
       syncMission(opts);
+      _mzList.length = 0;
       const live = /* @__PURE__ */ new Set();
       const shown = (e) => e.alive || e.flash > 0 || (e.wreckT || 0) > 0;
       for (const e of enemiesArr) {
@@ -39857,6 +40222,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
           mesh.userData._q.slerp(targetQ, 0.25);
           mesh.quaternion.copy(mesh.userData._q);
         }
+        if (e.alive && e.mf > 0 && dist < 2600) _mzList.push(e, mesh, slot.kind, dist);
         if (!e.alive) {
           slot.spin = (slot.spin || 0) + 0.016 * 4;
           mesh.quaternion.multiply(_spinQ.setFromAxisAngle(_zAxis2, slot.spin));
@@ -39898,6 +40264,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         if (fighterPool[idx].fire) fighterPool[idx].fire.visible = false;
         fighterPool[idx].wasAlive = false;
       }
+      muzzleFlashes(_mzList);
       updateSpecks(opts);
       updateDebris();
     }
@@ -39941,8 +40308,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       // box gunners / P-51s
       [[1, 0.88, 0.46], [1, 0.62, 0.14], 1, 2.6, 0.9, 0.26, 0.4],
       // German fighters (1.5.0 was red)
-      [[1, 0.36, 0.2], [1, 0.1, 0.03], 1.2, 3, 0.95, 0.34, 0.4]
-      // 1.5.3: Fw 190 — clear red / red-orange core + red glow (slightly bolder so it reads at range)
+      [[1, 0.36, 0.2], [1, 0.1, 0.03], 1.2, 3, 0.95, 0.34, 0.4],
+      // 1.5.3 (kind 3)
+      [[0.9, 1, 0.82], [0.28, 1, 0.42], 1.2, 3.2, 0.95, 0.36, 0.4]
+      // 1.5.4 (kind 4): P-51 six-gun fire — bright white-green, unmistakable against the yellow gunners / orange 109s / red 190s
+      //: Fw 190 — clear red / red-orange core + red glow (slightly bolder so it reads at range)
     ];
     let trBuf = null, trN = 0;
     const _tf = new Vector3(), _tc = new Vector3();
@@ -40149,8 +40519,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       camera,
       muzzles: muzzleOut,
       _gunGroups: gunGroups,
+      b17Ortho,
       rayShip,
       addHole,
+      addTear,
       clearDamage,
       rayFighter,
       addFighterHole,
@@ -40176,6 +40548,17 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         return speckStats.slice();
       },
       dropBombs,
+      trailDump: (k) => {
+        const c = conAnchors[k];
+        return c ? c.pts.map((p) => [+p.x.toFixed(1), +p.y.toFixed(1), +p.z.toFixed(1), +p.age.toFixed(1)]) : null;
+      },
+      chuteMeshes: () => {
+        const out = [];
+        ownChute.traverse((o) => {
+          if (o !== ownChute) out.push({ type: o.type, geo: o.geometry ? o.geometry.type : null, vis: o.visible && ownChute.visible, y: +o.position.y.toFixed(2) });
+        });
+        return out;
+      },
       get conStats() {
         return Object.assign({}, conStats);
       },
@@ -40233,6 +40616,25 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         updateBombs(dt);
       },
       // test hook
+      get flameStats() {
+        return flameStats;
+      },
+      get flakStats() {
+        return flakStats;
+      },
+      tearInfo(which) {
+        const g = shipGroup(which);
+        if (!g) return [];
+        g.updateMatrixWorld(true);
+        return (g.userData.tears || []).map((m) => {
+          const v = new Vector3(), n = new Vector3(0, 0, 1);
+          m.getWorldPosition(v);
+          const q = new Quaternion();
+          m.getWorldQuaternion(q);
+          n.applyQuaternion(q);
+          return { x: v.x, y: v.y, z: v.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x };
+        });
+      },
       get friendlyInfo() {
         return friendlyPool.map((g, i) => {
           const v = new Vector3();

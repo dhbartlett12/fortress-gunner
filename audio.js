@@ -1,4 +1,7 @@
-/* Fortress Gunner 1.3.8 — procedural WebAudio sound design (no samples).
+/* Fortress Gunner 1.5.4 — procedural WebAudio sound design + a tiny rendered sample layer (.50 bark, flak thump; synthesised once at unlock, ~0.3 MB).
+ * 1.5.4: speed-of-sound delay + 1/(1+d/ref) gain + air-absorption low-pass for every distant source; noise-based engines (no tonal drone); phone-speaker EQ;
+ * wind-through-holes bed that scales with the hole count; noise-based radio intercom (no beeps).
+ * (Original 1.3.8 header follows.) Fortress Gunner 1.3.8 — procedural WebAudio sound design (no samples).
  * Everything is synthesized: 4 Wright R-1820 radials (detuned sawtooth drone + firing-rate buzz),
  * wind rush, .50 cal shots (ours close, the box's attenuated/panned by distance and direction),
  * hits on our airframe (metal tinks, 20 mm thumps), engine sputter / wind-down, 109 fly-bys with
@@ -16,6 +19,14 @@
   const stats = { built: false, unlocked: false, errors: 0, events: {} };
   const count = (k) => { stats.events[k] = (stats.events[k] || 0) + 1; };
 
+  // ---------- 1.5.4 distance model: speed of sound, spreading loss, air absorption ----------
+  // Scale: VF 83.4 u/s = 280 mph (125 m/s) → 1 u ≈ 1.5 m, so sound travels 343 / 1.5 = 228.7 u/s (1000 u ≈ 4.4 s; the delay is capped at 3.5 s so a far burst is never lost).
+  const TAME_F = 6200;
+  const M_PER_U = 1.5, U_PER_S = 343 / M_PER_U, DELAY_CAP = 3.5;
+  function distModel(d, ref) { return { d, delay: Math.min(DELAY_CAP, d / U_PER_S), gain: 1 / (1 + d / ref), lp: 450 + 9500 * Math.exp(-d / 1800) }; }
+  let DM = null; // the model in force while a distant voice is being scheduled: out() applies its gain and air-absorption low-pass to every node
+  function withDM(d, ref, fn) { DM = distModel(d, ref); try { fn(DM); } finally { DM = null; } return distModel(d, ref); }
+
   // ---------- graph (shared by the live context and the offline demo render) ----------
   function makeNoise(ctx, sec) {
     const b = ctx.createBuffer(1, Math.floor(ctx.sampleRate * sec), ctx.sampleRate);
@@ -28,38 +39,61 @@
     G.master = ctx.createGain(); G.master.gain.value = 0.0001;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16; comp.knee.value = 10; comp.ratio.value = 5; comp.attack.value = 0.004; comp.release.value = 0.25;
-    const tame = ctx.createBiquadFilter(); tame.type = "lowpass"; tame.frequency.value = 7200; tame.Q.value = 0.5; // no ice-pick highs
+    const tame = ctx.createBiquadFilter(); tame.type = "lowpass"; tame.frequency.value = TAME_F; tame.Q.value = 0.5; // no ice-pick highs
+    // 1.5.4 phone-speaker EQ: a phone driver gives nothing below ~150 Hz (sub energy only eats headroom and trips the limiter) → high-pass ~100 Hz (2 stages), tame the 130–250 Hz boom,
+    // and push the body that a small speaker CAN play: +3 dB at 700 Hz (chest of the .50 bark), +3 dB at 2.3 kHz (crack / presence).
+    const eq1 = ctx.createBiquadFilter(); eq1.type = "highpass"; eq1.frequency.value = 105; eq1.Q.value = 0.7; const eq0 = ctx.createBiquadFilter(); eq0.type = "highpass"; eq0.frequency.value = 85; eq0.Q.value = 0.6; // cascaded: ~4th order below ~100 Hz
+    const eq2 = ctx.createBiquadFilter(); eq2.type = "peaking"; eq2.frequency.value = 170; eq2.Q.value = 0.8; eq2.gain.value = -3.5;
+    const eq3 = ctx.createBiquadFilter(); eq3.type = "peaking"; eq3.frequency.value = 520; eq3.Q.value = 0.7; eq3.gain.value = 4.2;
+    const eq4 = ctx.createBiquadFilter(); eq4.type = "peaking"; eq4.frequency.value = 2300; eq4.Q.value = 0.9; eq4.gain.value = 0.8;
     const sat = ctx.createWaveShaper(); { const n = 2048, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(1.5 * x) / Math.tanh(1.5) * 0.94; } sat.curve = c; } // 1.5.3: soft ceiling at -0.5 dBFS, never hard-clips
-    G.master.connect(tame); tame.connect(comp); comp.connect(sat); sat.connect(ctx.destination); G.tame = tame; G.vox = [];
+    G.master.connect(eq0); eq0.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4); eq4.connect(tame); tame.connect(comp); comp.connect(sat); sat.connect(ctx.destination); G.tame = tame; G.vox = []; G.eq = [eq1, eq2, eq3, eq4];
     G.noise = makeNoise(ctx, 2.0);
     G.sfx = ctx.createGain(); G.sfx.gain.value = 1.5; G.sfx.connect(G.master);
-    // --- engine drone: 4 radials, each: prop sawtooth (~45 Hz, detuned → slow beats) + firing buzz (~172 Hz)
+    // --- 1.5.4 engines: 4 R-1820 radials as NOISE (no tonal drone). Each = a low rumble band chopped at the prop's blade-passing rate (~66 Hz, 4 engines slowly beating)
+    //     + a mid "growl" band (250–900 Hz) chopped at the cylinder firing rate (~172 Hz) with a slow random wander → throb and roar, no 46 Hz hum.
     G.eng = [];
     const busE = ctx.createGain(); busE.gain.value = 0.24;
-    const eLP = ctx.createBiquadFilter(); eLP.type = "lowpass"; eLP.frequency.value = 520; eLP.Q.value = 0.7;
-    busE.connect(eLP); eLP.connect(G.master);
+    const eHP = ctx.createBiquadFilter(); eHP.type = "highpass"; eHP.frequency.value = 55; eHP.Q.value = 0.6;
+    const eLP = ctx.createBiquadFilter(); eLP.type = "lowpass"; eLP.frequency.value = 900; eLP.Q.value = 0.6;
+    busE.connect(eHP); eHP.connect(eLP); eLP.connect(G.master);
     const pans = [-0.55, -0.25, 0.25, 0.55];
     for (let i = 0; i < 4; i++) {
-      const f0 = 44.5 + i * 0.37 + (i === 2 ? 0.21 : 0);
-      const saw = ctx.createOscillator(); saw.type = "sawtooth"; saw.frequency.value = f0;
-      const buzz = ctx.createOscillator(); buzz.type = "square"; buzz.frequency.value = f0 * 3.87;
-      const bz = ctx.createGain(); bz.gain.value = 0.16;
-      const am = ctx.createOscillator(); am.frequency.value = f0 * 0.5; const amg = ctx.createGain(); amg.gain.value = 0.25; // cylinder lumpiness
+      const f0 = 66 + i * 0.83 + (i === 2 ? 0.4 : 0);
       const g = ctx.createGain(); g.gain.value = 0.25;
+      const n1 = ctx.createBufferSource(); n1.buffer = G.noise; n1.loop = true; n1.playbackRate.value = 0.9 + i * 0.05;
+      const b1 = ctx.createBiquadFilter(); b1.type = "bandpass"; b1.frequency.value = 135 + i * 11; b1.Q.value = 0.75;
+      const a1 = ctx.createGain(); a1.gain.value = 0.62;
+      const saw = ctx.createOscillator(); saw.type = "triangle"; saw.frequency.value = f0; const sg = ctx.createGain(); sg.gain.value = 0.34; saw.connect(sg); sg.connect(a1.gain); // blade-passing chop
+      n1.connect(b1); b1.connect(a1); a1.connect(g);
+      const n2 = ctx.createBufferSource(); n2.buffer = G.noise; n2.loop = true; n2.playbackRate.value = 1.0 + i * 0.07;
+      const b2 = ctx.createBiquadFilter(); b2.type = "bandpass"; b2.frequency.value = 420 + i * 38; b2.Q.value = 0.9;
+      const a2 = ctx.createGain(); a2.gain.value = 0.34;
+      const buzz = ctx.createOscillator(); buzz.type = "sawtooth"; buzz.frequency.value = f0 * 2.62; const bz = ctx.createGain(); bz.gain.value = 0.2; buzz.connect(bz); bz.connect(a2.gain); // cylinder firing chop
+      n2.connect(b2); b2.connect(a2); a2.connect(g);
+      const wob = ctx.createOscillator(); wob.frequency.value = 0.17 + i * 0.043; const wg = ctx.createGain(); wg.gain.value = 1.3; wob.connect(wg); wg.connect(saw.frequency); wg.connect(buzz.frequency); // slow wander: never a fixed tone
       const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
-      saw.connect(g); buzz.connect(bz); bz.connect(g); am.connect(amg); amg.connect(g.gain);
       if (pan) { pan.pan.value = pans[i]; g.connect(pan); pan.connect(busE); } else g.connect(busE);
-      saw.start(); buzz.start(); am.start();
-      G.eng.push({ saw, buzz, g, f0, state: "run", sput: 0, level: 0.25 });
+      n1.start(0, i * 0.37); n2.start(0, 0.8 + i * 0.29); saw.start(); buzz.start(); wob.start();
+      G.eng.push({ saw, buzz, g, f0, kb: 2.62, state: "run", sput: 0, level: 0.25 });
     }
     // --- wind rush + airframe rumble (looped noise, band-limited)
     const wn = ctx.createBufferSource(); wn.buffer = G.noise; wn.loop = true;
-    const wbp = ctx.createBiquadFilter(); wbp.type = "bandpass"; wbp.frequency.value = 700; wbp.Q.value = 0.45;
+    const wbp = ctx.createBiquadFilter(); wbp.type = "bandpass"; wbp.frequency.value = 600; wbp.Q.value = 0.8;
     const wg = ctx.createGain(); wg.gain.value = 0.045;
     const wlfo = ctx.createOscillator(); wlfo.frequency.value = 0.13; const wlg = ctx.createGain(); wlg.gain.value = 0.015; wlfo.connect(wlg); wlg.connect(wg.gain); wlfo.start();
     const rlp = ctx.createBiquadFilter(); rlp.type = "lowpass"; rlp.frequency.value = 110; const rg = ctx.createGain(); rg.gain.value = 0.16;
     wn.connect(wbp); wbp.connect(wg); wg.connect(G.master); wn.connect(rlp); rlp.connect(rg); rg.connect(G.master); wn.start();
     G.wind = wg; G.windBP = wbp; G.rumble = rg; G.busE = busE;
+    // 1.5.4 wind through the holes: a continuous whistling/roaring bed (noise, 600–2.8 kHz) whose level, pitch and flutter grow with the number of holes shot through the skin
+    { const hn = ctx.createBufferSource(); hn.buffer = G.noise; hn.loop = true; hn.playbackRate.value = 1.15;
+      const hb = ctx.createBiquadFilter(); hb.type = "bandpass"; hb.frequency.value = 900; hb.Q.value = 0.9;
+      const hh = ctx.createBiquadFilter(); hh.type = "highpass"; hh.frequency.value = 450;
+      const hg = ctx.createGain(); hg.gain.value = 0;
+      const fl = ctx.createOscillator(); fl.type = "sine"; fl.frequency.value = 5.3; const fg = ctx.createGain(); fg.gain.value = 0; fl.connect(fg); fg.connect(hg.gain);
+      const fl2 = ctx.createOscillator(); fl2.type = "sine"; fl2.frequency.value = 0.37; const fg2 = ctx.createGain(); fg2.gain.value = 250; fl2.connect(fg2); fg2.connect(hb.frequency);
+      hn.connect(hb); hb.connect(hh); hh.connect(hg); hg.connect(G.master); hn.start(0, 0.5); fl.start(); fl2.start();
+      G.holeWind = hg; G.holeFlutter = fg; G.holeBP = hb; }
     // 1.3.8: chute bed (low wind with canopy flutter) + the box's distant drone, both silent until bail-out
     const cn = ctx.createBufferSource(); cn.buffer = G.noise; cn.loop = true; cn.playbackRate.value = 0.7;
     const cbp = ctx.createBiquadFilter(); cbp.type = "bandpass"; cbp.frequency.value = 320; cbp.Q.value = 0.6;
@@ -68,15 +102,78 @@
     cn.connect(cbp); cbp.connect(cg); cg.connect(G.master); cn.start();
     G.chute = cg; G.chuteFlap = flg;
     const dg = ctx.createGain(); dg.gain.value = 0; const dlp = ctx.createBiquadFilter(); dlp.type = "lowpass"; dlp.frequency.value = 180;
-    for (const f of [43.8, 44.9, 46.1, 88.3]) { const o = ctx.createOscillator(); o.type = "sawtooth"; o.frequency.value = f; const og = ctx.createGain(); og.gain.value = f > 80 ? 0.3 : 1; o.connect(og); og.connect(dlp); o.start(); }
+    { const dn = ctx.createBufferSource(); dn.buffer = G.noise; dn.loop = true; dn.playbackRate.value = 0.8; const dbp = ctx.createBiquadFilter(); dbp.type = "bandpass"; dbp.frequency.value = 150; dbp.Q.value = 0.8;
+      const dam = ctx.createGain(); dam.gain.value = 1.4; const dosc = ctx.createOscillator(); dosc.type = "triangle"; dosc.frequency.value = 66.7; const dog = ctx.createGain(); dog.gain.value = 0.5; dosc.connect(dog); dog.connect(dam.gain); dn.connect(dbp); dbp.connect(dam); dam.connect(dlp); dn.start(); dosc.start(); }
     dlp.connect(dg); dg.connect(G.master);
     G.distDrone = dg;
+    try { G.smp = makeSmp(ctx); } catch (e) { stats.errors++; stats.lastError = String(e); G.smp = null; }
     stats.built = true;
     return G;
   }
+
+  // ---------- 1.5.4 RENDERED SAMPLE LAYER (synthesised once; played back with pitch/level jitter under the synth) ----------
+  // .50 bark: a 3 ms muzzle crack + resonant body (chest 650 Hz / throat 1.4 kHz / action clank 2.4 kHz) + a dropping 150→55 Hz thump + a short turret-cabin tail.
+  // flak thump: a 90→32 Hz sweep, a 250–900 Hz "crump" body and a decaying gravel tail — mid-weighted so a phone speaker can actually play it.
+  let SMP_CACHE = null;
+  function biquadBP(f, q, sr) { const w = 2 * Math.PI * f / sr, al = Math.sin(w) / (2 * q), a0 = 1 + al; return { b0: al / a0, b1: 0, b2: -al / a0, a1: -2 * Math.cos(w) / a0, a2: (1 - al) / a0, x1: 0, x2: 0, y1: 0, y2: 0 }; }
+  function biquadLP(f, q, sr) { const w = 2 * Math.PI * f / sr, al = Math.sin(w) / (2 * q), c = Math.cos(w), a0 = 1 + al; return { b0: (1 - c) / 2 / a0, b1: (1 - c) / a0, b2: (1 - c) / 2 / a0, a1: -2 * c / a0, a2: (1 - al) / a0, x1: 0, x2: 0, y1: 0, y2: 0 }; }
+  function bq(F, x) { const y = F.b0 * x + F.b1 * F.x1 + F.b2 * F.x2 - F.a1 * F.y1 - F.a2 * F.y2; F.x2 = F.x1; F.x1 = x; F.y2 = F.y1; F.y1 = y; return y; }
+  function buildSamples() {
+    if (SMP_CACHE) return SMP_CACHE;
+    const sr = 44100, bark = [], flak = [];
+    for (let v = 0; v < 6; v++) {
+      const n = Math.floor(sr * 0.3), d = new Float32Array(n), r = (a, b) => a + Math.random() * (b - a);
+      const f1 = biquadBP(r(560, 760), 2.2, sr), f2 = biquadBP(r(1200, 1650), 2.6, sr), f3 = biquadBP(r(2100, 2800), 5, sr), lp = biquadLP(r(700, 1100), 0.7, sr);
+      const fq = r(130, 170), tau = r(0.026, 0.04), dly = Math.floor(sr * r(0.0022, 0.0034)), buf = new Float32Array(dly + 1); let bi = 0;
+      let prev = 0;
+      for (let i = 0; i < n; i++) {
+        const t = i / sr, w = Math.random() * 2 - 1;
+        const crack = w * Math.exp(-t / 0.0018);
+        const body = (bq(f1, w) * 1.9 + bq(f2, w) * 1.1) * Math.exp(-t / tau);
+        const clank = bq(f3, w) * Math.exp(-Math.max(0, t - 0.009) / 0.012) * (t > 0.009 ? 1 : 0);
+        const ph = 2 * Math.PI * (95 * t + (fq * 1.5 - 95) * 0.03 * (1 - Math.exp(-t / 0.03)));
+        const thump = Math.sin(ph) * Math.exp(-t / 0.035) * 0.3;
+        const tail = bq(lp, w) * Math.exp(-t / 0.075) * 0.55;
+        let x = crack * 0.55 + body * 0.85 + clank * 0.16 + thump + tail * 1.25;
+        x += 0.42 * buf[bi]; buf[bi] = x; bi = (bi + 1) % (dly + 1); // short comb: the bore / turret-ring resonance
+        x = Math.tanh(1.6 * x); d[i] = x - 0.9 * prev; prev = x * 0.0; // soft clip, then a tiny DC-kill
+      }
+      let pk = 0; for (let i = 0; i < n; i++) pk = Math.max(pk, Math.abs(d[i])); for (let i = 0; i < n; i++) d[i] /= pk * 1.05;
+      bark.push(d);
+    }
+    for (let v = 0; v < 4; v++) {
+      const n = Math.floor(sr * 1.5), d = new Float32Array(n), r = (a, b) => a + Math.random() * (b - a);
+      const fb = biquadBP(r(380, 560), 0.9, sr), fm = biquadBP(r(750, 1000), 0.8, sr), lp = biquadLP(r(240, 330), 0.7, sr), lg = biquadLP(r(500, 760), 0.8, sr);
+      const f0 = r(80, 100), f1 = r(30, 38);
+      for (let i = 0; i < n; i++) {
+        const t = i / sr, w = Math.random() * 2 - 1;
+        const rise = 1 - Math.exp(-t / 0.012);
+        const sub = Math.sin(2 * Math.PI * (f1 * t + (f0 - f1) * 0.28 * (1 - Math.exp(-t / 0.28)))) * Math.exp(-t / 0.4) * 0.8;
+        const crump = bq(fb, w) * Math.exp(-t / 0.2) * 2.1 + bq(fm, w) * Math.exp(-t / 0.11) * 1.4;
+        const crack = w * Math.exp(-t / 0.004) * 0.7;
+        const gravel = bq(lg, w) * Math.exp(-t / 0.5) * (0.5 + 0.5 * Math.sin(t * 38 + Math.sin(t * 7) * 2)) * 0.7;
+        const rum = bq(lp, w) * Math.exp(-t / 0.6) * 1.1;
+        d[i] = (sub * 0.9 + crump + crack + gravel + rum) * rise;
+      }
+      let pk = 0; for (let i = 0; i < n; i++) pk = Math.max(pk, Math.abs(d[i])); for (let i = 0; i < n; i++) d[i] = Math.tanh(1.2 * d[i] / pk) * 0.92;
+      flak.push(d);
+    }
+    SMP_CACHE = { bark, flak, sr };
+    return SMP_CACHE;
+  }
+  function makeSmp(ctx) {
+    const S = buildSamples(), mk = (a) => { const b = ctx.createBuffer(1, a.length, S.sr); b.getChannelData(0).set(a); return b; };
+    return { bark: S.bark.map(mk), flak: S.flak.map(mk) };
+  }
+  function playSample(G, buf, t, gain, pan, rate) {
+    const ctx = G.ctx, s = ctx.createBufferSource(); s.buffer = buf; s.playbackRate.value = rate || 1;
+    s.connect(out(G, t, gain, pan, 9000)); s.start(t);
+  }
   // one-shot helpers --------------------------------------------------------------------------
   function out(G, t, gain, pan, lp) { // voice output chain: gain → (lowpass) → pan → sfx
-    const ctx = G.ctx, g = ctx.createGain(); g.gain.value = gain;
+    const ctx = G.ctx, g = ctx.createGain();
+    if (DM) { gain *= DM.gain; lp = lp ? Math.min(lp, DM.lp) : DM.lp; }
+    g.gain.value = gain;
     let node = g;
     if (lp) { const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = lp; g.connect(f); node = f; }
     if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan || 0)); node.connect(p); p.connect(G.sfx); }
@@ -99,7 +196,7 @@
   function tink(G, t, gain, pan) { // small-calibre strike on aluminium: inharmonic ring + click
     const ctx = G.ctx, base = 1900 + Math.random() * 1400;
     for (const m of [1, 1.51, 2.37]) {
-      const o = ctx.createOscillator(); o.type = "sine"; o.frequency.value = base * m;
+      const o = ctx.createOscillator(); o.type = "sine"; o.frequency.setValueAtTime(base * m * 1.015, t); o.frequency.exponentialRampToValueAtTime(base * m, t + 0.025);
       const e = ctx.createGain(); e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(0.5 / m, t + 0.002); e.gain.exponentialRampToValueAtTime(0.0001, t + 0.09 + 0.05 / m);
       o.connect(e); e.connect(out(G, t, gain, pan)); o.start(t); o.stop(t + 0.2);
     }
@@ -111,17 +208,20 @@
   function sGun(G, t, dist, pan, own) { // one .50 cal round (1.5.3: retuned to the user's B-17 shredding clips — bassy "bark" with mid body, short crack on top)
     const v = 0.88 + Math.random() * 0.24, lv = 0.85 + Math.random() * 0.3;
     if (own) {
-      noiseHit(G, t, 0.07 + Math.random() * 0.03, 620 * v, 0.8, 0.72 * lv, pan, 3200, 0.002); // chesty bark (300–1k)
-      noiseHit(G, t, 0.045, 1250 * v, 0.8, 0.34 * lv, pan, 5000, 0.001); // body
-      noiseHit(G, t, 0.022, 2600 * v, 0.7, 0.2 * lv, pan, 8000, 0.0006); // crack
-      thump(G, t, 125 * v, 48, 0.085, 0.18 * lv, pan, 5000);
+      const sm = G.smp ? 0.6 : 0; // rendered bark layer under the synth
+      noiseHit(G, t, 0.07 + Math.random() * 0.03, 620 * v, 0.8, (0.72 - 0.3 * sm) * lv, pan, 3200, 0.002); // chesty bark (300–1k)
+      noiseHit(G, t, 0.045, 1250 * v, 0.8, (0.34 - 0.1 * sm) * lv, pan, 5000, 0.001); // body
+      noiseHit(G, t, 0.018, 2200 * v, 0.7, 0.09 * lv, pan, 5200, 0.0006); // crack (kept faint: refs have <5 % above 3 kHz)
+      thump(G, t, 125 * v, 48, 0.085, 0.12 * lv, pan, 5000);
+      if (G.smp) playSample(G, G.smp.bark[(Math.random() * G.smp.bark.length) | 0], t, 0.62 * lv, pan, 0.93 + Math.random() * 0.15);
       return;
     }
-    const near = 1 / (1 + dist / 55);
-    const lp = Math.max(500, 2800 - dist * 4.5);
+    const near = DM ? 1 : 1 / (1 + dist / 55);
+    const lp = DM ? 9000 : Math.max(500, 2800 - dist * 4.5);
     noiseHit(G, t, 0.1 + Math.random() * 0.05, 640 * v, 0.7, 0.8 * near * lv, pan, lp, 0.004);
     noiseHit(G, t, 0.05, 1300 * v, 0.7, 0.3 * near * lv, pan, lp, 0.002);
-    thump(G, t, 105 * v, 42, 0.12, 0.16 * near * lv, pan, lp * 0.7);
+    thump(G, t, 105 * v, 42, 0.12, 0.12 * near * lv, pan, lp * 0.7);
+    if (G.smp) playSample(G, G.smp.bark[(Math.random() * G.smp.bark.length) | 0], t, 0.5 * near * lv, pan, 0.88 + Math.random() * 0.16);
     if (dist > 60) noiseHit(G, t + 0.07 + dist / 3000, 0.16, 420, 0.6, 0.12 * near, -pan * 0.5, 900, 0.02); // distant slap
   }
   function sBrass(G, t, pan) { // spent .50 cases rattling off the turret floor / ring
@@ -140,7 +240,7 @@
     noiseHit(G, t, 0.05, 900, 0.9, 0.12, 0, 2200);
   }
   function sEnemyGun(G, t, dist, pan) { // 20 mm MG 151 + MG 131 burst (~0.5 s)
-    const near = 1 / (1 + dist / 90), lp = Math.max(600, 3500 - dist * 4);
+    const near = DM ? 1 : 1 / (1 + dist / 90), lp = DM ? 9000 : Math.max(600, 3500 - dist * 4);
     for (let k = 0; k < 9; k++) {
       const tt = t + k * 0.055 + Math.random() * 0.01;
       if (k % 3 === 0) thump(G, tt, 90, 38, 0.12, 0.5 * near, pan, lp); // cannon
@@ -207,8 +307,8 @@
   function ring(G, t, freqs, dur, gain, pan, lp, jit) { // inharmonic metal ring (partials with their own decays)
     const ctx = G.ctx;
     for (const [m, a] of freqs) {
-      const o = ctx.createOscillator(); o.type = "sine"; o.frequency.value = m * (1 + (Math.random() - 0.5) * (jit || 0.04));
-      const d = dur * (0.35 + 0.65 / (1 + m / 1500)); const e = env(G, t, 0.0012, a, d);
+      const o = ctx.createOscillator(); o.type = "sine"; const fm = m * (1 + (Math.random() - 0.5) * (jit || 0.04)); o.frequency.setValueAtTime(fm * 1.012, t); o.frequency.exponentialRampToValueAtTime(fm, t + 0.03); // struck metal settles a hair flat
+      const d = dur * (0.3 + 0.55 / (1 + m / 1500)) * (0.7 + Math.random() * 0.6); const e = env(G, t, 0.0012, a * 0.75, d);
       o.connect(e); e.connect(out(G, t, gain, pan, lp)); o.start(t); o.stop(t + d + 0.03);
     }
   }
@@ -267,7 +367,7 @@
   // ear-ring + muffle: low-passes the whole mix for ~1.2 s and adds a faint 3 kHz whine that dies away
   function earDuck(G, t, depth) {
     const T = G.tame; if (!T) return;
-    T.frequency.cancelScheduledValues(t); T.frequency.setValueAtTime(7200, t); T.frequency.linearRampToValueAtTime(Math.max(380, 2400 - 2000 * depth), t + 0.015);
+    T.frequency.cancelScheduledValues(t); T.frequency.setValueAtTime(TAME_F, t); T.frequency.linearRampToValueAtTime(Math.max(380, 2400 - 2000 * depth), t + 0.015);
     T.frequency.setTargetAtTime(7200, t + 0.35 + depth * 0.4, 0.5 + depth * 0.4);
     const o = G.ctx.createOscillator(); o.type = "sine"; o.frequency.value = 3100; const e = G.ctx.createGain();
     e.gain.setValueAtTime(0.0001, t + 0.05); e.gain.linearRampToValueAtTime(0.045 * depth, t + 0.18); e.gain.exponentialRampToValueAtTime(0.0001, t + 1.8 + depth);
@@ -293,16 +393,19 @@
     thump(G, t, 78, 26, 0.75, 1.05 * vv, pan * 0.3, 380); // low thump
     thump(G, t + 0.03, 46, 24, 0.9, 0.7 * vv, 0, 200); // sub
     flakFragments(G, t + 0.02 + dist / 700, 0.6 + 0.6 * k, pan);
+    if (G.smp) playSample(G, G.smp.flak[(Math.random() * G.smp.flak.length) | 0], t, 1.1 * vv, pan * 0.4, 0.95 + Math.random() * 0.1);
     earDuck(G, t + 0.01, 0.35 + 0.65 * k);
   }
   function sFlakDistant(G, t, dist, pan) { // far burst: the thump arrives late and soft ("crump"): sub-120 Hz body, no crack, a faint lumpy tail
-    const near = 1 / (1 + dist / 380);
+    const near = DM ? 1 : 1 / (1 + dist / 380);
     const o = G.ctx.createOscillator(); o.type = "sine"; o.frequency.setValueAtTime(74, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.55);
     const e = G.ctx.createGain(); const a = 0.05 + Math.min(0.14, dist / 7000); // soft onset grows with distance (ref: 60–180 ms rises)
     e.gain.setValueAtTime(0.0001, t); e.gain.linearRampToValueAtTime(1, t + a); e.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
     o.connect(e); e.connect(out(G, t, 1.5 * near + 0.15, pan * 0.5, 260)); o.start(t); o.stop(t + 1);
     noiseHit(G, t, 0.7, 210, 0.5, 1.1 * near + 0.1, pan, 520, a * 0.7);
-    if (dist < 700) noiseHit(G, t + 0.18, 0.5, 520, 0.5, 0.22 * near, pan, 900, 0.08);
+    noiseHit(G, t + 0.012, 0.42, 520, 0.7, 0.62 * near + 0.1, pan, 1500, a * 0.5); // 1.5.4: mid body (250–900 Hz) — a phone speaker has no sub, so the burst lives here
+    noiseHit(G, t + 0.18, 0.5, 520, 0.5, 0.22 * near, pan, 900, 0.08);
+    if (G.smp) playSample(G, G.smp.flak[(Math.random() * G.smp.flak.length) | 0], t, 0.5 * (DM ? 1 : near + 0.15), pan, 0.9 + Math.random() * 0.2); // rendered thump layer
   }
 
   // 1.5.3 WGr.21 rocket (tuned on a reference rocket-attack clip): launch thump + hiss; FLIGHT = a band-limited whoosh swelling ~+11 dB over ~1 s
@@ -310,7 +413,7 @@
   // then falls ~6 dB per 0.3 s, thumping fragments every ~100 ms, shrapnel on the skin, ear-ring. Far impacts are just a flak-style crump.
   function sRocketFlight(G, t, dist, pan, dur) {
     if (!room(G, t, 3, dur + 0.5)) return;
-    const ctx = G.ctx, near = 1 / (1 + dist / 500);
+    const ctx = G.ctx, near = DM ? 1 : 1 / (1 + dist / 500);
     const s = ctx.createBufferSource(); s.buffer = G.noise; s.loop = true;
     const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.3; bp.frequency.setValueAtTime(650, t); bp.frequency.exponentialRampToValueAtTime(2300, t + dur);
     const e = ctx.createGain(); e.gain.setValueAtTime(0.03, t); e.gain.exponentialRampToValueAtTime(1, t + dur); e.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.45);
@@ -335,6 +438,19 @@
     for (let i = 0; i < 6; i++) thump(G, t + 0.08 + i * (0.09 + Math.random() * 0.05), 95 - i * 8, 38, 0.14, (0.8 - i * 0.1) * k, pan * 0.5, 400); // secondary thumps
     flakFragments(G, t + 0.04, 0.9 * k, pan);
     earDuck(G, t + 0.01, 0.6 * k);
+  }
+  // 1.5.4 radio intercom: squelch-open click, a syllabic noise "voice" burble through a 350–2600 Hz radio band, squelch-close tail. NO tones/beeps.
+  function sIntercom(G, t) {
+    const ctx = G.ctx;
+    noiseHit(G, t, 0.03, 2800, 0.6, 0.30, 0, 6000, 0.0005); // key-up click
+    const dur = 0.55 + Math.random() * 0.25, s = ctx.createBufferSource(); s.buffer = G.noise; s.loop = true; s.playbackRate.value = 0.9 + Math.random() * 0.2;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 900 + Math.random() * 300; bp.Q.value = 0.8;
+    const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 350;
+    const e = ctx.createGain(); e.gain.value = 0;
+    let tt = t + 0.04; // syllables: random-length bursts, each a little different in level, like speech
+    while (tt < t + dur) { const sy = 0.05 + Math.random() * 0.09, lv = 0.12 + Math.random() * 0.2; e.gain.setValueAtTime(0.0001, tt); e.gain.linearRampToValueAtTime(lv, tt + 0.012); e.gain.setTargetAtTime(0.0001, tt + sy, 0.02); bp.frequency.setValueAtTime(700 + Math.random() * 1500, tt); tt += sy + 0.025 + Math.random() * 0.05; }
+    s.connect(bp); bp.connect(hp); hp.connect(e); e.connect(out(G, t, 1, 0, 3200)); s.start(t, Math.random() * 3); s.stop(t + dur + 0.2);
+    noiseHit(G, t + dur + 0.04, 0.09, 1800, 0.5, 0.16, 0, 5000, 0.001); // squelch tail
   }
   function sFlak2(G, t, dist, pan) { if (dist < 120) sFlakClose(G, t, dist, pan); else sFlakDistant(G, t, dist, pan); }
   // (c) structural damage ---------------------------------------------------------------------------
@@ -395,13 +511,13 @@
   }
 
   function sBoom(G, t, dist, pan, big) {
-    const near = 1 / (1 + dist / 150), lp = Math.max(300, 1800 - dist * 1.2);
+    const near = DM ? 1 : 1 / (1 + dist / 150), lp = DM ? 9000 : Math.max(300, 1800 - dist * 1.2);
     thump(G, t, big ? 60 : 80, 22, big ? 1.4 : 0.9, (big ? 1.3 : 0.9) * near, pan, lp);
     noiseHit(G, t, big ? 1.6 : 1.1, 260, 0.5, 1.3 * near, pan, lp, 0.01);
   }
   // 1.5.2: WGr.21 rocket launch — ignition thump, then a rushing hiss that sweeps up and fades as it flies off
   function sRocket(G, t, dist, pan) {
-    const ctx = G.ctx, near = 1 / (1 + dist / 260);
+    const ctx = G.ctx, near = DM ? 1 : 1 / (1 + dist / 260);
     thump(G, t, 85, 32, 0.35, 0.9 * near, pan, 900);
     noiseHit(G, t, 0.09, 1400, 0.8, 0.5 * near, pan, 4500);
     const s = ctx.createBufferSource(); s.buffer = G.noise; s.loop = true;
@@ -411,7 +527,7 @@
     sRocketFlight(G, t + 0.15, dist, pan, 1.0 + Math.min(0.5, dist / 800));
   }
   function sFlak(G, t, dist, pan) { // the "crump": dull boom, then a short crackle of fragments
-    const near = 1 / (1 + dist / 220);
+    const near = DM ? 1 : 1 / (1 + dist / 220);
     if (dist < 90) { thump(G, t, 120, 35, 0.5, 1.2 * (1 - dist / 90) + 0.3, pan, 2500); noiseHit(G, t, 0.12, 1800, 0.7, 0.9 * (1 - dist / 90), pan, 5000); } // close: a hard, sharp WHAM
     thump(G, t, 55, 25, 0.7, 0.8 * near, pan, 500);
     noiseHit(G, t, 0.7, 180, 0.6, 0.7 * near, pan, 700, 0.006);
@@ -458,7 +574,7 @@
   }
   // 1.4.1: under the canopy — the wind fades as we slow and settle, the box's drone recedes, far-off flak thumps
   function sFarFlak(G, t, dist, pan) { // a distant flak burst heard from the chute: a soft low "whump", no crackle
-    const near = 1 / (1 + dist / 400);
+    const near = DM ? 1 : 1 / (1 + dist / 400);
     thump(G, t, 48 + Math.random() * 10, 22, 0.9 + Math.random() * 0.4, 0.55 * near, pan, 260);
     noiseHit(G, t + 0.02, 1.1, 140, 0.5, 0.35 * near, pan, 320, 0.03);
   }
@@ -483,10 +599,10 @@
   function restoreGraph(G, t) {
     for (const E of G.eng) {
       E.saw.frequency.cancelScheduledValues(t); E.buzz.frequency.cancelScheduledValues(t); E.g.gain.cancelScheduledValues(t);
-      E.saw.frequency.setValueAtTime(E.f0, t); E.buzz.frequency.setValueAtTime(E.f0 * 3.87, t); E.g.gain.setValueAtTime(E.level, t);
+      E.saw.frequency.setValueAtTime(E.f0, t); E.buzz.frequency.setValueAtTime(E.f0 * E.kb, t); E.g.gain.setValueAtTime(E.level, t);
       E.state = "run"; E.sput = 0;
     }
-    for (const [p, v] of [[G.busE.gain, 0.24], [G.wind.gain, 0.045], [G.windBP.frequency, 700], [G.rumble.gain, 0.16], [G.chute.gain, 0], [G.chuteFlap.gain, 0], [G.distDrone.gain, 0]]) { p.cancelScheduledValues(t); p.setValueAtTime(v, t); }
+    for (const [p, v] of [[G.holeWind.gain, 0], [G.busE.gain, 0.24], [G.wind.gain, 0.045], [G.windBP.frequency, 700], [G.rumble.gain, 0.16], [G.chute.gain, 0], [G.chuteFlap.gain, 0], [G.distDrone.gain, 0]]) { p.cancelScheduledValues(t); p.setValueAtTime(v, t); }
   }
   function sWhoosh(G, t, pan0, pan1, gain, closing, dur) { // fly-by: noise sweep + engine buzz with doppler
     const ctx = G.ctx;
@@ -511,8 +627,8 @@
     if (st === "out" && E.state !== "out") {
       E.state = "out"; count("engineOut");
       E.saw.frequency.cancelScheduledValues(t); E.buzz.frequency.cancelScheduledValues(t);
-      E.saw.frequency.setValueAtTime(E.f0, t); E.saw.frequency.exponentialRampToValueAtTime(6, t + 7);
-      E.buzz.frequency.setValueAtTime(E.f0 * 3.87, t); E.buzz.frequency.exponentialRampToValueAtTime(20, t + 7);
+      E.saw.frequency.setValueAtTime(E.f0, t); E.saw.frequency.exponentialRampToValueAtTime(7, t + 7);
+      E.buzz.frequency.setValueAtTime(E.f0 * E.kb, t); E.buzz.frequency.exponentialRampToValueAtTime(20, t + 7);
       // a few last coughs, then silence
       E.g.gain.cancelScheduledValues(t); E.g.gain.setValueAtTime(E.level, t);
       for (let k = 0; k < 6; k++) { const tt = t + 0.3 + k * 0.55; E.g.gain.setValueAtTime(0.02, tt); E.g.gain.setValueAtTime(E.level * (0.9 - k * 0.12), tt + 0.12); }
@@ -535,7 +651,7 @@
   function ok() { return !!(ctx && G && ctx.state === "running") && !muted; }
   function panOf(x, y, z) { const dx = x - L.cx, dy = y - L.cy, dz = z - L.cz, d = Math.hypot(dx, dy, dz) || 1; return { d, pan: (dx * L.rx + dy * L.ry + dz * L.rz) / d }; }
   const API = {
-    stats,
+    stats, distTable: () => DIST_TABLE.map((r) => ({ d: r.d, rows: r.rows.map((x) => ({ src: x.src, fire: x.fire, delay: +x.delay.toFixed(3), gain: +x.gain.toFixed(3), lp: Math.round(x.lp) })) })),
     unlock() {
       try {
         if (!AC) return;
@@ -551,10 +667,14 @@
         const t = ctx.currentTime;
         Object.assign(L, s.listener || {});
         G.master.gain.setTargetAtTime(s.playing ? 0.8 : 0.35, t, 0.5);
+        { const h = s.down ? 0 : Math.max(0, s.holes || 0), k = Math.sqrt(h); // 1.5.4 wind through the holes: level ∝ √holes (cap 0.17), pitch & flutter rise with holes
+          G.holeWind.gain.setTargetAtTime(h > 0 ? Math.min(0.17, 0.02 + 0.02 * k) : 0, t, 0.6);
+          G.holeBP.frequency.setTargetAtTime(700 + 130 * Math.min(k, 8), t, 0.8);
+          G.holeFlutter.gain.setTargetAtTime(h > 0 ? Math.min(0.17, 0.02 + 0.02 * k) * Math.min(0.5, 0.1 + 0.05 * k) : 0, t, 0.6); }
         if (s.down === "chute") { // under the canopy: the battle recedes — wind fades, the box's drone recedes, far flak
           const k = 1 / (1 + (s.boxDist || 0) / 350);
           chuteBed(G, t, s.chuteT || 0, s.boxDist || 0);
-          if (t - lastDistGun > 0.5 + Math.random() * 1.2 && k > 0.18) { lastDistGun = t; const d = (s.boxDist || 300) + Math.random() * 200; for (let q = 0; q < 3; q++) sGun(G, t + q * 0.07, d, (Math.random() - 0.5) * 0.6, false); }
+          if (t - lastDistGun > 0.5 + Math.random() * 1.2 && k > 0.18) { lastDistGun = t; const d = (s.boxDist || 300) + Math.random() * 200; for (let q = 0; q < 3; q++) withDM(d, 260, () => sGun(G, t + q * 0.07, d, (Math.random() - 0.5) * 0.6, false)); }
           if (t > nextFarFlak) { nextFarFlak = t + 2.2 + Math.random() * 4.5; sFarFlak(G, t, 700 + Math.random() * 1400, (Math.random() - 0.5) * 1.4); count("farFlak"); }
           return;
         }
@@ -573,13 +693,21 @@
         }
       } catch (e) { stats.errors++; stats.lastError = String(e); }
     },
-    gun(x, y, z) { // another Fortress's gunner fires a round (throttled, attenuated, panned)
+    gun(x, y, z) { // another Fortress's gunner fires a round (throttled, attenuated, panned) — 1.5.4: delayed by d / speed of sound
       if (!ok()) return;
       const t = ctx.currentTime; if (t - budget.t > 0.1) { budget.t = t; budget.n = 0; }
-      const q = panOf(x, y, z); if (q.d > 900) return;
+      const q = panOf(x, y, z); if (q.d > 2600) return;
       const cap = q.d < 80 ? 4 : 2; if (budget.n >= cap) return; budget.n++;
-      sGun(G, t + Math.min(0.5, q.d / 230) * 0.3 + Math.random() * 0.04, q.d * 1.25, q.pan, false); // 1.4.0: placed further off count("boxGun");
+      withDM(q.d, 260, (m) => sGun(G, t + m.delay + Math.random() * 0.02, q.d, q.pan, false)); count("boxGun");
     },
+    p51Gun(x, y, z) { // a P-51's six .50s: same gun, but allied escorts are throttled harder
+      if (!ok()) return;
+      const t = ctx.currentTime; if (t - budget.t > 0.1) { budget.t = t; budget.n = 0; }
+      const q = panOf(x, y, z); if (q.d > 2600) return;
+      const cap = q.d < 80 ? 4 : 2; if (budget.n >= cap) return; budget.n++;
+      withDM(q.d, 300, (m) => sGun(G, t + m.delay + Math.random() * 0.02, q.d, q.pan, false)); count("p51Gun");
+    },
+    intercom() { if (!ok()) return; sIntercom(G, ctx.currentTime); count("intercom"); },
     ownShot(side) {
       if (!ok()) return;
       const t = ctx.currentTime + 0.003 + Math.random() * 0.006; // tiny timing jitter: no machine-perfect cadence
@@ -594,7 +722,7 @@
     },
     rocketImpact(onShip, x, y, z) { // 1.5.3: a WGr.21 detonating on / near our airframe (onShip) or somewhere in the box
       if (!ok()) return; const t = ctx.currentTime;
-      if (onShip) sRocketImpact(G, t, 8, (Math.random() - 0.5) * 0.8); else { const q = panOf(x, y, z); sRocketImpact(G, t + Math.min(1.5, q.d / 340), q.d, q.pan); }
+      if (onShip) sRocketImpact(G, t, 8, (Math.random() - 0.5) * 0.8); else { const q = panOf(x, y, z); withDM(q.d, 650, (m) => sRocketImpact(G, t + m.delay, q.d, q.pan)); }
       count("rocketImpact");
     },
     structure(kind, pan) { // 1.5.3: engine | creak | wind | fire | decomp | wingOff | tailOff
@@ -604,10 +732,10 @@
       else if (kind === "wingOff") sBreakOff(G, t, "wing"); else if (kind === "tailOff") sBreakOff(G, t, "tail");
       count("struct_" + kind);
     },
-    enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d > 1200) return; sEnemyGun(G, ctx.currentTime + q.d / 230 * 0.3, q.d, q.pan); count("enemyGun"); },
-    boom(x, y, z, big) { if (!ok()) return; const q = panOf(x, y, z); sBoom(G, ctx.currentTime + Math.min(1.5, q.d / 230), q.d, q.pan, big); count("boom"); },
-    rocket(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); sRocket(G, ctx.currentTime + Math.min(1.5, q.d / 340), q.d, q.pan); count("rocket"); },
-    flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); sFlak2(G, ctx.currentTime + Math.min(2, q.d / 230), q.d, q.pan); count("flak"); },
+    enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d > 2600) return; withDM(q.d, 320, (m) => sEnemyGun(G, ctx.currentTime + m.delay, q.d, q.pan)); count("enemyGun"); },
+    boom(x, y, z, big) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, big ? 900 : 650, (m) => sBoom(G, ctx.currentTime + m.delay, q.d, q.pan, big)); count("boom"); },
+    rocket(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 420, (m) => sRocket(G, ctx.currentTime + m.delay, q.d, q.pan)); count("rocket"); },
+    flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 700, (m) => sFlak2(G, ctx.currentTime + m.delay, q.d, q.pan)); count("flak"); },
     fallStart(cause) { if (!ok()) return; sFallStart(G, ctx.currentTime); count("fall"); },
     bell() { if (!ok()) return; sBell(G, ctx.currentTime); count("bell"); },
     bail() { if (!ok()) return; sBail(G, ctx.currentTime); count("bail"); },
@@ -618,6 +746,8 @@
     reset() { muted = false; passes.clear(); if (ctx && G) restoreGraph(G, ctx.currentTime); count("reset"); },
     // offline demo: the same synth graph rendered to a buffer (verification + a listenable sample)
     renderSample(sec, part) {
+      if (part === "dist") return renderDist(sec);
+      if (part === "clip154") return renderClip154(sec);
       if (part === "bailout") return renderBailout(sec);
       if (part === "hits141") return renderHits141(sec);
       if (part === "gun153" || part === "gun153x") return renderGun153(sec, part === "gun153x"); if (part === "hits153") return renderHits153(sec); if (part === "hits153x") return renderHits153(sec, true);
@@ -654,6 +784,36 @@
       return oc.startRendering();
     },
   };
+  // 1.5.4 offline distance test: the same .50 burst, flak and 20 mm at 100/500/1500/4000 u (each section 8 s apart); the table of model values is returned in DIST_TABLE
+  const DIST_D = [100, 500, 1500, 4000], DIST_TABLE = [];
+  function renderDist(sec) {
+    sec = sec || 86; DIST_TABLE.length = 0;
+    const oc = new OAC(2, Math.floor(44100 * sec), 44100), g = Graph(oc); g.master.gain.value = 0.12; // low master so the compressor/clipper stay out of the way and the level ratios between distances are readable
+    for (const p of [g.busE.gain, g.wind.gain, g.rumble.gain, g.distDrone.gain]) p.value = 0; // beds off: only the test sources are heard
+    DIST_D.forEach((d, i) => {
+      const rows = [];
+      [["gun", 260], ["flak", 700], ["cannon", 320]].forEach(([src, ref], j) => {
+        const slot = 1 + (i * 3 + j) * 7, fire = slot + 1; // each source in its own 7 s slot: it "fires" at slot+1 s; an own-gun click marks the slot start (own guns are never delayed)
+        sGun(g, slot, 0, 0, true);
+        withDM(d, ref, (m) => {
+          rows.push({ src, fire, ...m });
+          if (src === "gun") for (let k = 0; k < 6; k++) sGun(g, fire + m.delay + k * 0.07, d, 0.5, false);
+          else if (src === "flak") sFlak2(g, fire + m.delay, d, -0.5); else sEnemyGun(g, fire + m.delay, d, 0.2);
+        });
+      });
+      DIST_TABLE.push({ d, rows });
+    });
+    return oc.startRendering();
+  }
+  // 1.5.4 clip-like demo: ~16 s of what the user's recording is (our own .50s streaming, flak thumps, contrail ambience) + the new holes bed and engine bed
+  function renderClip154(sec) {
+    sec = sec || 14;
+    const oc = new OAC(2, Math.floor(44100 * sec), 44100), g = Graph(oc); g.master.gain.value = 0.8;
+    let t = 0.3; while (t < sec - 0.3) { sGun(g, t + 0.003 + Math.random() * 0.006, 0, (Math.random() < 0.5 ? 0.25 : -0.25), true); t += 0.052 + Math.random() * 0.05; }
+    for (const [ft, d, p] of [[2.1, 300, -0.4], [5.0, 160, 0.5], [8.5, 420, -0.2], [11.2, 220, 0.3]]) withDM(d, 700, (m) => sFlak2(g, ft + m.delay, d, p));
+    g.holeWind.gain.setValueAtTime(0.0, 0); g.holeWind.gain.linearRampToValueAtTime(0.16, sec * 0.95);
+    return oc.startRendering();
+  }
   function renderBailout(sec) { // the bail-out video's soundtrack: t=0 shot down … fall 8 s, chute 15 s
     sec = sec || 23;
     const oc = new OAC(2, Math.floor(44100 * sec), 44100);

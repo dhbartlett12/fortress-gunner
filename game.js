@@ -163,7 +163,7 @@
     open2Km: 5.5,
     fighterHp: 26, fighterHp190: 34, fighterHpP51: 12, quiet: 18, // 1.5.1: tougher fighters (a 109 takes ~6 hull hits), 18 s quiet opening
      // 1.5.0 (spec §5 phone shortcut): single pool per fighter
-    p51Leash: 520, p51HitDmg: 18, // 1.5.0: Mustang leash (u from the box centre), .50 damage per connecting Mustang burst
+    p51Leash: 2300, p51TickHit: 0.075, p51HitDmg: 18, // 1.5.0: Mustang leash (u from the box centre), .50 damage per connecting Mustang burst
     aim109: [6.5, 4.5], aim190: [30, 13], p51Jit: 1, p190Player: 0.06, // aim error (mrad): per-burst bias σ, per-round σ
     burst109: [0.8, 1.6], burst190: [0.9, 1.5], // trigger time per burst (s)
                // 1.4.0: 8 → 10 — every kill is earned //            // .50 hits to down a 109 (1.3.8: 5 → 8 — one gunner no longer shreds a 109 with a single burst)
@@ -388,7 +388,7 @@
       else if (!q.out && q.hp < 26) e.fire = Math.max(e.fire, 0.14);
     }
     for (let side = 0; side < 2; side++) if (sd.fuel[side].fire) { const e = s.engines[side === 0 ? 3 : 0]; e.fire = Math.max(e.fire, 0.85); }
-    if (s === bomber ? !bomber.dead : !s.spiraling) s.health = Math.max(0.5, FC.health(sd));
+    if (s === bomber ? !bomber.dead : !s.spiraling) s.health = Math.max(s === bomber && PLAYER_FLOOR ? 1 : 0.5, FC.health(sd));
     if (s !== bomber) { // dead side's wing drops a few degrees
       const left = (s.engines[0].out ? 1 : 0) + (s.engines[1].out ? 1 : 0), right = (s.engines[2].out ? 1 : 0) + (s.engines[3].out ? 1 : 0);
       s.listTarget = (right - left) * 0.035;
@@ -398,6 +398,7 @@
     const heavy = gun === "mg151" || gun === "mk108" || gun === "wgr21";
     rumble = 1; gunner.shake = Math.max(gunner.shake, heavy ? 1.45 : 0.55);
     bomber.flash = 1.0;
+    if (heavy) { addKick('cannon', gun === 'wgr21' ? 0.3 : 0.17); cabinHit(gun === 'wgr21' ? 0.9 : 0.55, gun); } else { addKick('mg', 0.04); fx154.accum += 0.16; if (fx154.accum > 0.55) { fx154.accum = 0.1; cabinHit(0.3, gun); } } // 1.5.4 shaped kick + cabin specks / sparks / vignette
     for (let i = 0, n = heavy ? 4 : 2; i < n; i++) { // torn-skin chips blown past the turret by the slipstream
       const a = rand(0, TAU), d = rand(3, 9);
       particles.push({ x: CAM.x + Math.cos(a) * d, y: CAM.y + rand(-1, 4), z: CAM.z + Math.sin(a) * d * 0.6 + rand(0, 5), vx: rand(-4, 4), vy: rand(0, 7), vz: rand(-30, -12), life: rand(0.35, 0.7), max: 0.7, kind: "chip", r: rand(0.8, 1.8) });
@@ -452,6 +453,7 @@
   function destroyShip(s, why) {
     const src = s.lastSrc || "109";
     if (s === bomber) {
+      if (PLAYER_FLOOR) { if (!s.out) leaveBoxQuiet(s, why); s.health = Math.max(1, s.health); return; } // 1.5.4 beta: the player's ship cannot be destroyed
       { const dk = pickDeath(s, why); s.deathKind = dk.kind; s.deathSide = dk.side || 0; logDeath("PLAYER", dk); }
       if (!s.out) leaveBoxQuiet(s, why);
       playerShotDown(src === "own" ? "own" : src === "flak" ? "flak" : src);
@@ -567,7 +569,8 @@
     if (World3D && World3D.addHole) {
       let ray = h.ray;
       if (!ray && World3D.rayShip && h.slot != null) { const dx = h.x - CAM.x, dy = h.y - CAM.y, dz = h.z - CAM.z, dl = Math.hypot(dx, dy, dz) || 1; ray = World3D.rayShip(h.slot, h.x - dx / dl * 3, h.y - dy / dl * 3, h.z - dz / dl * 3, h.x + dx / dl * 3, h.y + dy / dl * 3, h.z + dz / dl * 3, friendlyRayPose(f)); }
-      if (ray) { World3D.addHole(h.slot, ray, 0.16); h.x = ray.x; h.y = ray.y; h.z = ray.z; }
+      if (ray) { World3D.addHole(h.slot, ray, 0.16); h.x = ray.x; h.y = ray.y; h.z = ray.z; f.holeN = (f.holeN || 0) + 1; if (World3D.addTear && f.holeN % 8 === 0) { fx154.n.tears++; World3D.addTear(h.slot, ray, 0.45 + Math.min(0.7, f.holeN * 0.012)); } }
+      hitCluster(h.x, h.y, h.z, 0, 0, 0, false, 1);
     }
     for (let i = 0; i < 5; i++) particles.push({
       x: h.x, y: h.y, z: h.z, vx: rand(-14, 14), vy: rand(-6, 12), vz: rand(-14, 14),
@@ -824,7 +827,7 @@
     shipMiss: [12, 22],
     fireMax: 430, fireOpen: 700, fireMin: 45,
     floorY: -650,
-    v190: 520 * MPH, v190Cap: 550 * MPH, // 1.5.3: 440→500 mph run-in (dive attack; closing 220 mph on the box instead of 160)
+    v190: 540 * MPH, v190Cap: 580 * MPH, // 1.5.3: 440→500 mph run-in (dive attack; closing 220 mph on the box instead of 160)
     v190old: 440 * MPH, v190CapOld: 460 * MPH, // 1.5.1: 190 dive/zoom run-in 465 mph (closing 185 mph on the 280 mph box)
     alt15k: 4572 * U_PER_M,                // 15,000 ft above the box (109s at ~35,000 ft)
   };
@@ -1115,6 +1118,7 @@
     e.phase = "attack"; e.phaseT = 0; e.vT = FAI.vFull; e.invert = false;
     e.fireWin = TAC.fire[mode] || TAC.fire.headon;
     e.breakR = (TAC.brk[mode] || 120) * rand(0.9, 1.1);
+    if (is190) { e.fireWin = [rand(290, 340), 80]; e.breakR = rand(74, 96); if (mission && !mission.called190) { mission.called190 = true; pushCallout("190s " + clockLabel(e.x, e.z) + " HIGH — DIVING!", 1.8, true); sfxIntercom(); } } // 1.5.4: the hammer opens at ~400 yd and presses to ~100 yd
     if (e.presser && !is190) e.breakR = rand(TAC.presserBrk[0], TAC.presserBrk[1]);
     const r = Math.random();
     e.breakType = is190 ? "under" : r < 0.55 ? "splitS" : "under"; // 109: Split-S or under the box — no lazy pull-up in front of the top turret
@@ -1129,7 +1133,8 @@
     }
   }
   // setup point for a pass from ahead: head-on (12 high) or front quarter (10:30 / 1:30 high)
-  function frontSetup(mode, side) {
+  function frontSetup(mode, side, type) {
+    if (type === "190") return { x: BOX_C.x + side * 420, y: BOX_C.y + 360, z: BOX_C.z + 1500 }; // 1.5.4: 190s dive through the front quarter at full speed
     if (mode === "fq") return { x: BOX_C.x + side * 380, y: BOX_C.y + 440, z: BOX_C.z + 1250 }; // 1.3.6: ~11 o'clock high (1.4.1: 1700 → 1250 ahead, closer in)
     return { x: BOX_C.x + side * 90, y: BOX_C.y + 240, z: BOX_C.z + 1300 };
   }
@@ -1201,6 +1206,8 @@
     const isP = s === bomber, slot = isP ? "own" : (s.slot != null ? s.slot : 0);
     const ray = World3D.rayShip(slot, ax, ay, az, bx, by, bz, isP ? ownRayPose(ownPose()) : friendlyRayPose(s));
     if (ray) World3D.addHole(slot, ray, size);
+    s.holeN = (s.holeN || 0) + 1;
+    if (ray && World3D.addTear && (size >= 0.19 ? Math.random() < 0.5 : s.holeN % 9 === 0)) { fx154.n.tears++; World3D.addTear(slot, ray, (size >= 0.19 ? 0.7 : 0.45) + Math.min(0.7, s.holeN * 0.012)); } // 1.5.4: torn skin with exposed ribs, bigger as the damage piles up
   }
   function fighterFireTick(e, dt) {
     const b = e.burst; if (!b) return;
@@ -1211,7 +1218,7 @@
     const a = frameAngles(ship), c = FC.boxCenter(b.aimId), aw = fromShipA(a, c[0], c[1], c[2]);
     const sx = e.uy * e.hz - e.uz * e.hy, sy = e.uz * e.hx - e.ux * e.hz, sz = e.ux * e.hy - e.uy * e.hx; // port side
     const set = gunSetOf(e), isP = ship === bomber, src = e.type;
-    b.snd -= dt; if (b.snd <= 0) { b.snd = 0.14; if (window.FGAudio) window.FGAudio.enemyGun(e.x, e.y, e.z); }
+    e.mf = 0.1; b.snd -= dt; if (b.snd <= 0) { b.snd = 0.14; if (window.FGAudio) window.FGAudio.enemyGun(e.x, e.y, e.z); }
     for (let gi = 0; gi < set.length; gi++) {
       const G = set[gi]; b.acc[gi] += G.rate * dt;
       while (b.acc[gi] >= 1) {
@@ -1244,6 +1251,7 @@
         if (mission) mission.gunHits = (mission.gunHits || 0) + 1;
         if (Math.random() < 0.7) for (let i = 0; i < 2; i++) particles.push({ x: h.x, y: h.y, z: h.z, vx: rand(-9, 9), vy: rand(-3, 9), vz: rand(-9, 9), life: rand(0.1, 0.25), max: 0.25, kind: "spark", r: rand(1, 2.2) });
         if (Math.random() < 0.55) particles.push({ x: h.x, y: h.y, z: h.z, vx: rand(-8, 8), vy: rand(2, 12), vz: rand(-8, 8), life: rand(0.4, 0.8), max: 0.8, kind: "chip", r: rand(0.9, 1.8) });
+        hitCluster(h.x, h.y, h.z, 0, 0, 0, G.g === "mk108" || G.g === "mg151", h.s === bomber ? 0.3 : 1);
         holeAt(h.s, mx, my, mz, mx + fx * (range + 70), my + fy * (range + 70), mz + fz * (range + 70), G.g === "mk108" ? 0.3 : G.g === "mg151" ? 0.2 : 0.13);
       }
     }
@@ -1277,7 +1285,7 @@
     const mate = (e.slot < 2 ? [F[0], F[1]] : [F[2], F[3]]).find((q) => ok(q) && q !== e);
     return { flLead, elLead, mate };
   }
-  function p51PickThreat(e) {
+  function p51PickThreatOld(e) {
     let best = null, bs = -1e9;
     const H = p51Home(e);
     for (const q of enemies) {
@@ -1297,6 +1305,85 @@
       if (s > bs) { bs = s; best = q; }
     }
     return best;
+  }
+
+  // ===== 1.5.4 MUSTANGS ENGAGE — every pilot hunts; a bounce is a chase that ends in a visible 6-gun burst, not a fly-by =====
+  function p51PickThreat(e, wide) { // the nearest German a Mustang can actually catch: inside the 2,300 u escort umbrella, not already shared by two
+    let best = null, bs = -1e9;
+    const H = p51Home(e);
+    for (const q of enemies) {
+      if (!q.alive || q.team === "allied" || q.phase === "debug" || q.hold || q.type === "p51") continue;
+      if ((q.p51n || 0) >= 2) continue;
+      const dBox = Math.hypot(q.x - H.x, q.y - H.y, q.z - H.z);
+      if (dBox > TUNE.p51Leash + 350) continue;
+      if (q.y < H.y - 520) continue;
+      const de = Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z);
+      if (de > (wide ? 3600 : 2600)) continue;
+      const ph = q.phase;
+      let sc = 1;
+      if (ph === "attack" || ph === "stack" || ph === "arrive" || ph === "inbound") sc = 3;       // pressing a run on the box: the threat
+      else if (ph === "break" || ph === "extend" || ph === "rollin" || ph === "setup") sc = 2;     // just passed / turning in
+      else if (ph === "duel") sc = 0.5;
+      const s = sc * 700 - de + (q.hp < q.maxHp ? 250 : 0) + (q.r6 ? 300 : 0) + (q.p51n ? -200 : 0) - Math.max(0, dBox - 1300) * 0.4;
+      if (s > bs) { bs = s; best = q; }
+    }
+    return best;
+  }
+  const P51_TR = { x: [-2.2, 2.2], span: 5.4 };
+  function p51Tick(e, T, range, hm) { // one 70 ms slice of a six-gun burst: a pair of tracers, a muzzle flash, and the hit roll
+    const hl = Math.hypot(e.hx, e.hz) || 1, sx = e.hz / hl, sz = -e.hx / hl; // right wing direction
+    const dx = T.x - e.x, dy = T.y - e.y, dz = T.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
+    const lead = clamp(dl / BULLET_UPS, 0, 1.0), ax = T.x + T.vx * lead * 0.5 - e.x, ay = T.y + T.vy * lead * 0.5 - e.y, az = T.z + T.vz * lead * 0.5 - e.z, al = Math.hypot(ax, ay, az) || 1;
+    for (let i = 0; i < 2; i++) {
+      e.gunI = ((e.gunI || 0) + 1) % 6;
+      const wing = e.gunI < 3 ? -1 : 1, off = (e.gunI % 3) * 1.15 + 2.6; // three guns a side, 2.6–4.9 u out from the centreline
+      tracers.push({ x: e.x + e.hx * 4 + sx * wing * off, y: e.y + e.hy * 4 - 0.4, z: e.z + e.hz * 4 + sz * wing * off,
+        vx: ax / al * BULLET_UPS + e.vx + rand(-5, 5), vy: ay / al * BULLET_UPS + e.vy + rand(-5, 5), vz: az / al * BULLET_UPS + e.vz + rand(-5, 5),
+        life: Math.min(1.3, dl / 380 + 0.35), maxLife: 1.3, trav: 0, team: "allied", p51: true, delay: i * 0.03 });
+    }
+    e.mf = 0.1; e.mfI = (e.mfI || 0) + 1;
+    if (window.FGAudio && (e.gunI & 1) === 0) window.FGAudio.p51Gun ? window.FGAudio.p51Gun(e.x, e.y, e.z) : window.FGAudio.gun(e.x, e.y, e.z);
+    const rf = FC.rangeFactor(FC.GUNS.m2, FC.toYd(range));
+    const bankPen = clamp(1 - Math.abs(T.gLoad || 1) * 0.06, 0.6, 1);
+    const p = TUNE.p51TickHit * rf * bankPen * (range < 150 ? 1.2 : 1) * (hm || 1);
+    if (Math.random() > p) return false;
+    const L = mission ? (mission.hitLog || (mission.hitLog = {})) : {};
+    const m = L["p51:m2"] || (L["p51:m2"] = {});
+    const r = Math.random();
+    const part = r < 0.14 ? "cockpit" : r < 0.34 ? "engine" : r < 0.48 ? "wingroot" : r < 0.58 ? "tail" : r < 0.78 ? "wing" : "hull";
+    m[part] = (m[part] || 0) + 1;
+    const dmg = TUNE.p51HitDmg * 0.5 * FC.PART_MUL[part] * (T.type === "190" ? 0.82 : 1) * (T.sturm && (part === "engine" || part === "hull" || part === "cockpit") ? 0.7 : 1);
+    T.hp -= dmg; T.mHits = (T.mHits || 0) + dmg; T.flash = 1; T.smoke = Math.min(1, (T.smoke || 0) + 0.2);
+    spawnHit(T, null);
+    if (mission) mission.p51Hits = (mission.p51Hits || 0) + 1;
+    if (T.hp <= 0) { killEnemy(T, "p51"); return true; }
+    if (T.phase === "attack" && Math.random() < 0.3) { // rattled: spoils the run, breaks
+      T.burst = null; T.burstsLeft = 0; T.phase = "break"; T.phaseT = 0; T.brkSide = Math.random() < 0.5 ? -1 : 1;
+      T.breakType = T.type === "190" ? "under" : "splitS"; T.invert = T.breakType === "splitS"; if (T.opening) T.opening = false;
+      if (T.ps) T.ps.drive = true;
+      if (mission && T.type === "190" && !T.p51drove) { T.p51drove = true; mission.n190drove = (mission.n190drove || 0) + 1; }
+      if (mission) mission.p51Drove = (mission.p51Drove || 0) + 1;
+    }
+    return true;
+  }
+  // Returns true while the guns are firing. A burst lasts 0.45–0.95 s (≈ 40 rounds a gun-pair), then a short gap; gun-camera rules: inside ~370 u, within a few degrees.
+  function p51Fire(e, T, range, cosA, dt, hm) {
+    const near = Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z) < 1500;
+    if (!e.pbOn) {
+      e.pbGap = (e.pbGap || 0) - dt;
+      if (e.pbGap <= 0 && range < 400 && range > 40 && cosA > (range < 160 ? 0.93 : 0.955)) {
+        e.pbOn = true; e.pbT = rand(0.45, 0.95); e.pbAcc = 0; e.shot = (e.shot || 0) + 1;
+        if (mission) { mission.p51Bursts = (mission.p51Bursts || 0) + 1; if (near) mission.p51BurstsNear = (mission.p51BurstsNear || 0) + 1; }
+        if (T.phase !== "attack" && T.phase !== "stack") dfBounced(T, e);
+      }
+      return false;
+    }
+    e.pbT -= dt;
+    if (e.pbT <= 0 || range > 480 || range < 25 || cosA < 0.9) { e.pbOn = false; e.pbGap = rand(0.18, 0.45); return false; }
+    e.pbAcc += dt;
+    while (e.pbAcc >= 0.07) { e.pbAcc -= 0.07; if (!T.alive) break; p51Tick(e, T, range, hm); }
+    if (mission) { mission.p51FireSec = (mission.p51FireSec || 0) + dt; if (near) mission.p51FireSecNear = (mission.p51FireSecNear || 0) + dt; }
+    return true;
   }
   function p51Burst(e, T, range, mul) { // six .50s, ~0.25 s: connects with a probability that falls with range and bank
     const rf = FC.rangeFactor(FC.GUNS.m2, FC.toYd(range));
@@ -1342,24 +1429,29 @@
         if (!L) { endIntercept(e); return; }
         p51Cruise(e, p51Follow(L, 45, 70, 8), dt, L.V + 30 * MPH, 2.6); return;
       }
-      if (!T || !T.alive || T.hold || e.phaseT > 14 || Math.hypot(e.x - H.x, e.y - H.y, e.z - H.z) > TUNE.p51Leash + 980) { if (mission) { if (!T || !T.alive || T.hold) mission.p51EndLost = (mission.p51EndLost || 0) + 1; else if (e.phaseT > 14) mission.p51EndT = (mission.p51EndT || 0) + 1; else mission.p51EndLeash = (mission.p51EndLeash || 0) + 1; } endIntercept(e); return; }
+      if (!T || !T.alive || T.hold || e.phaseT > 22 || Math.hypot(e.x - H.x, e.y - H.y, e.z - H.z) > TUNE.p51Leash + 900) { if (mission) { if (!T || !T.alive || T.hold) mission.p51EndLost = (mission.p51EndLost || 0) + 1; else if (e.phaseT > 22) mission.p51EndT = (mission.p51EndT || 0) + 1; else mission.p51EndLeash = (mission.p51EndLeash || 0) + 1; } endIntercept(e); return; }
       const rx = T.x - e.x, ry = T.y - e.y, rz = T.z - e.z, range = Math.hypot(rx, ry, rz) || 1;
-      if (T.y < H.y - 330 || (T.hy < -0.5 && range > 260 && T.y < H.y - 120)) { if (mission) mission.p51EndDive = (mission.p51EndDive || 0) + 1; endIntercept(e); return; } // he dived away: let him go
+      if (T.y < H.y - 900 || (T.hy < -0.6 && range > 700 && T.y < H.y - 600)) { if (mission) mission.p51EndDive = (mission.p51EndDive || 0) + 1; endIntercept(e); return; } // he dived away: let him go
       const tL = clamp(range / Math.max(120, e.speed || 150), 0, 1.4);
       const lx = T.x + T.vx * tL * 0.9, ly = T.y + T.vy * tL * 0.9 + clamp(range * 0.1, 0, 55) * (e.phaseT < 4 ? 1 : 0.3), lz = T.z + T.vz * tL * 0.9; // bounce from above and astern
-      e.vT = 470 * MPH; e.vCap = 495 * MPH; // a P-51D in a dive is good for 450+ mph (VNE 505)
+      e.vT = 505 * MPH; e.vCap = 525 * MPH; // 1.5.4: a P-51D in a dive is good for 450–500 mph (VNE 505); needs it to run down a 190/109
       d = airDirTo(e, lx, ly, lz); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, 1.9);
       const vb = Math.hypot(e.vx, e.vy, e.vz) || 1;
       const cosA = (rx * e.vx + ry * e.vy + rz * e.vz) / (range * vb);
-      e.fireCd -= dt;
       e.minR = Math.min(e.minR || 1e9, range);
-      if (e.fireCd <= 0 && range < 320 && range > 60 && cosA > (range < 160 ? 0.94 : 0.965)) { e.fireCd = rand(0.22, 0.34); e.shot = (e.shot || 0) + 1; if (mission) mission.p51Bursts = (mission.p51Bursts || 0) + 1; p51Burst(e, T, range); if (T.phase !== "attack" && T.phase !== "stack") dfBounced(T, e); } // ~400 yd closing to ~115 yd
-      const passed = e.minR < 150 && range > e.minR + 45;
+      p51Fire(e, T, range, cosA, dt, 1);
+      if (mission && range < 900 && Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z) < 1500 && mission.fightT !== mission.t) { mission.fightT = mission.t; mission.p51FightNearSec = (mission.p51FightNearSec || 0) + dt; }
+      if (mission && range < 420 && cosA > 0.9) mission.p51FireWinSec = (mission.p51FireWinSec || 0) + dt / 3; // seconds with a German in the gun window (averaged per Mustang)
+      const passed = e.minR < 150 && range > e.minR + 45 && range < 400;
       const pressing = T.phase === "attack" || T.phase === "stack"; // 1.5.3: stay on a 190 that is still pressing his run — he can't shake us until he breaks
-      if ((range < 55 || passed) && !(pressing && e.phaseT < 12)) {
-        e.pass = (e.pass || 0) + 1; if (mission) mission.p51EndPass = (mission.p51EndPass || 0) + 1;
-        if (dfCan(T) && Math.random() < DF.dfProb && T.y > BOX_C.y - 380) { e.duelRole = "att"; startDuel(e, T, "pass"); } else endIntercept(e);
+      if (range > 330) e.passArm = true;
+      if ((range < 55 || passed) && e.passArm && !(pressing && e.phaseT < 16)) {
+        e.pass = (e.pass || 0) + 1; e.passArm = false; e.minR = 1e9; if (mission) mission.p51EndPass = (mission.p51EndPass || 0) + 1;
+        if (dfCan(T) && Math.random() < DF.dfProb && T.y > BOX_C.y - 900) { e.duelRole = "att"; startDuel(e, T, "pass"); return; }
+        if (e.pass >= 3) { endIntercept(e); return; } // three passes without a kill: he's gone; back up to station
+        // otherwise carry on: yo-yo high and come around again (the chase continues up to 22 s)
       }
+      if (e.pass && range < 260 && cosA < 0.8) { e.phaseT += dt * 0.5; }
       return;
     }
     if (e.phase === "zoom") { // zoom-climb back to station: one firing pass, then up and away — never follow to the deck
@@ -1380,15 +1472,31 @@
     if (e !== flLead) { const L2 = e === R.elLead ? flLead : (R.elLead || flLead), la = Math.hypot(L2.vx, L2.vy, L2.vz + VF) * 3.5; P = { x: P.x + L2.hx * la, y: P.y + L2.hy * la * 0.5, z: P.z + L2.hz * la }; } // aim ahead of the slot: no overshoot, no hard turns
     if (dist > 250) { nMax = clamp(1.15 + dist / 1800, 1.15, 1.45); vNow = Math.max(vNow, 370 * MPH); }
     vNow = clamp(vNow, 255 * MPH, 400 * MPH);
+    e.sweep = 0;
+    if (mission && mission.t >= e.readyAt && (e === flLead || e === R.elLead)) { // 1.5.4: a flight with nobody to bounce HUNTS — it heads for the nearest German inside the umbrella instead of orbiting its slot
+      let bq = null, bd = 1e9;
+      for (const q of enemies) {
+        if (!q.alive || q.team === "allied" || q.hold || q.phase === "debug" || q.type === "p51") continue;
+        if (Math.hypot(q.x - H.x, q.y - H.y, q.z - H.z) > TUNE.p51Leash + 900) continue;
+        const dq = Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z); if (dq < bd) { bd = dq; bq = q; }
+      }
+      if (bq && bd > 350) {
+        const la = clamp(bd / 400, 0, 4);
+        let sx = bq.x + bq.vx * la, sy = Math.max(bq.y + 80, H.y - 150), sz = bq.z + bq.vz * la;
+        const hx = sx - H.x, hy = sy - H.y, hz = sz - H.z, hh = Math.hypot(hx, hy, hz); if (hh > TUNE.p51Leash - 150) { const k = (TUNE.p51Leash - 150) / hh; sx = H.x + hx * k; sy = H.y + hy * k; sz = H.z + hz * k; }
+        P = { x: sx, y: sy, z: sz }; vNow = 420 * MPH; nMax = 2.4; e.sweep = 1; e.sweepD = Math.round(bd);
+      }
+    }
+    if (e !== flLead && e !== R.elLead) { const L3 = R.elLead || flLead; e.sweep = L3 ? L3.sweep || 0 : 0; } // a wingman flies his leader's sweep
     p51Cruise(e, P, dt, vNow, nMax); e.dbg2 = { dist: Math.round(dist), role: e === flLead ? "FL" : e === R.elLead ? "EL" : "W", nMax: +nMax.toFixed(2) };
     if (mission && dist <= 250) { const c = mission.p51cap || (mission.p51cap = { n: 0, sum: 0, max: 0, over45: 0, over60: 0, rejoin: 0 }), bk = Math.abs(e.bank || 0); c.n++; c.sum += bk; if (bk > c.max) c.max = bk; if (bk > 0.785) c.over45++; if (bk > 1.05) c.over60++; } else if (mission && mission.p51cap) mission.p51cap.rejoin++;
     e.scanT = (e.scanT || 0) - dt;
-    if (e === R.elLead && e.scanT <= 0 && mission && mission.t >= e.readyAt && mission.t >= (e.coolUntil || 0) && (!R.mate || mission.t >= (R.mate.coolUntil || 0))) {
-      e.scanT = rand(0.5, 1.0);
+    if (e.scanT <= 0 && mission && mission.t >= e.readyAt && mission.t >= (e.coolUntil || 0) && (e === R.elLead || e.phaseT > 3)) {
+      e.scanT = rand(0.35, 0.7);
       const th = p51PickThreat(e);
       if (th) {
         const go = (q, delay) => { q.target = th; q.phase = "intercept"; q.phaseT = delay; q.fireCd = 0.4; q.minR = 1e9; q.pass = 0; th.p51n = (th.p51n || 0) + 1; };
-        go(e, 0); if (R.mate && R.mate.phase === "cap") go(R.mate, -0.9);
+        go(e, 0); if (R.mate && R.mate.phase === "cap" && mission.t >= (R.mate.coolUntil || 0)) go(R.mate, -0.9);
         if (th.ps) th.ps.p51 = true;
         if (mission && th.type === "190" && !th.p51seen) { th.p51seen = true; mission.n190seen = (mission.n190seen || 0) + 1; }
         if (mission) { mission.p51Jumps = (mission.p51Jumps || 0) + 1; if (th.type === "190") mission.p51On190 = (mission.p51On190 || 0) + 1; if (!mission.p51Called) { mission.p51Called = true; pushCallout("MUSTANGS HIGH!", 1.8, true); } }
@@ -1397,7 +1505,7 @@
   }
   function endIntercept(e) {
     if (e.target) e.target.p51n = Math.max(0, (e.target.p51n || 0) - 1);
-    e.target = null; e.phase = "zoom"; e.phaseT = 0; e.coolUntil = (mission ? mission.t : elapsed) + (e.shot ? rand(10, 16) : rand(6, 9)); e.shot = 0; // 1.5.2: a Mustang that has made his pass gets back up to station before the next bounce
+    e.target = null; e.phase = "zoom"; e.phaseT = 0; e.coolUntil = (mission ? mission.t : elapsed) + (e.shot ? rand(3, 6) : rand(1.5, 3.5)); e.shot = 0; e.pbOn = false; // 1.5.2: a Mustang that has made his pass gets back up to station before the next bounce
   }
 
   // ===== 1.5.3 DOGFIGHTS — a Mustang that catches a German turns it into a visible, close 1v1 / 2v1 turning fight near the box =====
@@ -1471,7 +1579,7 @@
   function duelBurst(e, f, R) { // German cannon / MG burst at a Mustang (tracers: 190 red, 109 yellow)
     const dx = f.x - e.x, dy = f.y - e.y, dz = f.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
     for (let i = 0; i < 2; i++) tracers.push({ x: e.x + e.hx * 3, y: e.y + e.hy * 3, z: e.z + e.hz * 3, vx: dx / dl * BULLET_UPS + e.vx + rand(-6, 6), vy: dy / dl * BULLET_UPS + e.vy + rand(-6, 6), vz: dz / dl * BULLET_UPS + e.vz + rand(-6, 6), life: Math.min(1.3, dl / 400 + 0.3), maxLife: 1.3, trav: 0, team: "axis", hid: i === 1, delay: i * 0.05, k190: e.type === "190" });
-    if (window.FGAudio && Math.random() < 0.5) window.FGAudio.enemyGun(e.x, e.y, e.z);
+    e.mf = 0.12; if (window.FGAudio && Math.random() < 0.5) window.FGAudio.enemyGun(e.x, e.y, e.z);
     if (mission) mission.duelGerBursts = (mission.duelGerBursts || 0) + 1;
     const rf = FC.rangeFactor(FC.GUNS.mg151, FC.toYd(R));
     const p = 0.55 * rf * DF.hitMul * clamp(1 - Math.abs(f.gLoad || 1) * 0.06, 0.6, 1);
@@ -1490,7 +1598,7 @@
     if (!end) {
       const rx = f.x - e.x, ry = f.y - e.y, rz = f.z - e.z; R = Math.hypot(rx, ry, rz) || 1; ux = rx / R; uy = ry / R; uz = rz / R;
       e.farT = R > 1000 ? e.farT + dt : 0; if (e.farT > 3) end = true;
-      if (isP && Math.hypot(e.x - H.x, e.y - H.y, e.z - H.z) > TUNE.p51Leash + 980) end = true;
+      if (isP && Math.hypot(e.x - H.x, e.y - H.y, e.z - H.z) > TUNE.p51Leash + 900) end = true;
       if (f.y < BOX_C.y - 520 || e.y < BOX_C.y - 560) end = true; // the loser dived away: let him go, no chasing to the deck
     }
     if (end) { endDuel(e); return; }
@@ -1504,12 +1612,12 @@
       let lx = f.x + f.vx * tL, ly = f.y + f.vy * tL, lz = f.z + f.vz * tL;
       if (R < 120 && cosA < 0.93) { lx -= f.hx * 70; ly += 30; lz -= f.hz * 70; } // overshooting: lag pursuit / high yo-yo
       d = airDirTo(e, lx, ly, lz);
-      e.vT = clamp(f.V * 1.04 + (R - 160) * 0.2, 285 * MPH, isP ? 410 * MPH : 400 * MPH);
+      e.vT = clamp(f.V * 1.04 + (R - 160) * 0.2, 285 * MPH, isP ? 440 * MPH : 400 * MPH);
       e.fireCd -= dt;
-      if (e.fireCd <= 0 && e.duelDelay <= 0 && cosA > 0.975 && R < 360 && R > 45) {
+      if (isP) { if (e.duelDelay <= 0 && p51Fire(e, f, R, cosA, dt, DF.hitMul * 1.4)) { if (mission && !e.duelBurstCt) { } } }
+      else if (e.fireCd <= 0 && e.duelDelay <= 0 && cosA > 0.975 && R < 360 && R > 45) {
         e.fireCd = rand(DF.pBurst[0], DF.pBurst[1]);
-        if (isP) { e.shot = (e.shot || 0) + 1; if (mission) mission.p51Bursts = (mission.p51Bursts || 0) + 1; if (mission) mission.duelP51Bursts = (mission.duelP51Bursts || 0) + 1; p51Burst(e, f, R, DF.hitMul); }
-        else duelBurst(e, f, R);
+        duelBurst(e, f, R);
       }
     } else { // defend: break across the LOS, reverse every 1.5–3 s (scissors), jink up and down
       e.revT -= dt; if (e.revT <= 0) { e.sgn = -e.sgn; e.revT = rand(1.5, 3.0); }
@@ -1573,8 +1681,8 @@
     if (e.ammo <= 0) e.ammo = 1; // 1.5.2: the last few rounds in the belts — they do not leave the fight
     e.phase = "reform"; e.phaseT = 0;
     e.rSide = e.x > BOX_C.x ? 1 : -1;
-    if (is190) { e.stLat = rand(1500, 1900); e.stZ = rand(-2300, -1700); e.stUp = -rand(600, 800); } // 1.5.3: regroup well out and below (~3,000 ft down), not hovering next to the box  // reform ~2,500 ft below, outside gun range
-    else { e.stLat = rand(TAC.reformLat[0], TAC.reformLat[1]); e.stZ = rand(TAC.stationZ[0], TAC.stationZ[1]); e.stUp = TAC.stationUp + rand(-80, 160); }
+    if (is190) { e.stLat = rand(2800, 3500); e.stZ = rand(1800, 3000); e.stUp = rand(300, 650); } // 1.5.3: regroup well out and below (~3,000 ft down), not hovering next to the box  // reform ~2,500 ft below, outside gun range
+    else { e.stLat = rand(2800, 3500); e.stZ = rand(3400, 4800); e.stUp = rand(400, 800); e.vCap = 485 * MPH; } // 1.5.4: regroup far out on the flanks (out of effective gun/visual range), never in plain sight near the box
     e.stPh = rand(0, 6.28); e.orbR = rand(110, 230); e.orbW = rand(0.12, 0.18) * (Math.random() < 0.5 ? -1 : 1); // the station is an orbit — never hovering
   }
   // 1.4.1: station ~1.5–2 km out on a front flank where they're seen setting up the next pass
@@ -1585,6 +1693,7 @@
   function flyStation(e, S, dt) {
     const dz = S.z - e.z, dist = Math.hypot(S.x - e.x, S.y - e.y, dz);
     e.vT = clamp(VF + 12 + dz * 0.12 + Math.max(0, dist - 250) * 0.08, VF + 8, FAI.vFull);
+    if (dist > 900 && e.phase === "reform") { e.vT = e.type === "190" ? FAI.v190 : 470 * MPH; e.nMax = e.type === "190" ? 5.2 : 4.6; } // 1.5.4: the reform leg is flown FAST (a real regroup, never a crawl beside the box)
     let d = airDirTo(e, S.x + (S.x - e.x) * 0.2, S.y, S.z + 220); // aim a little ahead so they settle alongside, not orbit
     d = slopeLimit(e, d, -0.3, 0.2);
     d = safeDir(e, d);
@@ -1612,6 +1721,7 @@
     return flyStep(e, dx, dy, dz, dt, gain);
   }
   function updateFighterAI(e, dt) {
+    if (e.mf > 0) e.mf -= dt;
     if (e.type === "p51") return updateP51(e, dt);
     if (e.phase === "duel") { if (e.evadeT > 0) e.evadeT -= dt; return duelStep(e, dt); }
     dfPounce(e, dt);
@@ -1643,23 +1753,26 @@
       return;
     }
     if (e.phase === "arrive") { // inbound from far ahead toward a setup point, then commit
-      const S = frontSetup(e.mode0, e.side0);
+      const S = frontSetup(e.mode0, e.side0, e.type);
+      const vArr = e.type === "190" ? FAI.v190 : TAC.arriveV * MPH;
       if (e.leader && e.leader.alive && e.leader.phase === "arrive") { // Rottenflieger: hold station on the leader, ~70 m out, stepped back
         S.x = e.leader.x + e.side0 * 48; S.y = e.leader.y - 6; S.z = e.leader.z + 40;
-        e.vT = Math.min(FAI.vFull, TAC.arriveV * MPH + clamp((e.z - S.z) * 0.02, -20, 20) * MPH);
-      } else e.vT = TAC.arriveV * MPH;
+        e.vT = Math.min(e.type === "190" ? FAI.v190Cap : FAI.vFull, vArr + clamp((e.z - S.z) * 0.02, -20, 20) * MPH);
+      } else e.vT = vArr;
       d = airDirTo(e, S.x, S.y, S.z);
       d = slopeLimit(e, d, -0.35, 0.12);
       d = safeDir(e, d);
       flyStepE(e, d.x, d.y, d.z, dt, 1.1);
-      const S0 = frontSetup(e.mode0, e.side0);
+      const S0 = frontSetup(e.mode0, e.side0, e.type);
       const leadGone = e.leader && e.leader.alive && e.leader.phase === "attack" && e.leader.phaseT > 0.9; // wingman follows ~1 s behind
       const ready = e.final ? (e.z > S0.z - 200 && Math.abs(e.x - S0.x) < 520) || e.phaseT > 34 : (e.z - S0.z < 160 || e.z < S0.z || leadGone);
       if (e.final && !ready) { e.vT = FAI.vFull; }
-      if ((e.leader && e.leader.alive && e.leader.phase === "arrive") ? false : (ready && aiActive < FAI.maxActive)) { aiActive++; e.final = false; commitPass(e, e.mode0); }
+      if (ready) e.waitT = (e.waitT || 0) + dt; // 1.5.4: a bandit that has reached his setup point does NOT loiter there waiting for a slot — after 2 s he goes in regardless
+      if ((e.leader && e.leader.alive && e.leader.phase === "arrive") ? false : (ready && (aiActive < FAI.maxActive || e.waitT > 2))) { aiActive++; e.final = false; commitPass(e, e.mode0); }
       return;
     }
     if (e.phase === "attack") {
+      if (e.type === "190" && e.rockets > 0 && !e.hold) tryRockets(e);
       const A = e.aimPt;
       const rx = A.x - e.x, ry = A.y - e.y, rz = A.z - e.z;
       const vb = Math.hypot(e.vx, e.vy, e.vz) || 1;
@@ -1747,12 +1860,13 @@
     if (e.phase === "rollin") {
       const out = e.rSide || 1;
       if (e.phaseT < 0) { flyStation(e, stationOf(e), dt); return; } // waiting for the one ahead to peel off
-      if (e.type === "190") { // from below, climbing in on the low quarter
+      if (e.type === "190") { // 1.5.4: from the far flank station straight down the front quarter at full speed (no climbing in, no loitering)
         if (!e.tgtPre) e.tgtPre = pick190Target(e);
-        const T = targetPoint(e.tgtPre);
-        e.vT = FAI.v190 * (e.sturm ? 0.97 : 1); d = airDirTo(e, T.x, T.y - 25, T.z - 120); d = safeDir(e, d); flyStepE(e, d.x, d.y, d.z, dt, 0.9);
-        const r = Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z);
-        if (r < 620 || e.phaseT > 14) commitPass(e, "lowq");
+        const T = targetPoint(e.tgtPre), sd = e.x > T.x ? 1 : -1, A = { x: T.x + sd * 420, y: T.y + 360, z: T.z + 1500 };
+        e.vT = FAI.v190 * (e.sturm ? 0.97 : 1); d = airDirTo(e, A.x, A.y, A.z); d = slopeLimit(e, d, -0.55, 0.3); d = safeDir(e, d); flyStepE(e, d.x, d.y, d.z, dt, 1.2);
+        if (e.rockets > 0 && !e.hold) tryRockets(e);
+        const r = Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z), rA = Math.hypot(A.x - e.x, A.y - e.y, A.z - e.z);
+        if (r < 1750 || rA < 260 || e.phaseT > 22) commitPass(e, "fq");
         return;
       }
       if (e.phaseT < 1.5) { // pull up and roll away from the box
@@ -1768,8 +1882,8 @@
     }
     const St = stationOf(e);
     const dist = flyStation(e, St, dt);
-    if (e.phase === "reform" && dist < 260 && e.phaseT > 2) { e.phase = "setup"; e.phaseT = 0; }
-    if (e.phase === "reform" && e.phaseT > 30) { e.phase = "setup"; e.phaseT = 0; } // never stuck chasing the station
+    if (e.phase === "reform" && dist < 420 && e.phaseT > 2) { e.phase = "setup"; e.phaseT = 0; if (e.finalQ && mission && e.type === "109") { e.finalQ = false; e.mode0 = "headon"; e.side0 = e.x > BOX_C.x ? 1 : -1; e.final = true; e.phase = "arrive"; e.reattack = true; e.leader = null; } }
+    if (e.phase === "reform" && e.phaseT > 110) { e.phase = "setup"; e.phaseT = 0; } // never stuck chasing the station
   }
 
   // ===== 1.5.2 STRAGGLERS + HUNTERS =====
@@ -1919,6 +2033,7 @@
       if (mission.held) { for (const e of mission.held) { e.launchAt = mission.t; } }
       for (const e of enemies) {
         if (!e.alive || e.type !== "109" || e.ammo <= 0 || !(e.phase === "setup" || e.phase === "reform" || e.phase === "extend")) continue;
+        if (e.phase !== "setup" && Math.hypot(e.x - BOX_C.x, e.y - BOX_C.y, e.z - BOX_C.z) < 3200) { e.finalQ = true; continue; } // 1.5.4: no U-turn right beside the box — he finishes his reform leg first, then comes in
         e.mode0 = k % 3 === 2 ? "fq" : "headon"; e.side0 = e.x > BOX_C.x ? 1 : -1; e.final = true;
         e.phase = "arrive"; e.phaseT = 0; e.reattack = true; e.leader = null; k++;
       }
@@ -2011,17 +2126,23 @@
       if (e.leader) e.tgt = e.leader.tgt;
       e.launchAt = 50 + sch * 12; e.hold = true; add(e); enemies.pop(); (mission.held || (mission.held = [])).push(e); // 1.5.0: second slash comes after the first Hammer wave, not with it
     }
-    // the Hammer: two waves of 8× Fw 190 (half Sturmbock) from astern, abreast, ranks ~110 u apart; launch 3 s / 14 s
+    // the Hammer (1.5.4): two waves of 8× Fw 190 (half Sturmbock). They arrive as Rotten from the front quarters, high, already at full dive speed
+    // (no loitering astern): ~470-520 mph, closing ~800 mph with the box, a short fast run in to ~400 yd, through/under, a hard dive-away, and gone.
     const SCN = window.__FG_SCN || {};
     for (let w = 0; w < 2 && !SCN.no190; w++) {
+      let ld190 = null;
       for (let i = 0; i < 8 && n > 0; i++) {
         const e = makeMissionFighter("190");
-        e.rank = w; e.slotX = (i - 3.5) * 62 + rand(-5, 5);
+        const side = (((i >> 1) + w) & 1) ? 1 : -1, wing = i & 1; // pairs alternate 10:30 / 1:30
+        e.rank = w; e.slotX = (i - 3.5) * 62;
         if (w === 0 && (i & 1) === 0) e.rockets = 2; // 1.5.2: WGr.21 on half of the first company front
-        e.x = BOX_C.x + e.slotX * 1.15; e.y = BOX_C.y - 330 + rand(-30, 30); e.z = BOX_C.z - 1050 - w * 120 - (i & 1) * 30 + rand(-10, 10);
-        e.V = FAI.v190; initAttitude(e, { x: 0, y: 0.12, z: 1 }, 0); // spawn AFT, nose toward the box (+Z)
-        e.phase = "stack"; e.holdFor = (i & 1) * 0.5;
-        e.launchAt = w ? 38 : 24; e.hold = true; e.staffel = 5 + w; e.seq = 20 + w * 10 + i;
+        e.x = BOX_C.x + side * (650 + (i >> 1) * 110 + w * 140) + rand(-30, 30); e.y = BOX_C.y + 760 + rand(-60, 90) + wing * 14; e.z = BOX_C.z + 4300 + w * 260 + (i >> 1) * 140 + wing * 40 + rand(-30, 30);
+        const dv = norm3(BOX_C.x - e.x, BOX_C.y + 60 - e.y, BOX_C.z - e.z), V = FAI.v190;
+        e.V = V; const bb = VF * dv.z, sB = -bb + Math.sqrt(Math.max(0, bb * bb - VF * VF + V * V));
+        initAttitude(e, { x: sB * dv.x, y: sB * dv.y, z: sB * dv.z + VF }, 0);
+        e.phase = "arrive"; e.mode0 = "fq"; e.side0 = side; e.wing = wing;
+        if (!wing) ld190 = e; else e.leader = ld190;
+        e.launchAt = w ? 40 : 26; e.hold = true; e.staffel = 5 + w; e.seq = 20 + w * 10 + i;
         add(e);
         enemies.pop(); (mission.held || (mission.held = [])).push(e);
       }
@@ -2100,7 +2221,7 @@
         if (e.slip) { const S = frontSetup(e.mode0, e.side0); e.x = S.x + e.side0 * (300 + rand(0, 400)) + e.wing * 45; e.y = S.y + 700 + rand(0, 900); e.z = S.z + (TAC.arriveV + 280) * MPH * 22 + e.wing * 40; e.slipped = true; if (on190 >= 10) mission.slipOn190 = true; }
         e.hold = false; enemies.push(e);
         if (e.staffel === 1) {
-          if (!mission.inboundCalled) { mission.inboundCalled = true; pushCallout("BANDITS INBOUND — 109s HIGH · 190s ASTERN", 2.6, true); sfxIntercom(); }
+          if (!mission.inboundCalled) { mission.inboundCalled = true; pushCallout("BANDITS INBOUND — 109s HIGH · 190s 10 AND 2 O'CLOCK HIGH", 2.6, true); sfxIntercom(); }
           commitPass(e, "headon"); e.diveT = mission.t;
         }
       }
@@ -2329,7 +2450,7 @@
       (mission && (mission.friendlyHits || mission.friendlyHitsCpu) ? "<br>Friendly fire: your hits <b>" + mission.friendlyHits + "</b> &middot; gunners' strays " + mission.friendlyHitsCpu + (mission.friendlyFFLost ? " &middot; FF losses " + mission.friendlyFFLost : "") : "") +
       (mission && (mission.p51HitYou || mission.p51HitGun || mission.p51Lost) ? "<br>Mustangs: hit by you <b>" + (mission.p51HitYou || 0) + "</b> &middot; hit by gunners <b>" + (mission.p51HitGun || 0) + "</b> &middot; lost <b>" + (mission.p51Lost || 0) + "</b> (friendly fire " + ((mission.p51LostYou || 0) + (mission.p51LostGun || 0)) + ": you " + (mission.p51LostYou || 0) + ", gunners " + (mission.p51LostGun || 0) + "; Germans " + (mission.p51LostGer || 0) + ")" + (mission.p51HitYou ? " &mdash; <b>score penalty</b> for shooting Mustangs" : "") : "") +
       (mission && mission.ownHits ? "<br>Rounds into your own ship: <b>" + mission.ownHits + "</b>" : "");
-    gameoverEl.classList.remove("hidden");
+    gameoverEl.classList.remove("hidden"); { const pn = gameoverEl.querySelector(".panel"); if (pn) pn.scrollTop = 0; }
     updateHud();
   }
 
@@ -2492,6 +2613,7 @@
       townGeom: api.townGeom || null, townLayout: api.townLayout ? () => api.townLayout() : null, townStrike: api.townStrike ? (e) => api.townStrike(e) : null, townReset: api.townReset ? () => api.townReset() : null, // 1.5.3: real bomb landings on the town
       rayShip: api.rayShip ? (w, a, b, c, d, e, f, p) => api.rayShip(w, a, b, c, d, e, f, p) : null,
       addHole: api.addHole ? (w, h, sz) => api.addHole(w, h, sz) : null,
+      addTear: api.addTear ? (w, h, sz) => api.addTear(w, h, sz) : null,
       clearDamage: api.clearDamage ? () => api.clearDamage() : null,
       rayFighter: api.rayFighter ? (e, a, b, c, d, f, g, t) => api.rayFighter(e, a, b, c, d, f, g, t) : null,
       addFighterHole: api.addFighterHole ? (e, h, sz) => api.addFighterHole(e, h, sz) : null,
@@ -2613,51 +2735,9 @@
   }
 
   /** Urgent intercom: triple-beep + radio click + voice-ish (Cycle 137 MotA). */
-  function sfxIntercom() {
-    if (!audioCtx || downSeq) return;
-    const t0 = audioCtx.currentTime;
-    // Radio click / squelch open
-    const clickLen = Math.floor(audioCtx.sampleRate * 0.035);
-    const clickBuf = audioCtx.createBuffer(1, clickLen, audioCtx.sampleRate);
-    const cd = clickBuf.getChannelData(0);
-    for (let i = 0; i < clickLen; i++) cd[i] = (Math.random() * 2 - 1) * (1 - i / clickLen);
-    const cn = audioCtx.createBufferSource(); cn.buffer = clickBuf;
-    const chp = audioCtx.createBiquadFilter(); chp.type = "highpass"; chp.frequency.value = 1800;
-    const cg = audioCtx.createGain(); cg.gain.setValueAtTime(0.32, t0); cg.gain.exponentialRampToValueAtTime(0.001, t0 + 0.04);
-    cn.connect(chp); chp.connect(cg); cg.connect(audioCtx.destination); cn.start(t0);
-    // Triple attention beeps (rising urgency)
-    const beeps = [
-      { f: 920, at: 0.02, g: 0.34, dur: 0.09 },
-      { f: 780, at: 0.12, g: 0.30, dur: 0.08 },
-      { f: 1100, at: 0.22, g: 0.38, dur: 0.11 },
-    ];
-    for (const b of beeps) {
-      const o = audioCtx.createOscillator();
-      const g = audioCtx.createGain();
-      o.type = "square";
-      o.frequency.setValueAtTime(b.f, t0 + b.at);
-      g.gain.setValueAtTime(0.001, t0);
-      g.gain.setValueAtTime(b.g, t0 + b.at);
-      g.gain.exponentialRampToValueAtTime(0.001, t0 + b.at + b.dur);
-      o.connect(g); g.connect(audioCtx.destination);
-      o.start(t0 + b.at); o.stop(t0 + b.at + b.dur + 0.02);
-    }
-    // Filtered noise "voice" burble — longer, more urgent AM
-    const len = Math.floor(audioCtx.sampleRate * 0.55);
-    const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) {
-      const env = Math.sin((i / len) * Math.PI);
-      data[i] = (Math.random() * 2 - 1) * 0.55 * env * (0.6 + 0.4 * Math.sin(i * 0.013));
-    }
-    const n = audioCtx.createBufferSource(); n.buffer = buf;
-    const bp = audioCtx.createBiquadFilter();
-    bp.type = "bandpass"; bp.frequency.value = 520; bp.Q.value = 2.4;
-    const ng = audioCtx.createGain();
-    ng.gain.setValueAtTime(0.001, t0);
-    ng.gain.linearRampToValueAtTime(0.28, t0 + 0.06);
-    ng.gain.exponentialRampToValueAtTime(0.001, t0 + 0.58);
-    n.connect(bp); bp.connect(ng); ng.connect(audioCtx.destination); n.start(t0 + 0.04);
+  function sfxIntercom() { // 1.5.4: the radio squelch/burble now lives in FGAudio (noise-based, on the shared graph) — no more square-wave beeps
+    if (downSeq) return;
+    if (window.FGAudio && window.FGAudio.intercom) window.FGAudio.intercom();
   }
 
 
@@ -2725,6 +2805,7 @@
     enemies = [];
     bullets = [];
     particles = [];
+    fx154.kicks.length = 0; fx154.cabin.length = 0; fx154.vig = 0; fx154.blur = 0; fx154.accum = 0; gunner.kx = 0; gunner.ky = 0; if (worldCanvas) { worldCanvas.style.filter = ""; fx154.blurPx = -1; }
     tracers = [];
     flak = [];
     callouts = [];
@@ -3430,6 +3511,9 @@
     if (bomber.holes.length < 80) bomber.holes.push(hole);
     else bomber.holes[(bomber.ownHits) % 80] = hole;
     if (h.ray && World3D && World3D.addHole) World3D.addHole("own", h.ray, typeof p === "number" ? 0.12 : 0.13);
+    bomber.holeN = (bomber.holeN || 0) + 1;
+    if (h.ray && World3D && World3D.addTear && bomber.holeN % 8 === 0) { fx154.n.tears++; World3D.addTear("own", h.ray, 0.45 + Math.min(0.7, bomber.holeN * 0.012)); }
+    hitCluster(CAM.x + h.x, CAM.y + h.y, CAM.z + h.z, 0, 0, 0, false, 0.3);
     if (mission) { const hs = mission.ownHitLog || (mission.ownHitLog = []); if (hs.length < 400) hs.push({ part: p, box: id, x: h.x + CAM.x, y: h.y + CAM.y, z: h.z + CAM.z, lx: h.lx, ly: h.ly, lz: h.lz, roll: viewRoll }); }
     for (let i = 0; i < 5; i++) {
       particles.push({
@@ -3574,6 +3658,81 @@
     return false;
   }
 
+  // ===== 1.5.4 HIT / DAMAGE / CABIN EFFECTS (from the reference clips): clustered multi-flash bursts + 20 mm bloom, shaped camera kicks + blur,
+  //       interior-cabin specks / sparks / vignette, gun-sight vibration, torn skin =====
+  const fx154 = { kicks: [], cabin: [], vig: 0, blur: 0, blurPx: -1, vib: 0, accum: 0, lastCannonKick: -9, n: { cluster: 0, flashes: 0, bloom: 0, kicks: 0, flakKicks: 0, cannonKicks: 0, specks: 0, sparks: 0, cabinHits: 0, tears: 0 }, peakKick: 0, peakBlur: 0, peakVig: 0 };
+  function hitCluster(x, y, z, vx, vy, vz, heavy, sc) { // several offset flashes with staggered starts (irregular, never one uniform dot); heavy (20 mm / 30 mm) adds a white bloom
+    const n = (heavy ? 4 : 3) + (Math.random() < 0.4 ? 1 : 0); sc = sc || 1; fx154.n.cluster++;
+    for (let k = 0; k < n; k++) {
+      particles.push({ x: x + rand(-0.4, 0.4) * sc, y: y + rand(-0.3, 0.3) * sc, z: z + rand(-0.4, 0.4) * sc, vx: vx * 0.5 + rand(-3, 3), vy: vy * 0.5 + rand(-1, 3), vz: vz * 0.5 + rand(-3, 3), wait: k ? k * rand(0.012, 0.035) : 0, life: rand(0.07, 0.13) * (heavy ? 1.3 : 1), max: 0.13 * (heavy ? 1.3 : 1), kind: "flash", r: rand(1.6, 3.1) * (heavy ? 1.35 : 1), ang: rand(0, Math.PI) });
+      fx154.n.flashes++;
+    }
+    if (heavy) { particles.push({ x, y, z, vx: vx * 0.4, vy: vy * 0.4, vz: vz * 0.4, wait: 0, life: 0.2, max: 0.2, kind: "bloom", r: rand(4.2, 6.2), ang: 0 }); fx154.n.bloom++; }
+  }
+  function addKick(kind, amp) { // shaped camera kick: flak = one hard low jolt then a slow wobble; cannon = a quick high shudder; mg = a faint tick
+    const K = kind === "flak" ? { f: 7.5, dec: 0.5, jolt: 0.7 } : kind === "cannon" ? { f: 22, dec: 0.2, jolt: 0.25 } : { f: 30, dec: 0.1, jolt: 0 };
+    if (kind === "cannon") { if (elapsed - fx154.lastCannonKick < 0.06) amp *= 0.45; fx154.lastCannonKick = elapsed; }
+    fx154.kicks.push({ t: 0, amp, f: K.f * rand(0.9, 1.1), dec: K.dec, jolt: K.jolt, ph: rand(0, TAU), ax: rand(0.5, 1) * (Math.random() < 0.5 ? -1 : 1), ay: kind === "flak" ? 1 : rand(0.6, 1) * (Math.random() < 0.5 ? -1 : 1) });
+    if (fx154.kicks.length > 8) fx154.kicks.shift();
+    fx154.n.kicks++; if (kind === "flak") fx154.n.flakKicks++; if (kind === "cannon") fx154.n.cannonKicks++;
+    fx154.blur = Math.max(fx154.blur, kind === "flak" ? Math.min(1, amp * 2.2) : kind === "cannon" ? Math.min(0.7, amp * 3.2) : 0);
+  }
+  function cabinHit(power, why) { // dark specks (insulation / glass / metal) drifting across the view, sparks off the turret frame, a vignette pulse
+    power = clamp(power, 0.1, 1); fx154.n.cabinHits++;
+    const nS = Math.round(7 + 24 * power), nK = Math.round(2 + 8 * power), u = Math.max(0.7, W / 900);
+    for (let i = 0; i < nS; i++) fx154.cabin.push({ k: 0, x: rand(0, W), y: rand(H * 0.08, H * 0.92), vx: rand(-70, 70) * u, vy: rand(-110, 60) * u, r: rand(0.9, 3.0) * u, life: rand(0.5, 1.5), max: 1.5, pale: Math.random() < 0.28, ph: rand(0, TAU) });
+    for (let i = 0; i < nK; i++) { // sparks fly off the framing (screen edges / bottom coaming)
+      const edge = (Math.random() * 3) | 0; let x, y;
+      if (edge === 0) { x = rand(0, W * 0.1); y = rand(H * 0.1, H * 0.9); } else if (edge === 1) { x = rand(W * 0.9, W); y = rand(H * 0.1, H * 0.9); } else { x = rand(0, W); y = rand(H * 0.84, H * 0.98); }
+      fx154.cabin.push({ k: 1, x, y, vx: rand(-260, 260) * u, vy: rand(-340, 60) * u, r: rand(1.4, 2.6) * u, life: rand(0.12, 0.3), max: 0.3, ph: 0 });
+    }
+    fx154.n.specks += nS; fx154.n.sparks += nK;
+    fx154.vig = Math.min(0.85, fx154.vig + 0.55 * power);
+    if (fx154.cabin.length > 90) fx154.cabin.splice(0, fx154.cabin.length - 90);
+  }
+  function stepFx154(dt) {
+    let kx = 0, ky = 0;
+    for (const k of fx154.kicks) {
+      k.t += dt;
+      const env = Math.exp(-k.t / k.dec), jolt = k.jolt * Math.max(0, 1 - k.t / 0.07);
+      const d = k.amp * env * (Math.sin(TAU * k.f * k.t + k.ph) * (1 - k.jolt * 0.4) + jolt * 1.6);
+      kx += d * k.ax * 0.7; ky += d * k.ay;
+    }
+    fx154.kicks = fx154.kicks.filter((k) => k.t < k.dec * 6);
+    gunner.kx = kx; gunner.ky = ky; fx154.peakKick = Math.max(fx154.peakKick, Math.hypot(kx, ky));
+    fx154.blur = Math.max(0, fx154.blur - dt * 5); fx154.peakBlur = Math.max(fx154.peakBlur, fx154.blur);
+    fx154.vig = Math.max(0, fx154.vig - dt * 1.9); fx154.peakVig = Math.max(fx154.peakVig, fx154.vig);
+    fx154.vib = input.fire && !guns.overheated ? Math.min(1, fx154.vib + dt * 14) : Math.max(0, fx154.vib - dt * 8);
+    fx154.accum = Math.max(0, fx154.accum - dt * 1.4);
+    for (const c of fx154.cabin) { c.life -= dt; c.x += c.vx * dt + (c.k ? 0 : Math.sin(elapsed * 6 + c.ph) * 14 * dt); c.y += c.vy * dt; if (!c.k) c.vy += 70 * dt; else c.vy += 500 * dt; }
+    fx154.cabin = fx154.cabin.filter((c) => c.life > 0);
+    const px = Math.round(Math.min(3.4, fx154.blur * 3.4) * 2) / 2; // CSS blur on the 3-D canvas, quantised so the style only changes a few times
+    if (worldCanvas && px !== fx154.blurPx) { fx154.blurPx = px; worldCanvas.style.filter = px > 0 ? "blur(" + px + "px)" : ""; }
+  }
+  function drawCabinFx() {
+    const F = fx154;
+    if (F.vig > 0.02) { // dark vignette pulse
+      const g = ctx.createRadialGradient(W * 0.5, H * 0.5, Math.min(W, H) * 0.28, W * 0.5, H * 0.5, Math.hypot(W, H) * 0.56);
+      g.addColorStop(0, "rgba(8,6,4,0)"); g.addColorStop(1, "rgba(8,6,4," + Math.min(0.8, F.vig).toFixed(3) + ")");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    if (!F.cabin.length) return;
+    ctx.save();
+    for (const c of F.cabin) {
+      const a = clamp(c.life / c.max, 0, 1);
+      if (c.k === 0) { ctx.globalAlpha = Math.min(1, a * 1.8) * 0.85; ctx.fillStyle = c.pale ? "#b4b0a0" : "#16150f"; ctx.fillRect(c.x - c.r, c.y - c.r * 0.7, c.r * 2, c.r * 1.4); }
+    }
+    ctx.globalCompositeOperation = "lighter";
+    for (const c of F.cabin) {
+      if (c.k !== 1) continue;
+      const a = clamp(c.life / c.max, 0, 1), L = c.r * 4 * (0.5 + a), ang = Math.atan2(c.vy, c.vx);
+      ctx.globalAlpha = a; ctx.strokeStyle = "rgb(255,214,120)"; ctx.lineWidth = Math.max(1.2, c.r * 0.7);
+      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(c.x - Math.cos(ang) * L, c.y - Math.sin(ang) * L); ctx.stroke();
+      ctx.fillStyle = "rgb(255,248,220)"; ctx.beginPath(); ctx.arc(c.x, c.y, c.r * 0.6, 0, TAU); ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function spawnHit(e, at) {
     // sparkle of strikes on the airframe (small, bright) — 1.3.8: AT the struck point on the mesh
     for (let i = 0; i < 8; i++) {
@@ -3586,6 +3745,7 @@
       });
     }
     for (let i = 0; i < 2; i++) particles.push({ x: at ? at.x : e.x, y: at ? at.y : e.y, z: at ? at.z : e.z, vx: e.vx * 0.7 + rand(-10, 10), vy: e.vy * 0.7 + rand(-4, 12), vz: e.vz * 0.7 + rand(-10, 10), life: rand(0.35, 0.7), max: 0.7, kind: "chip", r: rand(0.9, 1.8) });
+    hitCluster(at ? at.x : e.x, at ? at.y : e.y, at ? at.z : e.z, e.vx, e.vy, e.vz, false, 1);
     const sp = at ? project(at.x, at.y, at.z) : project(e.x, e.y, e.z);
     if (sp) hitMarks.push({ x: sp.sx, y: sp.sy, life: 0.2, text: "" });
   }
@@ -3724,7 +3884,7 @@
     }
     if (bomber && !bomber.dead && !godMode) {
       const d = Math.hypot(CAM.x - b.x, CAM.y - b.y, CAM.z - b.z);
-      if (d < 90) { gunner.shake = Math.max(gunner.shake, 1.5 * (1 - d / 90)); rumble = Math.max(rumble, 1 - d / 90); }
+      if (d < 90) { gunner.shake = Math.max(gunner.shake, 1.5 * (1 - d / 90)); rumble = Math.max(rumble, 1 - d / 90); addKick('flak', 0.08 + 0.42 * Math.pow(1 - d / 90, 0.8)); if (d < 55) cabinHit(0.9 * (1 - d / 55) + 0.1, 'flak'); } // 1.5.4: a flak shaped kick (jolt + wobble) and, when close, cabin debris
       if (d < FLAK.frag + 4) {
         F.hitsP++;
         if (window.FGAudio) window.FGAudio.hitOwn("flak");
@@ -3741,8 +3901,11 @@
   function setDownHud(chute) {
     for (const id of ["topbar", "missionbar", "healthwrap", "heatwrap"]) { const el = document.getElementById(id); if (el) el.style.visibility = chute ? "hidden" : ""; }
   }
+  // 1.5.4 (beta): the player's Fortress can NOT be destroyed by damage — hull floors at 1 %. Effects, engines out, fires, list and straggling still happen.
+  const PLAYER_FLOOR = true;
   function playerShotDown(cause) {
     if (!bomber || bomber.dead || !mission) return;
+    if (PLAYER_FLOOR && cause !== "__test") { bomber.health = Math.max(1, bomber.health); bomber.crewHp = Math.max(1, bomber.crewHp); mission.floorSaves = (mission.floorSaves || 0) + 1; return; }
     bomber.dead = true;
     bomber.health = 0;
     input.fire = false;
@@ -3891,7 +4054,7 @@
     goStats.innerHTML =
       "Score <b>" + score + "</b> · Kills <b>" + kills + "</b> · Wave <b>" + wave +
       "</b><br>Time " + survived + "s · Hits " + hitsLanded;
-    gameoverEl.classList.remove("hidden");
+    gameoverEl.classList.remove("hidden"); { const pn = gameoverEl.querySelector(".panel"); if (pn) pn.scrollTop = 0; }
     updateHud();
   }
 
@@ -3899,7 +4062,7 @@
   function update(dt) {
     window.__FG_SIMT = (window.__FG_SIMT || 0) + dt; // 1.3.9: sim clock for the tracer persistence smear
     elapsed += dt;
-    if (window.FGAudio && !update._inAdvance) { const b = lookBasis(); window.FGAudio.frame({ playing: state === "PLAYING", listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: EYE.x, cy: EYE.y, cz: EYE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20) }); }
+    if (window.FGAudio && !update._inAdvance) { const b = lookBasis(); window.FGAudio.frame({ playing: state === "PLAYING", listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: EYE.x, cy: EYE.y, cz: EYE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20), holes: bomber ? Math.max(bomber.holes.length, bomber.holeN || 0) : 0 }); }
     if (state === "TITLE") {
       gunner.yaw = 0.25 + Math.sin(elapsed * 0.18) * 0.35;
       gunner.pitch = 0.10 + Math.sin(elapsed * 0.11) * 0.05;
@@ -3945,7 +4108,7 @@
     }
     muzzleSmoke = muzzleSmoke.filter((c) => c.life > 0);
     if (muzzleSmoke.length > 36) muzzleSmoke.splice(0, muzzleSmoke.length - 36);
-    if (particles.length > 120) particles.splice(0, particles.length - 120);
+    if (particles.length > 150) particles.splice(0, particles.length - 150);
     if (brass.length > 42) brass.splice(0, brass.length - 42);
     for (const c of brass) c.tumble = (c.tumble || 0) + (c.tspin || 0) * dt;
     setBedAudio(state === "PLAYING" ? (bomber && bomber.health < 30 ? 1 : 0.55) + (input.fire ? 0.35 : 0) : 0.25);
@@ -4083,10 +4246,12 @@
     bullets = bullets.filter((b) => b.life > 0);
 
     for (const p of particles) {
+      if (p.wait > 0) { p.wait -= dt; continue; }
       p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
-      p.vy -= 6 * dt;
+      p.vy -= (p.kind === "flash" || p.kind === "bloom") ? 0 : 6 * dt;
       p.life -= dt;
     }
+    stepFx154(dt);
     particles = particles.filter((p) => p.life > 0);
 
     for (const t of tracers) {
@@ -4233,6 +4398,7 @@
     }
     drawMuzzleGrit();
     if (!models3d) drawBrass();
+    if (!inChute) drawCabinFx();
     if (!downSeq) drawCrosshair(models3d && !inChute);
     if (!inChute) drawHitMarks();
     if (!models3d) drawFarFighters(); // 1.3.6: 3D mode draws far 109s as depth-tested GL specks
@@ -4990,7 +5156,7 @@
       const dE = Math.hypot(t.x - CAM.x, t.y - CAM.y, t.z - CAM.z);
       a *= clamp((dE - 20) / 70, 0, 1); // 1.5.1: every CPU tracer fades like the gunners'
       if (a < 0.02) continue;
-      put(t.x, t.y, t.z, t.x - t.vx / sp * tail, t.y - t.vy / sp * tail, t.z - t.vz / sp * tail, allied ? 1 : t.k190 ? 3 : 2, a);
+      put(t.x, t.y, t.z, t.x - t.vx / sp * tail, t.y - t.vy / sp * tail, t.z - t.vz / sp * tail, t.p51 ? 4 : allied ? 1 : t.k190 ? 3 : 2, a);
       if (allied) nA++; else nX++;
     }
     for (const q of tracerExtra) put(q.hx, q.hy, q.hz, q.tx, q.ty, q.tz, q.kind || 1, q.a == null ? 1 : q.a);
@@ -5066,9 +5232,26 @@
 
   function drawParticles() {
     for (const p of particles) {
+      if (p.wait > 0) continue;
       const q = project(p.x, p.y, p.z);
       if (!q) continue;
       const a = clamp(p.life / (p.max || 0.6), 0, 1);
+      if (p.kind === "flash" || p.kind === "bloom") { // 1.5.4: very bright yellow-orange hit flash (white-hot centre, ragged cross-flare); heavy hits add a soft white bloom
+        const R = Math.min(p.kind === "bloom" ? 38 : 13, Math.max(p.kind === "bloom" ? 6 : 2, p.r * q.s * 0.3));
+        ctx.save(); ctx.translate(q.sx, q.sy); ctx.globalCompositeOperation = "lighter";
+        if (p.kind === "bloom") {
+          const g = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
+          g.addColorStop(0, "rgba(255,244,214," + (0.7 * a).toFixed(3) + ")"); g.addColorStop(0.45, "rgba(255,200,120," + (0.28 * a).toFixed(3) + ")"); g.addColorStop(1, "rgba(255,150,60,0)");
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+        } else {
+          const g = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
+          g.addColorStop(0, "rgba(255,252,225," + a.toFixed(3) + ")"); g.addColorStop(0.35, "rgba(255,190,60," + (0.85 * a).toFixed(3) + ")"); g.addColorStop(1, "rgba(255,110,10,0)");
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+          ctx.rotate(p.ang || 0); ctx.strokeStyle = "rgba(255,225,140," + (0.8 * a).toFixed(3) + ")"; ctx.lineWidth = Math.max(1, R * 0.16);
+          ctx.beginPath(); ctx.moveTo(-R * 1.9, 0); ctx.lineTo(R * 1.9, 0); ctx.stroke();
+        }
+        ctx.restore(); continue;
+      }
       const r = Math.min(p.kind === "fire" ? 6 : 8, Math.max(1.0, p.r * q.s * 0.22));
       ctx.save();
       ctx.translate(q.sx, q.sy);
@@ -5402,10 +5585,10 @@
     ctx.globalCompositeOperation = "lighter";
     for (const mx of MUZZLE_SX) {
       const x = W * mx, y = H * MUZZLE_SY + gunner.recoil * 4;
-      const R = 9 + 16 * a;
+      const R = 6 + 9 * a; // 1.5.4: faint — a small sharp flash like the waist-gun reference, not a bloom
       const core = ctx.createRadialGradient(x, y, 0, x, y, R);
-      core.addColorStop(0, "rgba(255,250,220," + (0.95 * a) + ")");
-      core.addColorStop(0.3, "rgba(255,190,70," + (0.75 * a) + ")");
+      core.addColorStop(0, "rgba(255,250,220," + (0.7 * a) + ")");
+      core.addColorStop(0.3, "rgba(255,190,70," + (0.5 * a) + ")");
       core.addColorStop(1, "rgba(255,60,0,0)");
       ctx.fillStyle = core;
       ctx.beginPath(); ctx.arc(x, y, R, 0, TAU); ctx.fill();
@@ -5420,8 +5603,9 @@
   let leadHint = null; // first-time lead hint (once per install)
   let difficulty = "easy"; // 1.4.1 (set from the title screen, see setDifficulty)
   function drawCrosshair() {
-    const cx = W * 0.5 + gunner.shake * (Math.sin(elapsed * 73) * 1.1);
-    const cy = H * 0.5 + gunner.recoil * 2 + gunner.shake * (Math.cos(elapsed * 61) * 0.6);
+    const vb = fx154.vib; // 1.5.4 gun vibration: the reflector sight buzzes at the guns' rate while firing (jitter + a faint double image)
+    const cx = W * 0.5 + gunner.shake * (Math.sin(elapsed * 73) * 1.1) + vb * Math.sin(elapsed * 211) * 1.5 + (gunner.kx || 0) * W * 0.25;
+    const cy = H * 0.5 + gunner.recoil * 2 + gunner.shake * (Math.cos(elapsed * 61) * 0.6) + vb * Math.cos(elapsed * 187) * 1.1 + (gunner.ky || 0) * H * 0.25;
     ctx.save();
     {
       const hot = guns.overheated;
@@ -5436,6 +5620,7 @@
         ctx.moveTo(cx, cy + R - 5); ctx.lineTo(cx, cy + R + 7);
         ctx.stroke();
       };
+      if (vb > 0.25) { ctx.save(); ctx.translate(Math.sin(elapsed * 97) * 2.2, Math.cos(elapsed * 83) * 1.6); line("rgba(255,226,150," + (0.22 * vb).toFixed(3) + ")", 1.4); ctx.restore(); }
       line("rgba(20,18,14,0.28)", 2.6);
       line(hot ? "rgba(235,110,60,0.8)" : "rgba(255,226,150,0.72)", 1.2);
       ctx.fillStyle = hot ? "rgba(235,110,60,0.85)" : "rgba(255,226,150,0.85)";
@@ -6219,12 +6404,12 @@
     drag: (dx, dy) => { applyLookDelta(dx, dy); },
     friendlies: () => friendlies.map((f) => ({ name: f.name, x: f.x, y: f.y, z: f.z, yaw: f.yaw, bank: f.bank || 0, health: f.health, ok: friendlyOk(f), eng: f.engines.map((q) => +q.fire.toFixed(2) + (q.out ? "X" : "")) })),
     cam: () => ({ x: CAM.x, y: CAM.y, z: CAM.z }),
-    fighters: () => enemies.map((e) => ({ id: e.id, type: e.type, team: e.team, alive: e.alive, phase: e.phase, x: e.x, y: e.y, z: e.z, vx: e.vx, vy: e.vy, vz: e.vz, hx: e.hx, hy: e.hy, hz: e.hz, V: e.V, g: e.gLoad, bank: e.bank, p: e.p, ux: e.ux, uy: e.uy, uz: e.uz, w: e.turnW, mode: e.mode, diveT: e.diveT, dbg: e.dbg, dbg2: e.dbg2, tk: e.tgt ? e.tgt.kind : null, tt: e.target ? e.target.type : null, foe: e.foe ? e.foe.id : null, role: e.duelRole || null, hp: e.hp, sturm: !!e.sturm })),
+    fighters: () => enemies.map((e) => ({ sweep: e.sweep || 0, id: e.id, type: e.type, team: e.team, alive: e.alive, phase: e.phase, x: e.x, y: e.y, z: e.z, vx: e.vx, vy: e.vy, vz: e.vz, hx: e.hx, hy: e.hy, hz: e.hz, V: e.V, g: e.gLoad, bank: e.bank, p: e.p, ux: e.ux, uy: e.uy, uz: e.uz, w: e.turnW, mode: e.mode, diveT: e.diveT, dbg: e.dbg, dbg2: e.dbg2, tk: e.tgt ? e.tgt.kind : null, tt: e.target ? e.target.type : null, foe: e.foe ? e.foe.id : null, role: e.duelRole || null, hp: e.hp, sturm: !!e.sturm })),
     aimBlocked: () => aimHitsOwnShip(),
     bulletsRaw: () => bullets.map((b) => ({ x: b.x - CAM.x, y: b.y - CAM.y, z: b.z - CAM.z, vx: b.vx, vy: b.vy, vz: b.vz, trav: b.trav, life: b.life })),
     ownPart: (x, y, z) => ownPartAt(x, y, z),
     difficulty: (d) => { if (d) setDifficulty(d); return difficulty; },
-    missionInfo: () => mission ? { rkt: mission.rkt || { fired: 0, direct: 0, burst: 0, fragHits: 0, shooters: 0 }, r190: mission.r190 || null, p51cap: mission.p51cap || null, stragInfo: { outT: mission.playerOutT != null ? +mission.playerOutT.toFixed(1) : null, why: mission.playerOutWhy || null, hp: mission.playerOutHp != null ? mission.playerOutHp : null, passes: mission.stragPasses || 0, passes190: mission.strag190Passes || 0, hunters: mission.huntAssign || 0, stragSeen: mission.stragSeen || 0, k: playerStragK() }, p51ff: { hitYou: mission.p51HitYou || 0, hitGun: mission.p51HitGun || 0, lost: mission.p51Lost || 0, lostYou: mission.p51LostYou || 0, lostGun: mission.p51LostGun || 0, lostGer: mission.p51LostGer || 0 }, duelStarts: mission.duelStarts || 0, duelWhy: mission.duelWhy || null, duelSec: mission.duelSec || 0, p51Lost: mission.p51Lost || 0, duelGerHits: mission.duelGerHits || 0, duelGerBursts: mission.duelGerBursts || 0, duelP51Bursts: mission.duelP51Bursts || 0, idleEnd: idleAxisNow(), killsBy: mission.killsBy || {}, firstSeenT: mission.firstSeenT, fireSpeeds: mission.fireSpeeds || [], evades: mission.evades || 0, waves: mission.waves || 0, finalN: mission.finalN, t: mission.t, firstShotT: mission.firstShotT, passes: mission.passes, bursts: mission.bursts, lost: mission.friendliesLost, killed: mission.fightersKilled, cpuKills, youKills: kills, cpuShots: mission.cpuShots || 0, cpuHits: mission.cpuHits || 0, ff: mission.friendlyHits || 0, ffCpu: mission.friendlyHitsCpu || 0, ffLost: mission.friendlyFFLost || 0, dropped: mission.bombersDropped, done: mission.evaluated, modeStats: mission.modeStats, heading: mission.heading || 0, post: mission.post, ownHits: mission.ownHits || 0, engHits: mission.hs || null, cpuTracers: mission.cpuTracers || 0, gunStats: mission.gunStats || null, tail: bomber ? bomber.tail.fire : 0, engFire: bomber ? bomber.engines.map((q) => +q.fire.toFixed(2)) : null, phases: enemies.filter((q) => q.alive).reduce((a, q) => { a[q.phase] = (a[q.phase] || 0) + 1; return a; }, {}), alive109: MISSION_FIGHTERS - mission.fightersKilled, state, playerDead: !!(bomber && bomber.dead), downAt: downSeq ? downSeq.missionT : null, downCause: downSeq ? downSeq.cause : null, chutesSpawned: mission.chutes || 0, health: bomber ? bomber.health : 0, flak: mission.flakStats || null, timeLeft: mission.timeLeft, outLog: mission.outLog || [], outBox: outBoxCount(), hitLog: mission.hitLog || null, hitVic: mission.hitVic || null, passAgg: mission.passAgg || null, kYou: mission.kYou || 0, kGun: mission.kGun || 0, kP51: mission.kP51 || 0, p51: { jumps: mission.p51Jumps || 0, on190: mission.p51On190 || 0, hits: mission.p51Hits || 0, kills: mission.p51Kills || 0, kills190: mission.p51Kills190 || 0, drove: mission.p51Drove || 0, abort109: mission.p51Abort || 0, bursts: mission.p51Bursts || 0, endT: mission.p51EndT || 0, endLost: mission.p51EndLost || 0, endLeash: mission.p51EndLeash || 0, endDive: mission.p51EndDive || 0, endPass: mission.p51EndPass || 0, egress: mission.p51Egress || 0 }, waves190: mission.waves190 || 0, s190: { seen: mission.n190seen || 0, killedSeen: mission.k190seen || 0, drove: mission.n190drove || 0, killed: mission.k190 || 0 }, slipOn190: !!mission.slipOn190, 
+    missionInfo: () => mission ? { p51x: { bursts: mission.p51Bursts || 0, burstsNear: mission.p51BurstsNear || 0, fireSec: +(mission.p51FireSec || 0).toFixed(1), fireSecNear: +(mission.p51FireSecNear || 0).toFixed(1), fightNearSec: +(mission.p51FightNearSec || 0).toFixed(1), fireWinSec: +(mission.p51FireWinSec || 0).toFixed(1), hits: mission.p51Hits || 0, drove: mission.p51Drove || 0, jumps: mission.p51Jumps || 0, endPass: mission.p51EndPass || 0, endLost: mission.p51EndLost || 0, endT: mission.p51EndT || 0, endDive: mission.p51EndDive || 0, endLeash: mission.p51EndLeash || 0 }, rkt: mission.rkt || { fired: 0, direct: 0, burst: 0, fragHits: 0, shooters: 0 }, r190: mission.r190 || null, p51cap: mission.p51cap || null, stragInfo: { outT: mission.playerOutT != null ? +mission.playerOutT.toFixed(1) : null, why: mission.playerOutWhy || null, hp: mission.playerOutHp != null ? mission.playerOutHp : null, passes: mission.stragPasses || 0, passes190: mission.strag190Passes || 0, hunters: mission.huntAssign || 0, stragSeen: mission.stragSeen || 0, k: playerStragK() }, p51ff: { hitYou: mission.p51HitYou || 0, hitGun: mission.p51HitGun || 0, lost: mission.p51Lost || 0, lostYou: mission.p51LostYou || 0, lostGun: mission.p51LostGun || 0, lostGer: mission.p51LostGer || 0 }, duelStarts: mission.duelStarts || 0, duelWhy: mission.duelWhy || null, duelSec: mission.duelSec || 0, p51Lost: mission.p51Lost || 0, duelGerHits: mission.duelGerHits || 0, duelGerBursts: mission.duelGerBursts || 0, duelP51Bursts: mission.duelP51Bursts || 0, idleEnd: idleAxisNow(), killsBy: mission.killsBy || {}, firstSeenT: mission.firstSeenT, fireSpeeds: mission.fireSpeeds || [], evades: mission.evades || 0, waves: mission.waves || 0, finalN: mission.finalN, t: mission.t, firstShotT: mission.firstShotT, passes: mission.passes, bursts: mission.bursts, lost: mission.friendliesLost, killed: mission.fightersKilled, cpuKills, youKills: kills, cpuShots: mission.cpuShots || 0, cpuHits: mission.cpuHits || 0, ff: mission.friendlyHits || 0, ffCpu: mission.friendlyHitsCpu || 0, ffLost: mission.friendlyFFLost || 0, dropped: mission.bombersDropped, done: mission.evaluated, modeStats: mission.modeStats, heading: mission.heading || 0, post: mission.post, ownHits: mission.ownHits || 0, engHits: mission.hs || null, cpuTracers: mission.cpuTracers || 0, gunStats: mission.gunStats || null, tail: bomber ? bomber.tail.fire : 0, engFire: bomber ? bomber.engines.map((q) => +q.fire.toFixed(2)) : null, phases: enemies.filter((q) => q.alive).reduce((a, q) => { a[q.phase] = (a[q.phase] || 0) + 1; return a; }, {}), alive109: MISSION_FIGHTERS - mission.fightersKilled, state, playerDead: !!(bomber && bomber.dead), downAt: downSeq ? downSeq.missionT : null, downCause: downSeq ? downSeq.cause : null, chutesSpawned: mission.chutes || 0, health: bomber ? bomber.health : 0, flak: mission.flakStats || null, timeLeft: mission.timeLeft, outLog: mission.outLog || [], outBox: outBoxCount(), hitLog: mission.hitLog || null, hitVic: mission.hitVic || null, passAgg: mission.passAgg || null, kYou: mission.kYou || 0, kGun: mission.kGun || 0, kP51: mission.kP51 || 0, p51: { jumps: mission.p51Jumps || 0, on190: mission.p51On190 || 0, hits: mission.p51Hits || 0, kills: mission.p51Kills || 0, kills190: mission.p51Kills190 || 0, drove: mission.p51Drove || 0, abort109: mission.p51Abort || 0, bursts: mission.p51Bursts || 0, endT: mission.p51EndT || 0, endLost: mission.p51EndLost || 0, endLeash: mission.p51EndLeash || 0, endDive: mission.p51EndDive || 0, endPass: mission.p51EndPass || 0, egress: mission.p51Egress || 0 }, waves190: mission.waves190 || 0, s190: { seen: mission.n190seen || 0, killedSeen: mission.k190seen || 0, drove: mission.n190drove || 0, killed: mission.k190 || 0 }, slipOn190: !!mission.slipOn190, 
       fHealth: friendlies.map((f) => Math.round(f.health)), player: bomber ? Math.round(bomber.health) : null, VF, MPH } : null,
     hitEnemy: (id, n) => {
       const e = enemies.find((q) => q.id === id);
@@ -6287,10 +6472,10 @@
       }
       return e.id;
     },
-    damage: (n) => damageBomber(n || 10, null),
+    damage: (n) => { if (bomber) flakDamage(bomber, n || 10, 1); return bomber ? bomber.health : 0; }, // test hook (1.5.4: was a dead reference)
     tune: (o) => Object.assign(TUNE, o || {}),
     gunsDbg: () => { const out = []; for (const f of friendlies) { if (!f.guns || !friendlyOk(f)) continue; const c = Math.cos(f.yaw || 0), sn = Math.sin(f.yaw || 0); f.guns.forEach((g, gi) => { if (!(g.burst > 0 && g.tgt && g.tgt.alive)) return; const G = CPU_GUNS[gi]; const ox = f.x + G.p[0] * c + G.p[2] * sn, oy = f.y + G.p[1], oz = f.z - G.p[0] * sn + G.p[2] * c; const dx = g.tgt.x - ox, dy = g.tgt.y - oy, dz = g.tgt.z - oz, d = Math.hypot(dx, dy, dz) || 1; out.push({ gi, n: CPU_GUNS.length, tid: g.tgt.id, lx: (dx * c - dz * sn) / d, ly: dy / d, lz: (dx * sn + dz * c) / d, ship: f.name }); }); } return out; },
-    killPlayer: (cause) => { playerShotDown(cause || "109"); return !!downSeq; },
+    killPlayer: (cause) => { playerShotDown(cause || "__test"); return !!downSeq; },
     downInfo: () => downSeq ? { T: +downSeq.T.toFixed(2), phase: downSeq.phase, cause: downSeq.cause, missionT: downSeq.missionT, eye: { x: EYE.x, y: EYE.y, z: EYE.z }, roll: viewRoll, ship: { x: downSeq.ship.x, y: downSeq.ship.y, z: downSeq.ship.z, pd: downSeq.ship.pd, tailOff: !!downSeq.ship.tailOff, wingOff: downSeq.ship.wingOff || 0, kind: downSeq.kind }, chute: downSeq.chute ? { y: downSeq.chute.y, z: downSeq.chute.z, vy: downSeq.chute.vy, vz: downSeq.chute.vz, t: downSeq.chute.t } : null, finished: downSeq.finished } : null,
     skipDown: () => { if (downSeq) finishDownSeq(); return state; },
     chutes: () => chutes.map((c) => ({ id: c.id, kind: c.kind, x: c.x, y: c.y, z: c.z, open: c.open, t: c.t })),
@@ -6364,12 +6549,14 @@
       }
       return { pending: !!pendingPair, enemies: enemies.length };
     },
+    dbg: () => (mission ? { heading: mission.heading || 0, post: mission.post || 0, turning: !!mission.turningBack, timeLeft: mission.timeLeft, phase: mission.phase, geoRot: mission.geo ? mission.geo.rot : 0 } : null),
     friendliesRaw: () => friendlies.map((f) => ({ ...f })),
     skyTrailCount: () => skyTrails.length,
     flak: (x, y, z, delay) => { if (!mission) return; const F = mission.flakStats || (mission.flakStats = { bursts: 0, near: 0, hitsF: 0, lostF: 0, blown: 0, hitsP: 0, closeP: 0 }); spawnFlakBurst(x, y, z, delay || 0, F); },
     flakList: () => flakBursts.map((b) => ({ id: b.id, x: b.x, y: b.y, z: b.z, t: b.t })),
     boxC: () => ({ x: BOX_C.x, y: BOX_C.y, z: BOX_C.z }),
     god: (b) => { godMode = !!b; },
+    p51Tracers: () => tracers.filter((t) => t.p51 && t.life > 0).map((t) => ({ x: t.x, y: t.y, z: t.z, vx: t.vx, vy: t.vy, vz: t.vz })), // 1.5.4 test hook
     // 1.4.0 harness: look in the SHIP frame (deg; yaw 0 = nose, 180 = tail) and set our ship's health (drives the damage look)
     lookFromEye: (x, y, z) => { const dx = x - EYE.x, dy = y - EYE.y, dz = z - EYE.z; gunner.yaw = wrapYaw(Math.atan2(dx, dz)); gunner.pitch = clamp(Math.atan2(dy, Math.hypot(dx, dz)), PITCH_MIN, PITCH_MAX); gunner.yawV = 0; gunner.pitchV = 0; return [gunner.yaw, gunner.pitch]; },
     look: (ywDeg, ptDeg) => { gunner.yaw = wrapYaw(ywDeg * Math.PI / 180); gunner.pitch = clamp(ptDeg * Math.PI / 180, PITCH_MIN, PITCH_MAX); gunner.yawV = 0; gunner.pitchV = 0; input.swipeAimX = 0; input.swipeAimY = 0; input.stickVX = 0; input.stickVY = 0; input.stickActive = false; },
@@ -6410,6 +6597,15 @@
     setFriendly: (i, o) => { const f = friendlies[i]; if (!f) return null; Object.assign(f, o || {}); return { x: f.x, y: f.y, z: f.z, yaw: f.yaw, bank: f.bank }; },
     projectW: (x, y, z) => { const p = project(x, y, z); return p ? { sx: p.sx, sy: p.sy } : null; },
     clearFx: () => { particles.length = 0; hitMarks.length = 0; },
+    fx154: () => ({ n: fx154.n, peakKick: +fx154.peakKick.toFixed(3), peakBlur: +fx154.peakBlur.toFixed(3), peakVig: +fx154.peakVig.toFixed(3), cabin: fx154.cabin.length, kicks: fx154.kicks.length, blur: fx154.blur, vib: fx154.vib }),
+    fireTest154: (slot, ks, own) => { const f = own ? bomber : friendlies.find((q) => (q.slot != null ? q.slot : -1) === slot) || friendlies[slot]; if (!f || !f.sd) return null; for (const k of ks) { f.sd.eng[k].fire = true; } syncShip(f); return f.engines.map((e) => +e.fire.toFixed(2)); },
+    holeTest154: (slot, n, size, own) => { // test hook: rounds through the German hole path (holes + torn skin) on friendly `slot`, or on the player's ship
+      const f = own ? bomber : friendlies.find((q) => (q.slot != null ? q.slot : -1) === slot) || friendlies[slot]; if (!f) return null;
+      const P = own ? { x: CAM.x, y: CAM.y, z: CAM.z } : { x: f.x, y: f.y, z: f.z }; let k = 0;
+      for (let i = 0; i < n; i++) { f.holeT = -9; const sg = (own ? 1 : (P.x < 0 ? -1 : 1)), y = P.y + (Math.random() * 3 - 0.8), z = P.z + (Math.random() * 16 - 8); holeAt(f, P.x + sg * 40, y, z, P.x - sg * 40, y, z, size || 0.2); k++; }
+      return { n: k, holeN: f.holeN };
+    },
+    fxTest154: (what, a, b2) => { if (what === 'flak') addKick('flak', a || 0.4); else if (what === 'cannon') addKick('cannon', a || 0.17); else if (what === 'cabin') cabinHit(a == null ? 0.8 : a, 'test'); else if (what === 'cluster') hitCluster(CAM.x + (a || 0), CAM.y + (b2 || 0), CAM.z + 40, 0, 0, 0, true, 1); },
     // 1.3.9: harmonisation check — fire one spread-free round from each gun along the current look
     // with the real launch code + balStep, report where it crosses the 320 u plane vs the sight line
     convTest: (yawDeg, pitchDeg, sdt = 1 / 60) => {

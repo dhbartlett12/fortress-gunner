@@ -282,3 +282,23 @@ body.desktop canvas { cursor: crosshair; }
   #title .debugnote { display: none; }
   #title .controls { margin-bottom: 6px; line-height: 1.5; }
 }
+
+/* 1.5.4: the debrief panel scrolls (touch + wheel) inside the viewport; FLY IT AGAIN stays reachable (sticky at the bottom) */
+#gameover .panel {
+  box-sizing: border-box; width: min(540px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px);
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  touch-action: pan-y; pointer-events: auto;
+  background: rgba(10,14,20,0.82);
+}
+#gameover .panel #restartBtn {
+  position: sticky; bottom: 0; z-index: 3; display: block; width: 100%; margin: 10px 0 0;
+  box-shadow: 0 -10px 14px 6px rgba(10,14,20,0.9);
+}
+@media (max-height: 420px) {
+  #gameover .panel { padding: 8px 12px; max-height: calc(100vh - 8px); max-height: calc(100dvh - 8px); }
+  #gameover h1 { font-size: 26px; margin-bottom: 6px; }
+  #gameover .eyebrow { margin-bottom: 4px; }
+  #gameover .blurb { font-size: 12px; line-height: 1.35; margin-bottom: 6px; }
+  #gameover .panel #restartBtn { padding: 9px 18px; }
+}

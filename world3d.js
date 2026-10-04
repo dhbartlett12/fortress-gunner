@@ -430,6 +430,57 @@ export function createWorld3D(canvas) {
   const b17SeamMat = new THREE.MeshBasicMaterial({ color: 0x14150f, transparent: true, opacity: 0.38, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   const _bgBox = (w, h, d) => new THREE.BoxGeometry(w, h, d), _bgCyl = (r0, r1, h, sg) => new THREE.CylinderGeometry(r0, r1, h, sg || 6);
   let _b17ConeG = null;
+  // ===== 1.5.4 B-17 LOFTED FUSELAGE — stations in fractions of the span (z along the nose, hw = half beam, top / bot = crown and keel, n = squareness of the section) =====
+  // Source: B-17G side-profile reference (deepest at waist/radio room, cockpit raised above a lower glazed nose, top-turret saddle, belly upsweep to a slim tail).
+  const b17HullSecs = [
+    { z: -0.414, hw: 0.004, top: 0.0135, bot: 0.0045, n: 2.2 }, { z: -0.404, hw: 0.0085, top: 0.0185, bot: 0.0015, n: 2.2 }, { z: -0.37, hw: 0.0135, top: 0.0235, bot: -0.0055, n: 2.2 },
+    { z: -0.32, hw: 0.0195, top: 0.0295, bot: -0.0165, n: 2.3 }, { z: -0.26, hw: 0.0285, top: 0.0365, bot: -0.0245, n: 2.3 }, { z: -0.19, hw: 0.0385, top: 0.0435, bot: -0.0365, n: 2.4 },
+    { z: -0.12, hw: 0.0455, top: 0.0485, bot: -0.0485, n: 2.5 }, { z: -0.02, hw: 0.0458, top: 0.0495, bot: -0.0495, n: 2.5 }, { z: 0.07, hw: 0.0445, top: 0.0495, bot: -0.0475, n: 2.4 },
+    { z: 0.135, hw: 0.0425, top: 0.0505, bot: -0.0415, n: 2.3 }, { z: 0.17, hw: 0.0405, top: 0.0515, bot: -0.0365, n: 2.2 }, { z: 0.205, hw: 0.0385, top: 0.0535, bot: -0.0335, n: 2.1 },
+    { z: 0.24, hw: 0.0355, top: 0.0535, bot: -0.0300, n: 2.1 }, { z: 0.262, hw: 0.0335, top: 0.0505, bot: -0.0275, n: 2.1 },
+  ];
+  function b17HullAt(z) { // interpolated station (hull) — also continues into the nose glazing for z > 0.262
+    const A = z > 0.262 ? b17NoseSecs : b17HullSecs;
+    if (z <= A[0].z) return A[0]; if (z >= A[A.length - 1].z) return A[A.length - 1];
+    for (let i = 0; i < A.length - 1; i++) { const a = A[i], b = A[i + 1]; if (z <= b.z) { const t = (z - a.z) / (b.z - a.z); return { hw: a.hw + (b.hw - a.hw) * t, top: a.top + (b.top - a.top) * t, bot: a.bot + (b.bot - a.bot) * t, n: a.n + (b.n - a.n) * t }; } }
+    return A[A.length - 1];
+  }
+  const b17NoseSecs = [
+    { z: 0.262, hw: 0.0335, top: 0.0310, bot: -0.0275, n: 2.1 }, { z: 0.280, hw: 0.0325, top: 0.0285, bot: -0.0290, n: 2.0 }, { z: 0.298, hw: 0.0295, top: 0.0220, bot: -0.0290, n: 2.0 },
+    { z: 0.316, hw: 0.0245, top: 0.0140, bot: -0.0260, n: 2.0 }, { z: 0.331, hw: 0.0175, top: 0.0070, bot: -0.0205, n: 2.0 }, { z: 0.342, hw: 0.0095, top: 0.0010, bot: -0.0140, n: 2.0 }, { z: 0.348, hw: 0.0020, top: -0.0030, bot: -0.0090, n: 2.0 },
+  ];
+  function b17Loft(secs, N, i0, i1, capEnds) {
+    const S = B17_VIS, pos = [], uv = [], idx = [], rows = i1 - i0 + 1;
+    for (let r = 0; r < rows; r++) {
+      const q = secs[i0 + r], yM = (q.top + q.bot) * 0.5, hH = Math.max(1e-4, (q.top - q.bot) * 0.5);
+      for (let i = 0; i <= N; i++) {
+        const a = (i / N) * Math.PI * 2, c = Math.cos(a), sn = Math.sin(a), e = 2 / q.n;
+        pos.push(Math.sign(c) * Math.pow(Math.abs(c), e) * q.hw * S, (yM + Math.sign(sn) * Math.pow(Math.abs(sn), e) * hH) * S, q.z * S);
+        uv.push(i / N, (q.z + 0.42) / 0.78);
+      }
+    }
+    const W = N + 1;
+    for (let r = 0; r < rows - 1; r++) for (let i = 0; i < N; i++) { const a = r * W + i, b = a + 1, c = a + W, d = c + 1; idx.push(a, c, b, b, c, d); }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx);
+    if (capEnds) { // close the tail end (the front is closed by the nose glazing)
+      const base = pos.length / 3, q = secs[i0], yM = (q.top + q.bot) * 0.5; pos.push(0, yM * S, q.z * S); uv.push(0.5, 0);
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      for (let i = 0; i < N; i++) idx.push(base, i + 1, i); geo.setIndex(idx);
+    }
+    geo.computeVertexNormals(); return geo;
+  }
+  let _b17NoseMat = null;
+  function b17NoseGlass() { // multi-paned bombardier glazing: pale blue-grey Plexiglas with dark frame bars (texture, one material shared by every ship)
+    if (_b17NoseMat) return _b17NoseMat;
+    const c = document.createElement("canvas"); c.width = 128; c.height = 64; const x = c.getContext("2d");
+    const gr = x.createLinearGradient(0, 0, 0, 64); gr.addColorStop(0, "#9eb3bd"); gr.addColorStop(0.5, "#6f8793"); gr.addColorStop(1, "#4e626c"); x.fillStyle = gr; x.fillRect(0, 0, 128, 64);
+    x.fillStyle = "#1f2418"; for (let i = 0; i < 8; i++) x.fillRect(i * 16 - 1, 0, 3, 64); for (const yy of [14, 30, 46]) x.fillRect(0, yy - 1, 128, 3);
+    x.fillStyle = "rgba(255,255,255,0.25)"; for (let i = 0; i < 8; i++) x.fillRect(i * 16 + 3, 3, 5, 9);
+    const tex = new THREE.CanvasTexture(c); tex.wrapS = THREE.RepeatWrapping; if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    _b17NoseMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.2, metalness: 0.35, envMapIntensity: 0.8 });
+    return _b17NoseMat;
+  }
   function buildB17() {
     const S = B17_VIS;
     const g = new THREE.Group();
@@ -447,26 +498,27 @@ export function createWorld3D(canvas) {
     const skinPatch = patchKind ? new THREE.MeshStandardMaterial({ color: 0x8c9078, map: wt, roughness: 0.55, metalness: 0.14, envMapIntensity: 0.4 }) : skin; // lighter olive-grey replacement panels
     const mats = [skin, dark, glassM]; if (patchKind) mats.push(skinPatch);
     g.userData.hazeMats = mats.map((m) => ({ m, col: m.color.clone() }));
-    // fuselage: lathe profile along +Z (nose) — radius r at station z (fractions of S)
-    const prof = [[-0.405, 0.004], [-0.39, 0.011], [-0.35, 0.016], [-0.28, 0.024], [-0.18, 0.034], [-0.06, 0.043], [0.06, 0.048], [0.18, 0.05], [0.26, 0.048], [0.3, 0.044]];
-    const lp = prof.map(([z, r]) => new THREE.Vector2(r * S, z * S));
-    const lg = new THREE.LatheGeometry(lp, 14); lg.rotateX(Math.PI / 2); lg.scale(0.94, 1.02, 1); tintGeo(lg, cTop, cBot); // lathe Y axis → +Z (nose)
+    // fuselage (1.5.4): a LOFTED profile — separate top line, belly line and beam per station, not a lathe. Deepest at the waist / radio room, raised cockpit hump,
+    // top-turret saddle behind it, long taper with belly upsweep to the tail gunner, and a stepped-down glazed bombardier nose (own mesh + pane texture).
+    const hull = b17HullSecs, hullAt = b17HullAt;
+    const lg = b17Loft(hull, 16, 0, hull.length - 1, true); tintGeo(lg, cTop, cBot);
     const fus = new THREE.Mesh(lg, skin); g.add(fus);
+    const sideX = (z, y, k2) => { const q = hullAt(z), yM = (q.top + q.bot) * 0.5, hH = (q.top - q.bot) * 0.5; const r = Math.min(0.999, Math.abs(y - yM) / hH); return Math.sign(k2 || 1) * q.hw * Math.pow(1 - Math.pow(r, q.n), 1 / q.n); };
     // nose glazing (bombardier) + chin turret, cockpit greenhouse, top turret, ball turret, tail gun, waist windows
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.044 * S, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), glassM);
-    nose.rotation.x = Math.PI / 2; nose.scale.set(0.94, 1.0, 1.1); nose.position.z = 0.298 * S; g.add(nose);
-    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.016 * S, 8, 6), dark); chin.position.set(0, -0.04 * S, 0.3 * S); g.add(chin);
-    const cock = new THREE.Mesh(new THREE.BoxGeometry(0.06 * S, 0.022 * S, 0.07 * S), glassM); cock.position.set(0, 0.046 * S, 0.215 * S); cock.rotation.x = -0.12; g.add(cock);
-    const cockF = new THREE.Mesh(new THREE.BoxGeometry(0.062 * S, 0.004 * S, 0.004 * S), dark); cockF.position.set(0, 0.058 * S, 0.215 * S); g.add(cockF);
-    if (metal) { const ag = new THREE.Mesh(new THREE.BoxGeometry(0.05 * S, 0.004 * S, 0.1 * S), new THREE.MeshStandardMaterial({ color: 0x3f4730, roughness: 0.7, metalness: 0.1 })); ag.position.set(0, 0.047 * S, 0.29 * S); ag.rotation.x = 0.28; g.add(ag); } // anti-glare panel
-    const top = new THREE.Mesh(new THREE.SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM); top.position.set(0, 0.049 * S, 0.165 * S); g.add(top);
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.022 * S, 8, 6), dark); ball.position.set(0, -0.05 * S, -0.02 * S); g.add(ball);
-    const tailG = new THREE.Mesh(new THREE.BoxGeometry(0.018 * S, 0.02 * S, 0.035 * S), glassM); tailG.position.set(0, 0.004 * S, -0.405 * S); tailG.userData.tailPart = true; g.add(tailG);
-    for (const sd of [-1, 1]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(0.05 * S, 0.018 * S), dark); w.position.set(sd * 0.0405 * S, 0.012 * S, -0.1 * S); w.rotation.y = sd * Math.PI / 2; g.add(w); }
+    const noseM = b17NoseGlass().clone(); mats.push(noseM); g.userData.hazeMats.push({ m: noseM, col: noseM.color.clone() });
+    const nose = new THREE.Mesh(b17Loft(b17NoseSecs, 16, 0, b17NoseSecs.length - 1, false), noseM); g.add(nose);
+    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.0165 * S, 10, 7), dark); chin.scale.set(0.95, 1, 1.15); chin.position.set(0, -0.037 * S, 0.292 * S); g.add(chin);
+    const cock = new THREE.Mesh(new THREE.BoxGeometry(0.056 * S, 0.02 * S, 0.075 * S), glassM); cock.position.set(0, 0.0505 * S, 0.222 * S); cock.rotation.x = -0.14; g.add(cock);
+    const cockF = new THREE.Mesh(new THREE.BoxGeometry(0.058 * S, 0.003 * S, 0.004 * S), dark); cockF.position.set(0, 0.0605 * S, 0.222 * S); g.add(cockF);
+    if (metal) { const ag = new THREE.Mesh(new THREE.BoxGeometry(0.05 * S, 0.004 * S, 0.1 * S), new THREE.MeshStandardMaterial({ color: 0x3f4730, roughness: 0.7, metalness: 0.1 })); ag.position.set(0, 0.034 * S, 0.285 * S); ag.rotation.x = 0.28; g.add(ag); } // anti-glare panel
+    const top = new THREE.Mesh(new THREE.SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM); top.position.set(0, hullAt(0.15).top * S - 0.002 * S, 0.15 * S); g.add(top);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.019 * S, 10, 7), dark); ball.position.set(0, -0.047 * S, -0.02 * S); g.add(ball);
+    const tailG = new THREE.Mesh(new THREE.BoxGeometry(0.014 * S, 0.016 * S, 0.034 * S), glassM); tailG.position.set(0, 0.007 * S, -0.402 * S); tailG.userData.tailPart = true; g.add(tailG);
+    for (const sd of [-1, 1]) for (const wz of [-0.075, -0.13]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(0.04 * S, 0.02 * S), dark); w.position.set(sideX(wz, 0.014 * S / S, sd) * S + sd * 0.0006 * S, 0.014 * S, wz * S); w.rotation.y = sd * Math.PI / 2; g.add(w); }
     // fuselage codes + insignia on both sides
     { const ct = b17CodeTex(k, metal), cm = new THREE.MeshStandardMaterial({ map: ct, transparent: true, alphaTest: 0.1, roughness: 0.6, metalness: metal ? 0.6 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
       mats.push(cm); g.userData.hazeMats.push({ m: cm, col: cm.color.clone() });
-      for (const sd of [-1, 1]) { const d = new THREE.Mesh(new THREE.PlaneGeometry(0.2 * S, 0.05 * S), cm); d.position.set(sd * 0.0435 * S, 0.004 * S, -0.02 * S); d.rotation.y = sd * Math.PI / 2; g.add(d); } }
+      for (const sd of [-1, 1]) { const d = new THREE.Mesh(new THREE.PlaneGeometry(0.2 * S, 0.05 * S), cm); d.position.set(sideX(-0.02, 0.004, sd) * S + sd * 0.0007 * S, 0.004 * S, -0.02 * S); d.rotation.y = sd * Math.PI / 2; g.add(d); } }
     // wings: tapered planform with rounded tips, 4.5° dihedral, underside grey
     const wingShape = (() => { const sh = new THREE.Shape(); sh.moveTo(0.02 * S, 0.14 * S); sh.lineTo(0.47 * S, 0.075 * S); sh.quadraticCurveTo(0.51 * S, 0.07 * S, 0.51 * S, 0.04 * S); sh.quadraticCurveTo(0.5 * S, 0.01 * S, 0.47 * S, 0.012 * S); sh.lineTo(0.02 * S, -0.06 * S); sh.closePath(); return sh; })();
     const wg = new THREE.ExtrudeGeometry(wingShape, { depth: 0.016 * S, bevelEnabled: true, bevelThickness: 0.003 * S, bevelSize: 0.003 * S, bevelSegments: 1 });
@@ -480,41 +532,42 @@ export function createWorld3D(canvas) {
     { const sh = new THREE.Shape(); sh.moveTo(0, -0.3 * S); sh.lineTo(0.2 * S, -0.365 * S); sh.quadraticCurveTo(0.225 * S, -0.37 * S, 0.22 * S, -0.39 * S); sh.lineTo(0.02 * S, -0.415 * S); sh.lineTo(0, -0.415 * S); sh.closePath();
       const sg = new THREE.ExtrudeGeometry(sh, { depth: 0.009 * S, bevelEnabled: false }); sg.rotateX(Math.PI / 2); tintGeo(sg, cTop, cBot);
       for (const side of [-1, 1]) { const st = new THREE.Mesh(sg, patchKind === "tail" ? skinPatch : skin); st.scale.x = side; st.position.y = 0.012 * S; st.userData.tailPart = true; g.add(st); } }
-    { // swept, tapered B-17 fin (dorsal fillet → tall rounded rudder) + tail markings both sides
+    { // 1.5.4 fin: a LONG, low dorsal fillet blending out of the spine (no step), then a swept, tapered fin ~10 ft above the hull and a rounded rudder tip
       const sh = new THREE.Shape();
-      sh.moveTo(-0.415 * S, 0); sh.lineTo(-0.15 * S, 0); sh.quadraticCurveTo(-0.26 * S, 0.03 * S, -0.3 * S, 0.075 * S);
-      sh.lineTo(-0.35 * S, 0.19 * S); sh.quadraticCurveTo(-0.38 * S, 0.205 * S, -0.41 * S, 0.195 * S); sh.lineTo(-0.425 * S, 0.1 * S); sh.closePath();
+      sh.moveTo(-0.38 * S, 0.012 * S); sh.lineTo(-0.1 * S, 0.042 * S);
+      sh.quadraticCurveTo(-0.2 * S, 0.05 * S, -0.245 * S, 0.082 * S);   // long dorsal fillet rising out of the spine
+      sh.quadraticCurveTo(-0.268 * S, 0.1 * S, -0.283 * S, 0.142 * S);  // the fin's swept leading edge steepens
+      sh.quadraticCurveTo(-0.292 * S, 0.164 * S, -0.318 * S, 0.1645 * S); sh.quadraticCurveTo(-0.344 * S, 0.165 * S, -0.352 * S, 0.145 * S); // rounded tip
+      sh.lineTo(-0.372 * S, 0.05 * S); sh.lineTo(-0.376 * S, 0.012 * S); sh.closePath();
       const fg = new THREE.ExtrudeGeometry(sh, { depth: 0.01 * S, bevelEnabled: false });
       fg.translate(0, 0, -0.005 * S); tintGeo(fg, cTop, cBot);
-      const fin = new THREE.Mesh(fg, patchKind === "tail" ? skinPatch : skin); fin.rotation.y = -Math.PI / 2; fin.position.set(0, 0.03 * S, 0); fin.userData.tailPart = true; g.add(fin);
+      const fin = new THREE.Mesh(fg, patchKind === "tail" ? skinPatch : skin); fin.rotation.y = -Math.PI / 2; fin.position.set(0, 0, 0); fin.userData.tailPart = true; g.add(fin);
       const tt = b17TailTex(k, metal), tm = new THREE.MeshStandardMaterial({ map: tt, transparent: true, alphaTest: 0.08, roughness: 0.6, metalness: metal ? 0.5 : 0.1, polygonOffset: true, polygonOffsetFactor: -2 });
       g.userData.hazeMats.push({ m: tm, col: tm.color.clone() });
-      for (const sd of [-1, 1]) { const d = new THREE.Mesh(new THREE.PlaneGeometry(0.06 * S, 0.075 * S), tm); d.position.set(sd * 0.0056 * S, 0.03 * S + 0.13 * S, -0.383 * S); d.rotation.y = sd * Math.PI / 2; d.userData.tailPart = true; g.add(d); }
+      for (const sd of [-1, 1]) { const d = new THREE.Mesh(new THREE.PlaneGeometry(0.06 * S, 0.075 * S), tm); d.position.set(sd * 0.0056 * S, 0.1 * S, -0.322 * S); d.rotation.y = sd * Math.PI / 2; d.userData.tailPart = true; g.add(d); }
     }
     // ---- 1.5.3 detail pass (all static detail is merged: one draw per material per part; tail/wing pieces carry the break-off flags) ----
     const MB = { skin: [], dark: [], glass: [] }, MT = { dark: [] }, MW = { "-1": { skin: [], dark: [], seam: [], stain: [] }, "1": { skin: [], dark: [], seam: [], stain: [] } };
     const Z90 = Math.PI / 2;
     { // nose glazing frames, cheek windows, framed cockpit, turret guns, waist guns, hatch
-      for (const z of [0.32, 0.335]) { const rr = z < 0.33 ? 0.0385 : 0.0285; const tg = new THREE.TorusGeometry(rr * S, 0.0011 * S, 4, 14); MB.dark.push([tg, 0, 0, (z + 0.0) * S, 0, 0, 0, 0.94, 1, 1]); }
-      MB.dark.push([_bgBox(0.0014 * S, 0.07 * S, 0.0014 * S), 0, 0, 0.332 * S, -0.0, 0, 0]); MB.dark.push([_bgBox(0.066 * S, 0.0014 * S, 0.0014 * S), 0, 0, 0.332 * S, 0, 0, 0]);
       for (const sd of [-1, 1]) {
-        MB.glass.push([_bgBox(0.005 * S, 0.014 * S, 0.026 * S), sd * 0.0432 * S, -0.002 * S, 0.262 * S, 0, 0, 0]); // cheek gun window
-        MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sd * 0.0436 * S, -0.002 * S, 0.249 * S, 0, 0, 0]); MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sd * 0.0436 * S, -0.002 * S, 0.275 * S, 0, 0, 0]);
-        for (const z of [0.19, 0.2, 0.226, 0.246]) MB.dark.push([_bgBox(0.0018 * S, 0.02 * S, 0.0016 * S), sd * 0.0305 * S, 0.044 * S, z * S, 0, 0, 0]); // cockpit side-window frames
-        MB.glass.push([_bgBox(0.0018 * S, 0.015 * S, 0.05 * S), sd * 0.0302 * S, 0.044 * S, 0.218 * S, 0, 0, 0]);
-        MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.034 * S, 5), sd * 0.0055 * S, 0.0585 * S, 0.19 * S, Z90, 0, 0]); // top-turret twin .50s
-        MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), sd * 0.0035 * S, -0.045 * S, 0.322 * S, Z90, 0, 0]); // chin turret
+        MB.glass.push([_bgBox(0.004 * S, 0.014 * S, 0.026 * S), sideX(0.285, -0.004, sd) * S, -0.004 * S, 0.285 * S, 0, 0, 0]); // cheek gun window
+        MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sideX(0.271, -0.004, sd) * S, -0.004 * S, 0.271 * S, 0, 0, 0]); MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sideX(0.299, -0.004, sd) * S, -0.004 * S, 0.299 * S, 0, 0, 0]);
+        for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(0.0018 * S, 0.02 * S, 0.0016 * S), sideX(z, 0.048, sd) * S, 0.048 * S, z * S, 0, 0, 0]); // cockpit side-window frames
+        MB.glass.push([_bgBox(0.0018 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.048, sd) * S - sd * 0.0004 * S, 0.048 * S, 0.218 * S, 0, 0, 0]);
+        MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.034 * S, 5), sd * 0.0055 * S, hullAt(0.15).top * S + 0.003 * S, 0.172 * S, Z90, 0, 0]); // top-turret twin .50s
+        MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), sd * 0.0035 * S, -0.038 * S, 0.305 * S, Z90, 0, 0]); // chin turret
         MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.028 * S, 5), sd * 0.004 * S, -0.072 * S, -0.046 * S, 0.5, 0, 0]); // ball turret
-        MB.dark.push([_bgCyl(0.0016 * S, 0.0016 * S, 0.04 * S, 5), sd * 0.0575 * S, 0.014 * S, -0.103 * S, 0, 0, Z90]); // waist gun
-        MB.dark.push([_bgBox(0.0045 * S, 0.0012 * S, 0.056 * S), sd * 0.0412 * S, 0.0235 * S, -0.1 * S, 0, 0, 0]); // waist window top rail
+        MB.dark.push([_bgCyl(0.0016 * S, 0.0016 * S, 0.04 * S, 5), sd * 0.058 * S, 0.014 * S, -0.075 * S, 0, 0, Z90]); // waist gun
+        MB.dark.push([_bgBox(0.0035 * S, 0.0012 * S, 0.1 * S), sideX(-0.1, 0.0245, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]); // waist window top rail
       }
-      MB.dark.push([_bgBox(0.062 * S, 0.0016 * S, 0.002 * S), 0, 0.047 * S, 0.2508 * S, -0.12, 0, 0]);
-      for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(0.0016 * S, 0.022 * S, 0.0018 * S), x * S, 0.047 * S, 0.2508 * S, -0.12, 0, 0]); // windscreen mullions
-      MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 0.004 * S, 12), 0, 0.0485 * S, 0.165 * S, 0, 0, 0]); // top-turret ring
+      MB.dark.push([_bgBox(0.058 * S, 0.0016 * S, 0.002 * S), 0, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]);
+      for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(0.0016 * S, 0.02 * S, 0.0018 * S), x * S, 0.0525 * S, 0.2585 * S, -0.14, 0, 0]); // windscreen mullions
+      MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 0.004 * S, 12), 0, hullAt(0.15).top * S - 0.001 * S, 0.15 * S, 0, 0, 0]); // top-turret ring
       MB.glass.push([_bgBox(0.014 * S, 0.003 * S, 0.03 * S), 0, 0.0505 * S, -0.03 * S, 0, 0, 0]); // radio-room hatch
     }
     MT.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), 0.0035 * S, 0.0045 * S, -0.43 * S, Z90, 0, 0]); MT.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), -0.0035 * S, 0.0045 * S, -0.43 * S, Z90, 0, 0]); // tail guns
-    for (const sd of [-1, 1]) { MT.dark.push([_bgBox(0.0014 * S, 0.115 * S, 0.0026 * S), sd * 0.0062 * S, 0.15 * S, -0.376 * S, 0, 0, 0]); MT.dark.push([_bgBox(0.2 * S, 0.0012 * S, 0.0022 * S), sd * 0.11 * S, 0.0135 * S, -0.388 * S, 0, 0, 0]); } // rudder hinge, elevator hinge
+    for (const sd of [-1, 1]) { MT.dark.push([_bgBox(0.0014 * S, 0.1 * S, 0.0026 * S), sd * 0.0062 * S, 0.095 * S, -0.34 * S, 0, 0, 0]); MT.dark.push([_bgBox(0.2 * S, 0.0012 * S, 0.0022 * S), sd * 0.11 * S, 0.0135 * S, -0.388 * S, 0, 0, 0]); } // rudder hinge, elevator hinge
     { // wing panel lines: ribs + flap/aileron hinge lines (thin dark strips just proud of the upper skin)
       const LE = (x) => 0.14 - 0.065 * (x - 0.02) / 0.45, TE = (x) => -0.06 + 0.072 * (x - 0.02) / 0.45, wy = (x) => (-0.0155 + x * 0.075 + 0.0018) * S;
       const qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), ZA = new THREE.Vector3(0, 0, 1), YA = new THREE.Vector3(0, 1, 0);
@@ -562,7 +615,7 @@ export function createWorld3D(canvas) {
       bay.set = (o) => { o = o < 0 ? 0 : o > 1 ? 1 : o; if (Math.abs(o - bay.open) < 0.01) return; bay.open = o; const vis = o > 0.01; bay.L.visible = bay.R.visible = bay.dark.visible = vis; bay.L.rotation.z = -o * 1.35; bay.R.rotation.z = o * 1.35; };
       g.userData.bay = bay;
       if (B17_ART[k] != null) { const am = new THREE.MeshStandardMaterial({ map: b17ArtTex(B17_ART[k]), transparent: true, alphaTest: 0.1, roughness: 0.6, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2 }); mats.push(am); g.userData.hazeMats.push({ m: am, col: am.color.clone() });
-        const art = new THREE.Mesh(new THREE.PlaneGeometry(0.1 * S, 0.05 * S), am); art.position.set(-0.0455 * S, 0.0 * S, 0.222 * S); art.rotation.y = -Z90; g.add(art); }
+        const art = new THREE.Mesh(new THREE.PlaneGeometry(0.1 * S, 0.05 * S), am); art.position.set(sideX(0.222, 0, -1) * S - 0.0006 * S, 0.0 * S, 0.222 * S); art.rotation.y = -Z90; g.add(art); }
     }
     g.userData.engines = engines;
     g.userData.wob = { ph: k * 2.39 + 0.7, fy: 0.31 + (k % 5) * 0.047, fp: 0.23 + (k % 4) * 0.053 };
@@ -583,6 +636,26 @@ export function createWorld3D(canvas) {
       if (q.m.envMapIntensity != null && q.env == null) q.env = q.m.envMapIntensity;
       if (q.env != null) q.m.envMapIntensity = q.env * (1 - h);
     }
+  }
+  // 1.5.4 debug: pure orthographic render of one AI Fortress (view = side | top | front), shaded or as a black silhouette on white → data URL (for profile comparison sheets)
+  function b17Ortho(idx, view, W, H, span, silhouette) {
+    const g = friendlyPool[idx]; if (!g) return null;
+    const ts = new THREE.Scene(); ts.background = new THREE.Color(0xffffff);
+    ts.add(new THREE.AmbientLight(0xffffff, 1.1)); const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(40, 80, 60); ts.add(dl);
+    const oldParent = g.parent, oldVis = g.visible, oldPos = g.position.clone(), oldQ = g.quaternion.clone(), oldS = g.scale.clone();
+    ts.add(g); g.visible = true; g.position.set(0, 0, 0); g.quaternion.identity(); g.scale.set(1, 1, 1); g.updateMatrixWorld(true);
+    const hh = span * 0.5, aspect = W / H, cam = new THREE.OrthographicCamera(-hh * aspect * 0, hh, hh / aspect * 0.5, -hh / aspect * 0.5, 0.1, 400);
+    const cx = view === "side" ? [60, 0, 0] : view === "top" ? [0, 60, 0] : [0, 0, 60];
+    cam.left = -hh; cam.right = hh; cam.top = hh / aspect; cam.bottom = -hh / aspect;
+    cam.position.set(cx[0], cx[1], cx[2]); cam.up.set(0, view === "top" ? 0 : 1, view === "top" ? -1 : 0); cam.lookAt(0, 0, 0); cam.updateProjectionMatrix();
+    if (silhouette) ts.overrideMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const rt = new THREE.WebGLRenderTarget(W, H); renderer.setRenderTarget(rt); renderer.render(ts, cam); renderer.setRenderTarget(null);
+    const px = new Uint8Array(W * H * 4); renderer.readRenderTargetPixels(rt, 0, 0, W, H, px); rt.dispose();
+    if (oldParent) oldParent.add(g); else scene.add(g); g.visible = oldVis; g.position.copy(oldPos); g.quaternion.copy(oldQ); g.scale.copy(oldS); g.updateMatrixWorld(true);
+    const c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d"), id = x.createImageData(W, H);
+    for (let y = 0; y < H; y++) id.data.set(px.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+    if (!silhouette) for (let i = 0; i < id.data.length; i += 4) for (let c3 = 0; c3 < 3; c3++) id.data[i + c3] = Math.round(255 * Math.pow(id.data[i + c3] / 255, 1 / 2.2)); // render target is linear → sRGB
+    x.putImageData(id, 0, 0); return c.toDataURL("image/png");
   }
   // ===== 1.5.2 B-17 DEATH VARIETY (AI Fortresses): a wing folds off at the root, or the tail tears away — the piece falls
   // separately (tumbling, burning, trailing black smoke) while the airframe rolls toward the missing side and spirals down =====
@@ -668,6 +741,31 @@ export function createWorld3D(canvas) {
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
     holeTexs.push(new THREE.MeshStandardMaterial({ map: t, transparent: true, alphaTest: 0.04, depthWrite: false, depthTest: true, roughness: 0.55, metalness: 0.35,
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: THREE.DoubleSide }));
+  }
+  // ===== 1.5.4 TORN SKIN / EXPOSED RIBS: a big ragged cut-out (dark interior, bright bent-back skin lips, scorch halo, a few bare ribs / stringers across the opening) =====
+  const tearTexs = [];
+  for (let v = 0; v < 3; v++) {
+    const c = document.createElement("canvas"); c.width = c.height = 128;
+    const x = c.getContext("2d"); x.translate(64, 64);
+    const g = x.createRadialGradient(0, 0, 10, 0, 0, 62);
+    g.addColorStop(0, "rgba(18,14,10,0.62)"); g.addColorStop(0.6, "rgba(26,22,16,0.26)"); g.addColorStop(1, "rgba(0,0,0,0)");
+    x.fillStyle = g; x.beginPath(); x.arc(0, 0, 62, 0, Math.PI * 2); x.fill();
+    const n = 11 + v * 2, rx = 30 + v * 3, ry = 18 + v * 5, pts = [];
+    for (let k = 0; k < n * 2; k++) { const a = (k / (n * 2)) * Math.PI * 2 + (Math.random() - 0.5) * 0.18, r = k % 2 ? 0.62 + Math.random() * 0.18 : 0.9 + Math.random() * 0.35; pts.push([Math.cos(a) * rx * r, Math.sin(a) * ry * r]); }
+    x.beginPath(); pts.forEach((p, i) => { const q = [p[0] * 1.28, p[1] * 1.28]; i ? x.lineTo(q[0], q[1]) : x.moveTo(q[0], q[1]); }); x.closePath(); // bent-back lip of skin (bright aluminium / paint)
+    const mg = x.createLinearGradient(-30, -20, 30, 20); mg.addColorStop(0, "rgb(190,188,178)"); mg.addColorStop(0.5, "rgb(128,126,116)"); mg.addColorStop(1, "rgb(70,68,60)");
+    x.fillStyle = mg; x.fill(); x.strokeStyle = "rgba(34,32,28,0.9)"; x.lineWidth = 1.2; x.stroke();
+    x.beginPath(); pts.forEach((p, i) => { i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1]); }); x.closePath(); x.fillStyle = "rgb(5,4,3)"; x.fill(); // the opening itself
+    x.save(); x.clip(); // exposed structure inside the opening: two or three ribs (curved frames) and a stringer or two
+    x.strokeStyle = "rgba(168,166,150,0.95)"; x.lineWidth = 3;
+    for (let k = 0; k < 2 + (v > 0 ? 1 : 0); k++) { const ox = -rx * 0.55 + k * rx * 0.55 + (Math.random() - 0.5) * 5; x.beginPath(); x.moveTo(ox, -ry * 1.4); x.quadraticCurveTo(ox + (Math.random() - 0.5) * 10, 0, ox + (Math.random() - 0.5) * 6, ry * 1.4); x.stroke(); }
+    x.lineWidth = 1.6; x.strokeStyle = "rgba(120,118,104,0.9)";
+    for (let k = 0; k < 2; k++) { const oy = -ry * 0.35 + k * ry * 0.7; x.beginPath(); x.moveTo(-rx * 1.3, oy); x.lineTo(rx * 1.3, oy + (Math.random() - 0.5) * 4); x.stroke(); }
+    x.restore();
+    x.strokeStyle = "rgba(150,148,138,0.7)"; x.lineWidth = 1; // split lines running out of the tear
+    for (let k = 0; k < 4; k++) { const a = Math.random() * Math.PI * 2; x.beginPath(); x.moveTo(Math.cos(a) * rx * 1.25, Math.sin(a) * ry * 1.25); x.lineTo(Math.cos(a) * (rx + 18), Math.sin(a) * (ry + 14)); x.stroke(); }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+    tearTexs.push(new THREE.MeshStandardMaterial({ map: t, transparent: true, alphaTest: 0.04, depthWrite: false, depthTest: true, roughness: 0.6, metalness: 0.3, polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5, side: THREE.DoubleSide }));
   }
   const holeGeo = new THREE.PlaneGeometry(1, 1);
   const ownHoles = [];
@@ -1432,13 +1530,14 @@ export function createWorld3D(canvas) {
         E.fire.scale.set(s * 0.7, s * (1.2 + Math.random() * 0.5), 1);
         E.fire.material.opacity = 0.7 + Math.random() * 0.3;
       }
+      if (burning) { E.smokeAt.getWorldPosition(_ov); engineFireFx(_ov, Math.min(1, st.fire), rdt, E.fx || (E.fx = { t: 0 })); } // 1.5.4 flame tongue + fragments
       const smoking = st.fire > 0.1 || out;
       if (smoking) {
         E.emit -= rdt;
         for (let n = 0; n < 5 && E.emit <= 0; n++) { // 1.4.0: continuous ribbon trail
           E.smokeAt.getWorldPosition(_ov);
           const dk = burning || out;
-          ribbonEmit("own" + i, _ov, { w0: 0.45, w1: dk ? 4.2 : 3.0, life: 2.4, a: dk ? 0.58 : 0.42, col: dk ? [0.2, 0.195, 0.19] : [0.6, 0.6, 0.58], drift: 45 });
+          ribbonEmit("own" + i, _ov, { w0: 0.45, w1: dk ? 5.4 : 3.0, life: dk ? 3.6 : 2.4, a: dk ? 0.58 : 0.42, col: dk ? [0.2, 0.195, 0.19] : [0.6, 0.6, 0.58], drift: 45 });
           E.emit += 0.04;
         }
         if (E.emit < 0) E.emit = 0;
@@ -1560,10 +1659,34 @@ export function createWorld3D(canvas) {
     list.push(m);
     return true;
   }
+  function addTear(which, h, size) { // 1.5.4: a torn-skin cut-out with exposed ribs (separate small pool so holes never evict it)
+    const g = shipGroup(which);
+    if (!g || !h || h.prop) return false;
+    g.updateMatrixWorld(true);
+    const list = g.userData.tears || (g.userData.tears = []);
+    const cap = which === "own" ? 14 : 5;
+    let m;
+    if (list.length >= cap) { m = list.shift(); } else { m = new THREE.Mesh(holeGeo, tearTexs[0]); m.userData.decal = true; m.userData.noHit = true; m.renderOrder = 3; g.add(m); }
+    m.material = tearTexs[(Math.random() * 3) | 0];
+    _hl.set(h.x, h.y, h.z); g.worldToLocal(_hl);
+    g.getWorldQuaternion(_gq).invert();
+    _hn.set(h.nx, h.ny, h.nz).applyQuaternion(_gq).normalize();
+    m.position.copy(_hl).addScaledVector(_hn, 0.012);
+    _rq.setFromUnitVectors(_rz, _hn);
+    m.quaternion.copy(_rq);
+    m.rotateZ(Math.random() * Math.PI * 2);
+    const sc = (size || 0.5) * (0.8 + Math.random() * 0.4);
+    m.scale.set(sc, sc * (0.65 + Math.random() * 0.3), 1);
+    m.visible = true;
+    list.push(m);
+    return true;
+  }
   function clearDamage() {
     for (const g of [ownShip, ...friendlyPool]) {
       const list = g.userData.decals || [];
       for (const m of list) g.remove(m);
+      for (const m of (g.userData.tears || [])) g.remove(m);
+      g.userData.tears = [];
       g.userData.decals = [];
       g.userData.fxDone = false;
     }
@@ -1794,15 +1917,8 @@ export function createWorld3D(canvas) {
     ownChute.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(p, 3)), new THREE.LineBasicMaterial({ color: 0x8a8578 })));
     // 1.4.1: seated in the harness — thighs forward, shins hanging, rounded boots (1.4.0's 6-sided stubs read as
     // brown hexagons when looking straight down at the falling ship). The legs group turns with the view heading.
-    const legs = new THREE.Group(); ownChute.add(legs);
-    const suitM = new THREE.MeshLambertMaterial({ color: 0x4a4531 }), bootM = new THREE.MeshLambertMaterial({ color: 0x2a1f16 }), soleM = new THREE.MeshLambertMaterial({ color: 0x120e0a });
-    const limb = (a, b, r, m) => { const d = new THREE.Vector3().subVectors(b, a), L = d.length(); const g = new THREE.CapsuleGeometry(r, L, 4, 12); const me = new THREE.Mesh(g, m); me.position.copy(a).addScaledVector(d, 0.5); me.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); legs.add(me); return me; };
-    for (const sx of [-0.13, 0.13]) {
-      const hip = new THREE.Vector3(sx, -0.62, -0.1), knee = new THREE.Vector3(sx * 1.2, -0.78, 0.2), ank = new THREE.Vector3(sx * 1.15, -1.22, 0.24);
-      limb(hip, knee, 0.068, suitM); limb(knee, ank, 0.052, suitM);
-      const boot = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.14, 4, 10), bootM); boot.rotation.x = Math.PI / 2 - 0.25; boot.position.set(ank.x, ank.y - 0.06, ank.z + 0.08); boot.scale.set(1, 1, 0.8); legs.add(boot);
-      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.025, 0.24), soleM); sole.rotation.x = -0.25; sole.position.set(ank.x, ank.y - 0.13, ank.z + 0.09); legs.add(sole);
-    }
+    // 1.5.4: NO body in the bailout view (the player's legs/boots are gone for good — only canopy, shroud lines and the streamer remain)
+    const legs = new THREE.Group(); legs.visible = false; // empty placeholder (kept so the heading code below stays valid)
     const streamer = new THREE.Mesh(canopyGeo, chuteMatUS); streamer.scale.set(0.35, 3.2, 0.35); streamer.position.y = 3.0; ownChute.add(streamer);
     ownChute.userData = { dome, streamer, legs };
     ownChute.visible = false; scene.add(ownChute);
@@ -1923,6 +2039,47 @@ export function createWorld3D(canvas) {
       p.sp.scale.set(s, s, 1);
       p.sp.material.opacity = p.a * (1 - k) * Math.min(1, k * 6 + 0.2);
     }
+  }
+
+  // ===== 1.5.4 ENGINE-FIRE TONGUE: a chain of additive flame sprites streaming aft from a burning nacelle (bright core -> orange -> red -> gone in ~0.5 s, ~10 u long),
+  //       with dark fragments / glowing embers thrown into the (longer, darker) smoke plume =====
+  const flamePool = [];
+  for (let i = 0; i < 150; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: flameTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false }));
+    sp.visible = false; sp.center.set(0.5, 0.5); scene.add(sp);
+    flamePool.push({ sp, life: 0, max: 1, vx: 0, vy: 0, vz: 0, s0: 1, s1: 0.5 });
+  }
+  let flameIdx = 0;
+  const flameStats = { emitted: 0, frags: 0 };
+  function emitFlame(pos, fire) {
+    const p = flamePool[flameIdx]; flameIdx = (flameIdx + 1) % flamePool.length;
+    p.sp.position.copy(pos); p.life = p.max = 0.32 + Math.random() * 0.22 + 0.2 * fire;
+    p.vx = (Math.random() - 0.5) * 2.4; p.vy = 0.8 + Math.random() * 1.6; p.vz = -(20 + Math.random() * 12 + 14 * fire);
+    p.s0 = (0.9 + 1.1 * fire) * (0.8 + Math.random() * 0.4); p.s1 = p.s0 * 0.35;
+    p.sp.visible = true; flameStats.emitted++;
+  }
+  function updateFlames(dt) {
+    for (const p of flamePool) {
+      if (p.life <= 0) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.sp.visible = false; continue; }
+      const k = 1 - p.life / p.max;
+      p.sp.position.x += p.vx * dt; p.sp.position.y += p.vy * dt; p.sp.position.z += p.vz * dt;
+      const s = p.s0 + (p.s1 - p.s0) * k; p.sp.scale.set(s * 0.8, s * 1.6, 1);
+      p.sp.material.color.setRGB(1, 1 - 0.62 * k, 0.55 - 0.5 * k); // white-yellow at the nacelle -> deep orange-red
+      p.sp.material.opacity = 0.95 * (1 - k * k);
+    }
+  }
+  function emitFragment(pos, hot) { // a dark chunk (or glowing ember) in the plume — rides the flak-debris point pool
+    const d = deb[debNext]; debNext = (debNext + 1) % DEB_N;
+    d.x = pos.x; d.y = pos.y; d.z = pos.z; d.vx = (Math.random() - 0.5) * 7; d.vy = (Math.random() - 0.4) * 6; d.vz = -(5 + Math.random() * 18);
+    d.hot = !!hot; d.t = 0; d.life = hot ? 0.5 + Math.random() * 0.5 : 1.8 + Math.random() * 1.6; flameStats.frags++;
+  }
+  function engineFireFx(pos, fire, dt, acc) { // call per burning engine per frame: acc is a per-engine accumulator object {t}
+    acc.t -= dt;
+    for (let n = 0; n < 3 && acc.t <= 0; n++) { emitFlame(pos, fire); acc.t += 0.028; }
+    if (acc.t < 0) acc.t = 0;
+    if (Math.random() < 5.5 * dt) emitFragment(pos, Math.random() < 0.4);
   }
 
   // Procedural northern-European farmland 200u (20,000 ft) below
@@ -2587,8 +2744,16 @@ export function createWorld3D(canvas) {
   const flakFlashTex = (() => {
     const c = document.createElement("canvas"); c.width = c.height = 64; const x = c.getContext("2d");
     const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, "rgba(255,250,220,1)"); g.addColorStop(0.18, "rgba(255,190,90,1)"); g.addColorStop(0.45, "rgba(255,90,30,0.75)"); g.addColorStop(1, "rgba(160,20,0,0)");
+    g.addColorStop(0, "rgba(255,255,255,1)"); g.addColorStop(0.2, "rgba(255,252,235,1)"); g.addColorStop(0.38, "rgba(255,205,110,0.95)"); g.addColorStop(0.62, "rgba(255,110,40,0.55)"); g.addColorStop(1, "rgba(160,20,0,0)"); // 1.5.4: white-hot core
     x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  // 1.5.4 sun-glare bloom: a big soft white-blue glow that flares with the shell flash and dies in ~0.3 s (additive, one sprite per pooled burst)
+  const flakBloomTex = (() => {
+    const c = document.createElement("canvas"); c.width = c.height = 128; const x = c.getContext("2d");
+    const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, "rgba(255,255,250,0.95)"); g.addColorStop(0.12, "rgba(255,248,225,0.6)"); g.addColorStop(0.35, "rgba(240,238,235,0.22)"); g.addColorStop(0.7, "rgba(200,215,240,0.07)"); g.addColorStop(1, "rgba(200,215,240,0)");
+    x.fillStyle = g; x.fillRect(0, 0, 128, 128);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
   })();
   const flakMeshes = [];
@@ -2607,7 +2772,8 @@ export function createWorld3D(canvas) {
     const m = new THREE.Mesh(geo, flakMat); m.frustumCulled = false; m.visible = false; scene.add(m);
     const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: flakFlashTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
     fl.visible = false; scene.add(fl);
-    flakMeshes.push({ m, fl, id: -1, puffs: null });
+    const bl = new THREE.Sprite(new THREE.SpriteMaterial({ map: flakBloomTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); bl.visible = false; scene.add(bl);
+    flakMeshes.push({ m, fl, bl, id: -1, puffs: null });
   }
   const flakLight = new THREE.PointLight(0xff7a30, 0, 140, 1.2); scene.add(flakLight);
   // 1.4.0 flak debris: dark shell fragments + a few hot sparks thrown out of each burst, falling under gravity
@@ -2629,7 +2795,7 @@ export function createWorld3D(canvas) {
     }
   }
   let debLast = pnow();
-  function updateDebris(dz) {
+  function updateFlakDebris(dz) { // 1.5.4: renamed — it shared its name with the wreck-debris updater below, so in 1.5.3 the flak shell-fragment pool was never stepped
     const now = pnow(), dt = Math.min(0.05, (now - debLast) / 1000); debLast = now;
     for (let i = 0; i < DEB_N; i++) {
       const d = deb[i];
@@ -2650,7 +2816,7 @@ export function createWorld3D(canvas) {
     list = list || [];
     const byId = new Map(); for (const b of list) if (b.t >= 0) byId.set(b.id, b);
     // keep each burst in its mesh
-    for (const F of flakMeshes) if (F.id >= 0 && !byId.has(F.id)) { F.id = -1; F.m.visible = false; F.fl.visible = false; }
+    for (const F of flakMeshes) if (F.id >= 0 && !byId.has(F.id)) { F.id = -1; F.m.visible = false; F.fl.visible = false; F.bl.visible = false; }
     const used = new Set(flakMeshes.filter((F) => F.id >= 0).map((F) => F.id));
     for (const b of byId.values()) {
       if (used.has(b.id)) continue;
@@ -2695,7 +2861,7 @@ export function createWorld3D(canvas) {
           const o = (p * 4 + v);
           pos[o * 3] = ox; pos[o * 3 + 1] = oy; pos[o * 3 + 2] = oz;
           dat[o * 4] = size; dat[o * 4 + 1] = alpha; dat[o * 4 + 2] = P.rot + P.spin * t; dat[o * 4 + 3] = P.cell;
-          const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark);
+          const kk = P.lum * (kGlow > 0.02 ? 1 : F.dark) * (p === 0 ? 0.55 : 1.12); // 1.5.4: dark core, paler ragged lobes around it
           tin[o * 3] = tr * kk * F.tint[0]; tin[o * 3 + 1] = tg * kk * F.tint[1]; tin[o * 3 + 2] = tb * kk * F.tint[2];
         }
       }
@@ -2704,6 +2870,8 @@ export function createWorld3D(canvas) {
       // the instant flash: bright orange-red, ~0.12 s
       F.fl.visible = t < 0.16;
       if (F.fl.visible) { F.fl.position.set(b.x, b.y, b.z); const s = (10 + t * 90) * (b.size || 1); F.fl.scale.set(s, s, 1); F.fl.material.opacity = Math.min(1, 1.25 * (1 - t / 0.16)); flakStats.flashes++; }
+      F.bl.visible = t < 0.34;
+      if (F.bl.visible) { F.bl.position.set(b.x, b.y, b.z); const bd = camera.position.distanceTo(F.m.position), bs = Math.min((34 + t * 160) * (b.size || 1), Math.max(6, bd * 0.8)); F.bl.scale.set(bs, bs, 1); F.bl.material.opacity = 0.6 * Math.pow(1 - t / 0.34, 1.6); }
       if (t < 0.18) { const d = camera.position.distanceTo(F.m.position); if (d < bestD) { bestD = d; best = { b, t }; } }
     }
     flakStats.live = live; flakStats.maxLive = Math.max(flakStats.maxLive, live);
@@ -2763,61 +2931,56 @@ export function createWorld3D(canvas) {
     R.g.attributes.position.needsUpdate = true; R.g.attributes.color.needsUpdate = true; R.g.attributes.uv.needsUpdate = true; R.g.index.needsUpdate = true;
   }
   const _ca = new THREE.Vector3(), _cp = new THREE.Vector3(), _cw = new THREE.Vector3();
-  const conStats = { bomberRibs: 0, ghostRibs: 0, fighterRibs: 0, verts: 0, cap: 0 };
-  // --- bombers: straight, parallel, long
-  const CB_S = [0, 22, 55, 110, 200, 340, 540, 820, 1200, 1700];
-  const CB_N = CB_S.length, CB_LEN = CB_S[CB_N - 1];
-  const bomberR = ribMesh(18 * 4, CB_N), conAnchors = [];
+  const conStats = { bomberRibs: 0, fighterRibs: 0, verts: 0, bomberVerts: 0, fighterVerts: 0, ms: 0, cap: 0 };
+  // --- 1.5.4 bombers: TRUE per-plane trails. Every Fortress (4 engines) leaves world-space points as it flies; they stay in the
+  // air mass (stream aft by the distance flown, swing with the formation's turn), so the trails curve when the box turns for home.
+  const CB_PTS = 72, CB_DT = 0.5, CB_LIFE = 35;
+  const bomberR = ribMesh(18 * 4, CB_PTS), conAnchors = [];
+  let _cDz = 0, _cDH = 0, _cReset = false;
   function addContrails(group, pts) {
     const arr = [];
     for (const q of pts) {
       const anchor = new THREE.Object3D(); anchor.position.set(q[0], q[1], q[2]); group.add(anchor);
-      const c = { anchor, group, on: true, sx: 0, sy: 0, sz: 0, init: false };
+      const c = { anchor, group, on: true, pts: [], acc: 0, seeded: false };
       conAnchors.push(c); arr.push(c);
     }
     group.userData.contrails = arr;
   }
-  function bomberSections(R, r, px, py, pz, sx, sy, sz, len, wEnd, aMax, wMin, colv) {
-    for (let k = 0; k < CB_N; k++) {
-      const t = CB_S[k] / CB_LEN, s = t * len;
-      const sm = Math.min(1, s / 90), sm2 = sm * sm * (3 - 2 * sm); // follow the engine at the start, the smoothed (calm) track further back
-      const x = px + (sx - px) * sm2, y = py + (sy - py) * sm2 - 7 * t * t, z = pz - s;
-      const fadeIn = Math.min(1, Math.max(0, (s - 16) / 60)); // a short clean gap behind the cowling
-      const a = aMax * fadeIn * Math.pow(1 - t, 1.5);
-      const w = 0.3 + wEnd * Math.pow(t, 0.72);
-      rmSec(R, r, k, x, y, z, 0, 0, -1, w, wMin, colv, colv, colv, a, s / 36);
-    }
-    rmLink(R, r, CB_N);
-  }
-  // --- distant bomber groups (static in the box frame: same speed, same heading), more parallel lines converging on the horizon
-  const ghostN = 14 * 5 * 2, ghostR = ribMesh(ghostN, CB_N), ghostPts = [];
-  const ghostShips = [];
-  {
-    let sd = 77; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
-    let r = 0;
-    for (let gI = 0; gI < 14; gI++) {
-      const side = gI % 2 ? 1 : -1, cx = side * (320 + R() * 1900), cy = -220 + R() * 640, cz = 150 + R() * 3000;
-      for (let sI = 0; sI < 5; sI++) {
-        const ox = (sI % 2 ? 1 : -1) * (24 + sI * 12) + (R() - 0.5) * 8, oy = -sI * 3 + (R() - 0.5) * 5, oz = -sI * 22 + (R() - 0.5) * 10;
-        const sx = cx + ox, sy = cy + oy, sz = cz + oz;
-        ghostShips.push(sx, sy, sz);
-        for (const ex of [-7, 7]) { ghostPts.push([sx + ex, sy, sz, 0.7 + R() * 0.3]); r++; }
+  function stepBomberTrails(dt0) {
+    const dt = _cDz / AIR_DRIFT; // air-mass time: trails age with the distance the box has flown (robust to frame pacing, frozen when paused)
+    const R = bomberR; rmBegin(R); let r = 0, nv = 0;
+    const cs = Math.cos(-_cDH), sn = Math.sin(-_cDH);
+    for (const c of conAnchors) {
+      const vis = c.on && c.group.visible, P = c.pts;
+      if (_cReset) { P.length = 0; c.seeded = false; }
+      if (vis) {
+        c.anchor.getWorldPosition(_cp);
+        if (!c.seeded) { // the formation has been flying straight for a while: lay the history down so the sky is full from the first second
+          c.seeded = true; P.length = 0;
+          for (let a = CB_LIFE - 0.3; a > 0; a -= CB_DT) P.push({ x: _cp.x + (Math.random() - 0.5) * 0.6, y: _cp.y + (Math.random() - 0.5) * 0.5, z: _cp.z - AIR_DRIFT * a, age: a });
+        }
       }
+      for (const p of P) {
+        p.age += dt;
+        if (_cDH) { const x = p.x, z = p.z; p.x = x * cs + z * sn; p.z = -x * sn + z * cs; }
+        p.z -= _cDz;
+      }
+      while (P.length && P[0].age >= CB_LIFE) P.shift();
+      if (vis) { c.acc -= dt; if (c.acc <= 0) { c.acc = CB_DT; P.push({ x: _cp.x, y: _cp.y, z: _cp.z, age: 0 }); if (P.length > CB_PTS) P.shift(); } }
+      const n = P.length;
+      if (n < 2 || r >= R.nRib) continue;
+      let vco = 0;
+      for (let i = 0; i < n; i++) {
+        const p = P[i], pa = P[Math.max(0, i - 1)], pb = P[Math.min(n - 1, i + 1)];
+        if (i) vco += Math.hypot(p.x - pa.x, p.y - pa.y, p.z - pa.z) / 36;
+        const k = Math.min(1, p.age / CB_LIFE), fadeIn = Math.min(1, Math.max(0, (p.age - 0.2) / 0.7));
+        const al = 0.55 * fadeIn * Math.pow(1 - k, 1.5), w = 0.3 + 14 * Math.pow(k, 0.72);
+        rmSec(R, r, i, p.x, p.y, p.z, pb.x - pa.x, pb.y - pa.y, pb.z - pa.z, w, 0.0018, 1, 1, 1, al, vco);
+      }
+      rmLink(R, r, n); r++; nv += n * 2;
     }
-  }
-  const ghostDots = (() => {
-    const c = document.createElement("canvas"); c.width = c.height = 32; const x = c.getContext("2d");
-    x.fillStyle = "#1c2430"; x.fillRect(14, 4, 4, 24); x.fillRect(3, 12, 26, 5); x.fillRect(10, 25, 12, 3); // a Fortress from above/behind, a few pixels
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-    const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(ghostShips, 3));
-    const pt = new THREE.Points(g, new THREE.PointsMaterial({ size: 17, map: t, transparent: true, alphaTest: 0.2, sizeAttenuation: true, depthWrite: false, fog: false, opacity: 0.85 }));
-    pt.frustumCulled = false; scene.add(pt); return pt;
-  })();
-  let _ghostCx = 1e9, _ghostCy = 0, _ghostCz = 0;
-  function buildGhosts() {
-    rmBegin(ghostR);
-    for (let r = 0; r < ghostPts.length; r++) { const q = ghostPts[r]; bomberSections(ghostR, r, q[0], q[1], q[2], q[0], q[1], q[2], 2300 * q[3], 5.5, 0.5, 0.0016, 1); ghostR.used++; }
-    rmEnd(ghostR); conStats.ghostRibs = ghostPts.length;
+    _cReset = false;
+    R.used = r; rmEnd(R); conStats.bomberRibs = r; conStats.bomberVerts = nv;
   }
   // --- fighters: thin path ribbons from each fighter's own history
   const CF_P = 56, CF_R = 64;
@@ -2854,7 +3017,7 @@ export function createWorld3D(canvas) {
     for (const [id, T] of fTrails) {
       T.live = activeIds.has(id);
       const P = T.pts, life = T.p51 ? 8.5 : 6.5;
-      for (const p of P) { p.age += dt; p.z -= AIR_DRIFT * dt; }
+      { const cs = Math.cos(-_cDH), sn = Math.sin(-_cDH); for (const p of P) { p.age += dt; if (_cDH) { const x = p.x, z = p.z; p.x = x * cs + z * sn; p.z = -x * sn + z * cs; } p.z -= _cDz; } }
       while (P.length && P[0].age >= life) P.shift();
       if (P.length < 2) { if (!T.live && !P.length) { fFree.push(T.r); fTrails.delete(id); } continue; }
       const A0 = T.p51 ? 0.7 : 0.4, W0 = T.p51 ? 0.55 : 0.4, W1 = T.p51 ? 3.1 : 2.2, col = T.p51 ? 1 : 0.94;
@@ -2872,26 +3035,13 @@ export function createWorld3D(canvas) {
   }
   let _conT = pnow(), _conActive = new Set(), _conDtLast = 0.016;
   function updateContrails() {
-    if (window.__FG_NOCON) { bomberR.m.visible = ghostR.m.visible = fighterR.m.visible = ghostDots.visible = false; return; } // test toggle
-    ghostDots.visible = true; ghostR.m.visible = ghostR.ni > 0;
+    if (window.__FG_NOCON) { bomberR.m.visible = fighterR.m.visible = false; return; } // test toggle
+    const t0 = performance.now();
     const now = pnow(), dt = Math.min(0.1, Math.max(0, (now - _conT) / 1000)); _conT = now; _conDtLast = dt || 0.016;
-    // bombers
-    const R = bomberR; rmBegin(R); let r = 0;
-    const kS = Math.min(1, dt / 5);
-    for (const c of conAnchors) {
-      const vis = c.on && c.group.visible;
-      if (!vis) { c.init = false; continue; }
-      if (r >= R.nRib) break;
-      c.anchor.getWorldPosition(_cp);
-      if (!c.init) { c.sx = _cp.x; c.sy = _cp.y; c.sz = _cp.z; c.init = true; } else { c.sx += (_cp.x - c.sx) * kS; c.sy += (_cp.y - c.sy) * kS; c.sz = _cp.z; }
-      bomberSections(R, r, _cp.x, _cp.y, _cp.z, c.sx, c.sy, c.sz, CB_LEN, 13, 0.55, 0.0018, 1); r++;
-    }
-    R.used = r; rmEnd(R); conStats.bomberRibs = r;
-    // distant groups: rebuild only when the eye has moved
-    if (Math.abs(camera.position.x - _ghostCx) + Math.abs(camera.position.y - _ghostCy) + Math.abs(camera.position.z - _ghostCz) > 0.6) { _ghostCx = camera.position.x; _ghostCy = camera.position.y; _ghostCz = camera.position.z; buildGhosts(); }
-    // fighters (emitted from sync); here: age + draw
+    stepBomberTrails(dt);
     updateFighterTrails(dt, _conActive); _conActive = new Set();
-    conStats.verts = R.ni / 3 + ghostR.ni / 3 + fighterR.ni / 3;
+    conStats.verts = bomberR.ni / 3 + fighterR.ni / 3;
+    conStats.ms += (performance.now() - t0 - conStats.ms) * 0.05;
   }
   for (const g of friendlyPool) addContrails(g, NACELLE_X.map((nx) => [nx * B17_VIS, -0.01 * B17_VIS, -0.05 * B17_VIS]));
   // own-ship trails omitted: from the turret they fan across the whole view
@@ -2911,11 +3061,12 @@ export function createWorld3D(canvas) {
     // --- clouds + flak: stationary in the air → stream aft by the distance flown, swing with the turn ---
     const odo = opts.odo || 0;
     let dz = _odo == null ? 0 : odo - _odo;
-    if (dz < 0 || dz > 400) dz = 0; // new mission / big jump
+    if (dz < 0 || dz > 400) { dz = 0; _cReset = true; } // new mission / big jump
     _odo = odo;
     const hd = opts.heading || 0;
     let dH = hd - _hd; _hd = hd;
     if (Math.abs(dH) > 0.5) dH = 0;
+    _cDz = dz; _cDH = dH;
     const c = Math.cos(-dH), s = Math.sin(-dH);
     const rot = (o) => { const x = o.position.x, z = o.position.z; o.position.x = x * c + z * s; o.position.z = -x * s + z * c; };
     for (const g of cloudClusters) {
@@ -2934,6 +3085,7 @@ export function createWorld3D(canvas) {
     updateFlakBursts(opts.flakBursts);
     updateRockets(opts.rockets);
     updateDebris(dz);
+    updateFlakDebris(dz);
     updateChutes3D(opts.chutes);
     // sun + sky stay fixed in the world: rotate with −heading in the box frame
     const sd = sunDir0.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -hd);
@@ -2993,20 +3145,21 @@ export function createWorld3D(canvas) {
         eng.blades.visible = !!dead;
         if (g.userData.contrails) g.userData.contrails[k].on = !dead && !f.spiraling;
         if (!dead) eng.disc.rotation.z += dt * 31;
+        if (burning) { eng.anchor.getWorldPosition(_v); engineFireFx(_v, Math.min(1, fire + (f.spiraling ? 0.4 : 0)), dt, eng.fx || (eng.fx = { t: 0 })); } // 1.5.4 flame tongue + fragments
         const smoking = fire > 0.12 || (st && st.out) || f.spiraling;
         if (smoking) {
           eng.lastEmit -= dt;
           if (eng.lastEmit <= 0) { // 1.4.0: a continuous trail (ribbon) instead of spaced puffs
             eng.anchor.getWorldPosition(_v);
             const dark = burning || f.spiraling;
-            ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1.0 : 0.6, w1: dark ? (f.spiraling ? 12 : 8) : 5, life: dark ? 3.2 : 2.4, a: dark ? 0.62 : 0.4, col: dark ? [0.13, 0.125, 0.12] : [0.6, 0.6, 0.59], drift: 55 });
+            ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: dark ? 1.0 : 0.6, w1: dark ? (f.spiraling ? 14 : 11) : 5, life: dark ? (burning ? 4.6 : 3.2) : 2.4, a: dark ? 0.62 : 0.4, col: dark ? [0.13, 0.125, 0.12] : [0.6, 0.6, 0.59], drift: 55 });
             if (f.spiraling && Math.random() < 0.3) emitSmoke(_v, true, true);
             eng.lastEmit = 0.05;
           }
         }
       }
     }
-    updateSmoke(dt); updateWreckPuffs(dt); updateBombs(dt);
+    updateSmoke(dt); updateFlames(dt); updateWreckPuffs(dt); updateBombs(dt);
     updateRibbons(dt);
     updateContrails();
   }
@@ -4157,6 +4310,48 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     camera.updateProjectionMatrix();
   }
 
+  // ===== 1.5.4 FIGHTER MUZZLE FLASHES — P-51 six wing guns, 190 wing-root/outer cannon + cowl MGs, 109 cowl MGs + nose cannon.
+  // A global pool of additive sprites (cap 30, one draw call each only while a gun is firing). e.mf > 0 = firing this instant. =====
+  const _mzList = [];
+  const MZ_N = 30, mzPool = []; let mzPrev = 0;
+  const MZ_GUNS = { // [x as fraction of the half-span, forward fraction of the length from the nose, size k]
+    p51: [[-0.30, 0.34, 1], [-0.38, 0.34, 1], [-0.46, 0.34, 1], [0.30, 0.34, 1], [0.38, 0.34, 1], [0.46, 0.34, 1]],
+    "190": [[-0.17, 0.30, 1.25], [0.17, 0.30, 1.25], [-0.42, 0.32, 1.25], [0.42, 0.32, 1.25], [-0.05, 0.05, 0.8], [0.05, 0.05, 0.8]],
+    "109": [[-0.04, 0.12, 0.9], [0.04, 0.12, 0.9], [0, 0.0, 1.3]],
+  };
+  const mzBox = {}, _mzv = new THREE.Vector3(), _mzB = new THREE.Box3();
+  function mzLocalBox(mesh, kind) {
+    if (mzBox[kind]) return mzBox[kind];
+    const p = mesh.position.clone(), q = mesh.quaternion.clone(), sc = mesh.scale.clone();
+    mesh.position.set(0, 0, 0); mesh.quaternion.identity(); mesh.scale.set(1, 1, 1); mesh.updateMatrixWorld(true);
+    _mzB.setFromObject(mesh); const b = _mzB.clone();
+    mesh.position.copy(p); mesh.quaternion.copy(q); mesh.scale.copy(sc); mesh.updateMatrixWorld(true);
+    return (mzBox[kind] = b);
+  }
+  function muzzleFlashes(list) { // list: [e, mesh, kind, dist] firing this frame
+    let used = 0;
+    for (let li = 0; li < list.length; li += 4) {
+      const e = list[li], mesh = list[li + 1], kind = list[li + 2], dist = list[li + 3];
+      const G = MZ_GUNS[kind]; if (!G) continue;
+      const bx = mzLocalBox(mesh, kind), hs = (bx.max.x - bx.min.x) * 0.5, len = bx.max.z - bx.min.z, cy = (bx.max.y + bx.min.y) * 0.5;
+      mesh.updateMatrixWorld(true);
+      for (let gi = 0; gi < G.length; gi++) {
+        if (used >= MZ_N) break;
+        if (Math.random() > 0.62) continue; // each gun cycles ~13 rd/s: not every gun shows on every frame
+        const g = G[gi];
+        let sp = mzPool[used];
+        if (!sp) { sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, color: 0xffe8b0 })); sp.renderOrder = 6; scene.add(sp); mzPool[used] = sp; }
+        _mzv.set(g[0] * hs, cy - 0.03 * len, bx.min.z + g[1] * len - 0.05 * len); mesh.localToWorld(_mzv);
+        sp.position.copy(_mzv);
+        const sz = Math.max(1.3, dist * 0.0042) * g[2] * (0.75 + Math.random() * 0.6);
+        sp.scale.set(sz, sz, 1); sp.material.rotation = Math.random() * 6.28; sp.material.opacity = 0.55 + 0.4 * Math.random(); sp.visible = true;
+        used++;
+      }
+    }
+    for (let i = used; i < mzPrev; i++) if (mzPool[i]) mzPool[i].visible = false;
+    mzPrev = used; mzStats.n = used;
+  }
+  const mzStats = { n: 0 };
   function ensureKind(slot, kind) {
     const k = kind === "110" ? "109" : kind;
     if (slot.kind === k && slot.mesh) return;
@@ -4386,7 +4581,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const sy = (Math.cos(pnow() * 0.113) * 0.072 + Math.sin(pnow() * 0.203) * 0.038) * shake;
     const FALL = opts.fall;
     if (FALL && FALL.eye) camera.position.set(FALL.eye.x + sx, FALL.eye.y + sy, FALL.eye.z);
-    else camera.position.set(CAM.x + sx, CAM.y + sy + recoil * 0.07 + (gunnerState.lift || 0), CAM.z);
+    else camera.position.set(CAM.x + sx + (gunnerState.kx || 0), CAM.y + sy + (gunnerState.ky || 0) + recoil * 0.07 + (gunnerState.lift || 0), CAM.z); // 1.5.4: + shaped kicks
     _lift = FALL ? 0 : (gunnerState.lift || 0); _liftP = FALL ? 0 : (gunnerState.liftP || 0);
     const FC = window.__FG_FREECAM; // test hook only: {x,y,z,yaw,pitch} free camera for stills
     if (FC) camera.position.set(FC.x, FC.y, FC.z);
@@ -4446,6 +4641,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     syncMission(opts);
 
     // 1.3.2: each bandit keeps its own mesh for life (no mesh reshuffle → no attitude snaps)
+    _mzList.length = 0;
     const live = new Set();
     const shown = (e) => e.alive || e.flash > 0 || (e.wreckT || 0) > 0;
     for (const e of enemiesArr) {
@@ -4539,6 +4735,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         mesh.userData._q.slerp(targetQ, 0.25);
         mesh.quaternion.copy(mesh.userData._q);
       }
+      if (e.alive && e.mf > 0 && dist < 2600) _mzList.push(e, mesh, slot.kind, dist);
       if (!e.alive) { // spinning wreck
         slot.spin = (slot.spin || 0) + 0.016 * 4;
         mesh.quaternion.multiply(_spinQ.setFromAxisAngle(_zAxis, slot.spin));
@@ -4583,6 +4780,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       if (fighterPool[idx].fire) fighterPool[idx].fire.visible = false;
       fighterPool[idx].wasAlive = false;
     }
+    muzzleFlashes(_mzList);
     updateSpecks(opts);
     updateDebris();
   }
@@ -4613,7 +4811,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // own guns
     [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // box gunners / P-51s
     [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // German fighters (1.5.0 was red)
-    [[1.0, 0.36, 0.2], [1.0, 0.1, 0.03], 1.2, 3.0, 0.95, 0.34, 0.4], // 1.5.3: Fw 190 — clear red / red-orange core + red glow (slightly bolder so it reads at range)
+    [[1.0, 0.36, 0.2], [1.0, 0.1, 0.03], 1.2, 3.0, 0.95, 0.34, 0.4], // 1.5.3 (kind 3)
+    [[0.9, 1.0, 0.82], [0.28, 1.0, 0.42], 1.2, 3.2, 0.95, 0.36, 0.4], // 1.5.4 (kind 4): P-51 six-gun fire — bright white-green, unmistakable against the yellow gunners / orange 109s / red 190s
+    //: Fw 190 — clear red / red-orange core + red glow (slightly bolder so it reads at range)
   ];
   let trBuf = null, trN = 0;
   const _tf = new THREE.Vector3(), _tc = new THREE.Vector3();
@@ -4765,12 +4965,14 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     camera,
     muzzles: muzzleOut,
     _gunGroups: gunGroups,
-    rayShip, addHole, clearDamage, rayFighter, addFighterHole, fighterBoundR, fighterDecalInfo, fighterMeshDump,
+    b17Ortho, rayShip, addHole, addTear, clearDamage, rayFighter, addFighterHole, fighterBoundR, fighterDecalInfo, fighterMeshDump,
     decalInfo: (which) => { const g = shipGroup(which); if (!g) return []; g.updateMatrixWorld(true); return (g.userData.decals || []).map((m) => { const p = new THREE.Vector3(); m.getWorldPosition(p); const n = new THREE.Vector3(0, 0, 1).applyQuaternion(m.getWorldQuaternion(new THREE.Quaternion())); return { x: p.x, y: p.y, z: p.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x }; }); },
     get flakStats() { return Object.assign({}, flakStats); },
     _ownShip: ownShip,
     get speckStats() { return speckStats.slice(); },
     dropBombs,
+    trailDump: (k) => { const c = conAnchors[k]; return c ? c.pts.map((p) => [+p.x.toFixed(1), +p.y.toFixed(1), +p.z.toFixed(1), +p.age.toFixed(1)]) : null; },
+    chuteMeshes: () => { const out = []; ownChute.traverse((o) => { if (o !== ownChute) out.push({ type: o.type, geo: o.geometry ? o.geometry.type : null, vis: o.visible && ownChute.visible, y: +o.position.y.toFixed(2) }); }); return out; },
     get conStats() { return Object.assign({}, conStats); },
     townGeom: { X: TOWN_X, Z: TOWN_Z, K: EARTH_K, S: 1.5, wy: CAM.y * (1 - EARTH_K) + EARTH_K * (GROUND_Y + 0.05) },
     townLayout: () => TL,
@@ -4788,6 +4990,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     tracerTint: (rgb) => { if (!TR_KIND._k0) TR_KIND._k0 = [TR_KIND[0][0], TR_KIND[0][1]]; if (rgb) { TR_KIND[0][0] = rgb; TR_KIND[0][1] = rgb.map((v) => v * 0.7); } else { TR_KIND[0][0] = TR_KIND._k0[0]; TR_KIND[0][1] = TR_KIND._k0[1]; } return true; },
     get b17Stats() { const g = friendlyPool[0]; let meshes = 0, tris = 0; g.traverse((o) => { if (o.isMesh) { meshes++; const gg = o.geometry; tris += (gg.index ? gg.index.count : gg.attributes.position.count) / 3; } }); return { children: g.children.length, meshes, tris: Math.round(tris) }; },
     testBombAdvance(dt) { updateBombs(dt); }, // test hook
+    get flameStats() { return flameStats; },
+    get flakStats() { return flakStats; },
+    tearInfo(which) { const g = shipGroup(which); if (!g) return []; g.updateMatrixWorld(true); return (g.userData.tears || []).map((m) => { const v = new THREE.Vector3(), n = new THREE.Vector3(0, 0, 1); m.getWorldPosition(v); const q = new THREE.Quaternion(); m.getWorldQuaternion(q); n.applyQuaternion(q); return { x: v.x, y: v.y, z: v.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x }; }); },
     get friendlyInfo() { return friendlyPool.map((g, i) => { const v = new THREE.Vector3(); g.getWorldPosition(v); return { i, bay: g.userData.bay ? +g.userData.bay.open.toFixed(2) : null, vis: g.visible, x: v.x, y: v.y, z: v.z, qy: g.quaternion.y, qw: g.quaternion.w }; }); }, // test hook
     get townInfo() { const v = new THREE.Vector3(); town.getWorldPosition(v); return { x: v.x, y: v.y, z: v.z, smoke: impactSmoke.filter((p) => p.life > 0).length }; },
   };
