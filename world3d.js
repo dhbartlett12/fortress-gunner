@@ -339,8 +339,10 @@ export function createWorld3D(canvas) {
   const B17_SHADES = [0x4d5534, 0x585a3b, 0x48553a, 0x5d6147, 0x434b31, 0x535838];
   const B17_METAL = new Set([3, 12]); // 1.5.3: AI ships — 2 of 18 (11 %) are bare natural-metal replacements (light, low-metalness silver like the P-51); the player's ship is uniform olive drab
   const B17_PATCH = { 5: "tail", 9: "wing", 14: "tail" }; // 1.5.3: 3 olive-drab ships fly a replaced tail / a lighter wing panel (deterministic per ship)
-  const B17_TAIL = [["tri", "A"], ["tri", "B"], ["sq", "J"], ["tri", "C"], ["sq", "D"], ["tri", "G"], ["sq", "H"], ["tri", "L"], ["sq", "K"], ["tri", "A"], ["sq", "P"], ["tri", "B"], ["tri", "C"], ["sq", "J"], ["tri", "G"], ["sq", "D"], ["tri", "L"], ["sq", "H"]];
-  const B17_CODES = ["LN-T", "BK-R", "DF-A", "SO-K", "XK-D", "QW-M", "LL-B", "PU-S", "OR-N", "VP-J", "WF-C", "TU-E", "MZ-P", "GD-F", "BX-H", "JW-L", "KY-G", "NV-Q"];
+  const B17_TAIL = Array.from({ length: 18 }, () => ["sq", "D"]); // 1.5.6: every ship wears the 100th Bomb Group "Square D" on the fin (white square, black D)
+  const B17_ACL = "EXTAKRMBHNPCLGDFJS"; // aircraft letters (yellow, under the serial on the fin / right of the roundel)
+  const B17_SQN = ["XR", "LN", "XR", "EP", "LD", "XR", "MW", "LN", "XR", "EP", "XR", "LD", "MW", "XR", "LN", "EP", "XR", "LD"]; // 351st / 349th / 351st / 418th ... squadron codes of the 100th BG
+  const B17_CODES = B17_SQN.map((q, i) => q + "-" + "EXTAKRMBHNPCLGDFJS"[i]);
   function b17Weather(k, metal) {
     const c = document.createElement("canvas"); c.width = c.height = 256; const x = c.getContext("2d");
     let sd = 101 + k * 7919; const r = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
@@ -363,8 +365,9 @@ export function createWorld3D(canvas) {
     if (shape === "tri") { x.moveTo(64, 8); x.lineTo(118, 96); x.lineTo(10, 96); } else x.rect(20, 14, 88, 82);
     x.closePath(); x.fill();
     x.fillStyle = fg; x.font = "bold 58px sans-serif"; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(letter, 64, shape === "tri" ? 66 : 57);
-    const serial = "4" + (2 + (k % 3)) + "-" + (30000 + ((k * 7919) % 69999));
-    x.fillStyle = metal ? "#15171a" : "#e7c43a"; x.font = "bold 21px monospace"; x.fillText(serial.slice(1).replace("-", ""), 64, 126);
+    const serial = String(230088 + k * 137 - (k ? 0 : 0)); // 1.5.6: 2-30088 style serial, yellow (black on bare metal)
+    x.fillStyle = metal ? "#15171a" : "#e7c43a"; x.font = "bold 21px monospace"; x.fillText(serial, 64, 126);
+    x.font = "bold 24px sans-serif"; x.fillText(B17_ACL[k % B17_ACL.length], 64, 146);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
   }
   function b17CodeTex(k, metal) {
@@ -445,12 +448,13 @@ export function createWorld3D(canvas) {
     for (let i = 0; i < A.length - 1; i++) { const a = A[i], b = A[i + 1]; if (z <= b.z) { const t = (z - a.z) / (b.z - a.z); return { hw: a.hw + (b.hw - a.hw) * t, top: a.top + (b.top - a.top) * t, bot: a.bot + (b.bot - a.bot) * t, n: a.n + (b.n - a.n) * t }; } }
     return A[A.length - 1];
   }
-  const b17NoseSecs = [
-    { z: 0.262, hw: 0.0335, top: 0.0310, bot: -0.0275, n: 2.1 }, { z: 0.280, hw: 0.0325, top: 0.0285, bot: -0.0290, n: 2.0 }, { z: 0.298, hw: 0.0295, top: 0.0220, bot: -0.0290, n: 2.0 },
-    { z: 0.316, hw: 0.0245, top: 0.0140, bot: -0.0260, n: 2.0 }, { z: 0.331, hw: 0.0175, top: 0.0070, bot: -0.0205, n: 2.0 }, { z: 0.342, hw: 0.0095, top: 0.0010, bot: -0.0140, n: 2.0 }, { z: 0.348, hw: 0.0020, top: -0.0030, bot: -0.0090, n: 2.0 },
+  const b17NoseSecs = [ // 1.5.6: authored in FINAL (post-transform) units; section 0 is identical to the hull's last section so the loft is continuous (no open step behind the cockpit)
+    { z: 0.262, hw: 0.0246, top: 0.0305, bot: -0.0292, n: 2.1 }, { z: 0.280, hw: 0.0244, top: 0.0305, bot: -0.0298, n: 2.0 }, { z: 0.300, hw: 0.0236, top: 0.0290, bot: -0.0275, n: 2.0 },
+    { z: 0.318, hw: 0.0212, top: 0.0235, bot: -0.0225, n: 2.0 }, { z: 0.332, hw: 0.0165, top: 0.0185, bot: -0.0170, n: 2.0 }, { z: 0.342, hw: 0.0095, top: 0.0120, bot: -0.0120, n: 2.0 }, { z: 0.348, hw: 0.0030, top: 0.0040, bot: -0.0050, n: 2.0 },
   ];
   // 1.5.5: proportions re-measured from the real B-17F side/plan references (beam ≈ 0.033 S, depth ≈ 0.082 S) — the 1.5.4 hull was ~35% too fat and 20% too deep
-  for (const A of [b17HullSecs, b17NoseSecs]) for (const q of A) { const yM = (q.top + q.bot) * 0.5, h = (q.top - q.bot) * 0.5 * 0.84; q.top = yM * 0.92 + h; q.bot = yM * 0.92 - h; q.hw *= 0.735; if (q.z > 0) q.bot -= 0.007 * Math.min(1, q.z / 0.15) * (q.z < 0.3 ? 1 : Math.max(0, (0.348 - q.z) / 0.05)); }
+  for (const A of [b17HullSecs]) for (const q of A) { const yM = (q.top + q.bot) * 0.5, h = (q.top - q.bot) * 0.5 * 0.84; q.top = yM * 0.92 + h; q.bot = yM * 0.92 - h; q.hw *= 0.735; if (q.z > 0) q.bot -= 0.007 * Math.min(1, q.z / 0.15) * (q.z < 0.3 ? 1 : Math.max(0, (0.348 - q.z) / 0.05)); }
+  b17HullSecs[b17HullSecs.length - 1].top = b17NoseSecs[0].top; // 1.5.6: the roof drops in a raked windscreen (roof z 0.24 → nose line z 0.262) instead of ending in an open vertical step
   function b17Loft(secs, N, i0, i1, capEnds) {
     const S = B17_VIS, pos = [], uv = [], idx = [], rows = i1 - i0 + 1;
     for (let r = 0; r < rows; r++) {
@@ -509,10 +513,10 @@ export function createWorld3D(canvas) {
     // nose glazing (bombardier) + chin turret, cockpit greenhouse, top turret, ball turret, tail gun, waist windows
     const noseM = b17NoseGlass().clone(); mats.push(noseM); g.userData.hazeMats.push({ m: noseM, col: noseM.color.clone() });
     const nose = new THREE.Mesh(b17Loft(b17NoseSecs, 16, 0, b17NoseSecs.length - 1, false), noseM); g.add(nose);
-    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.0165 * S, 10, 7), dark); chin.scale.set(0.95, 1, 1.15); chin.position.set(0, -0.043 * S, 0.292 * S); g.add(chin);
-    const cock = new THREE.Mesh(new THREE.BoxGeometry(0.045 * S, 0.017 * S, 0.075 * S), glassM); cock.position.set(0, 0.0425 * S, 0.222 * S); cock.rotation.x = -0.14; g.add(cock);
-    const cockF = new THREE.Mesh(new THREE.BoxGeometry(0.046 * S, 0.003 * S, 0.004 * S), dark); cockF.position.set(0, 0.0512 * S, 0.222 * S); g.add(cockF);
-    if (metal) { const ag = new THREE.Mesh(new THREE.BoxGeometry(0.04 * S, 0.004 * S, 0.1 * S), new THREE.MeshStandardMaterial({ color: 0x3f4730, roughness: 0.7, metalness: 0.1 })); ag.position.set(0, 0.028 * S, 0.285 * S); ag.rotation.x = 0.28; g.add(ag); } // anti-glare panel
+    // 1.5.6: no chin turret (the B-17F reference has a clear frameless glazed nose; the 1.5.5 dark sphere hung below the hull)
+    const cock = new THREE.Mesh(new THREE.BoxGeometry(0.036 * S, 0.012 * S, 0.06 * S), glassM); cock.position.set(0, 0.0435 * S, 0.205 * S); cock.rotation.x = -0.02; g.add(cock);
+    const cockF = new THREE.Mesh(new THREE.BoxGeometry(0.036 * S, 0.0022 * S, 0.003 * S), dark); cockF.position.set(0, 0.0495 * S, 0.176 * S); g.add(cockF);
+    if (metal) { const ag = new THREE.Mesh(new THREE.BoxGeometry(0.04 * S, 0.004 * S, 0.1 * S), new THREE.MeshStandardMaterial({ color: 0x3f4730, roughness: 0.7, metalness: 0.1 })); ag.position.set(0, 0.0315 * S, 0.292 * S); ag.rotation.x = 0.1; g.add(ag); } // anti-glare panel
     const top = new THREE.Mesh(new THREE.SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM); top.position.set(0, hullAt(0.15).top * S - 0.002 * S, 0.15 * S); g.add(top);
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.019 * S, 10, 7), dark); ball.position.set(0, -0.037 * S, -0.02 * S); g.add(ball);
     const tailG = new THREE.Mesh(new THREE.BoxGeometry(0.014 * S, 0.016 * S, 0.034 * S), glassM); tailG.position.set(0, 0.007 * S, -0.402 * S); tailG.userData.tailPart = true; g.add(tailG);
@@ -555,16 +559,19 @@ export function createWorld3D(canvas) {
       for (const sd of [-1, 1]) {
         MB.glass.push([_bgBox(0.004 * S, 0.014 * S, 0.026 * S), sideX(0.285, -0.004, sd) * S, -0.004 * S, 0.285 * S, 0, 0, 0]); // cheek gun window
         MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sideX(0.271, -0.004, sd) * S, -0.004 * S, 0.271 * S, 0, 0, 0]); MB.dark.push([_bgBox(0.003 * S, 0.016 * S, 0.0014 * S), sideX(0.299, -0.004, sd) * S, -0.004 * S, 0.299 * S, 0, 0, 0]);
-        for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(0.0018 * S, 0.02 * S, 0.0016 * S), sideX(z, 0.04, sd) * S, 0.04 * S, z * S, 0, 0, 0]); // cockpit side-window frames
-        MB.glass.push([_bgBox(0.0018 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.04, sd) * S - sd * 0.0004 * S, 0.04 * S, 0.218 * S, 0, 0, 0]);
+        for (const z of [0.18, 0.192, 0.218, 0.236]) MB.dark.push([_bgBox(0.0018 * S, 0.014 * S, 0.0016 * S), sideX(z, 0.0345, sd) * S, 0.0345 * S, z * S, 0, 0, 0]); // cockpit side-window frames (1.5.6: sit on the lowered roof)
+        MB.glass.push([_bgBox(0.0018 * S, 0.011 * S, 0.05 * S), sideX(0.208, 0.0345, sd) * S - sd * 0.0004 * S, 0.0345 * S, 0.208 * S, 0, 0, 0]);
         MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.034 * S, 5), sd * 0.0055 * S, hullAt(0.15).top * S + 0.003 * S, 0.172 * S, Z90, 0, 0]); // top-turret twin .50s
-        MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.03 * S, 5), sd * 0.0035 * S, -0.038 * S, 0.305 * S, Z90, 0, 0]); // chin turret
         MB.dark.push([_bgCyl(0.0013 * S, 0.0013 * S, 0.028 * S, 5), sd * 0.004 * S, -0.058 * S, -0.04 * S, 0.5, 0, 0]); // ball turret
         MB.dark.push([_bgCyl(0.0016 * S, 0.0016 * S, 0.04 * S, 5), sd * 0.044 * S, 0.012 * S, -0.075 * S, 0, 0, Z90]); // waist gun
         MB.dark.push([_bgBox(0.0035 * S, 0.0012 * S, 0.1 * S), sideX(-0.1, 0.0205, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]); // waist window top rail
       }
-      MB.dark.push([_bgBox(0.058 * S, 0.0016 * S, 0.002 * S), 0, 0.0365 * S, 0.2585 * S, -0.14, 0, 0]);
-      for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(0.0016 * S, 0.02 * S, 0.0018 * S), x * S, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]); // windscreen mullions
+      { // 1.5.6 raked windscreen on the roof→nose slope (z 0.24→0.262): glass slab + frame bars, all lying ON the hull surface
+        const zr0 = 0.24, zr1 = 0.262, yr0 = hullAt(zr0).top, yr1 = hullAt(zr1).top, slope = Math.atan2(yr0 - yr1, zr1 - zr0), len = Math.hypot(yr0 - yr1, zr1 - zr0), zc = (zr0 + zr1) / 2, yc = (yr0 + yr1) / 2 + 0.0009;
+        MB.glass.push([_bgBox(0.026 * S, 0.0016 * S, len * S), 0, yc * S, zc * S, slope, 0, 0]);
+        for (const x of [-0.0105, 0, 0.0105]) MB.dark.push([_bgBox(0.0014 * S, 0.0018 * S, len * S), x * S, (yc + 0.0004) * S, zc * S, slope, 0, 0]); // windscreen mullions
+        MB.dark.push([_bgBox(0.028 * S, 0.002 * S, 0.0022 * S), 0, (yr0 + 0.0011) * S, zr0 * S, slope, 0, 0]); MB.dark.push([_bgBox(0.026 * S, 0.002 * S, 0.0022 * S), 0, (yr1 + 0.0009) * S, zr1 * S, slope, 0, 0]);
+      }
       MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 0.004 * S, 12), 0, hullAt(0.15).top * S - 0.001 * S, 0.15 * S, 0, 0, 0]); // top-turret ring
       MB.glass.push([_bgBox(0.012 * S, 0.003 * S, 0.03 * S), 0, 0.0405 * S, -0.03 * S, 0, 0, 0]); // radio-room hatch
     }
@@ -2026,6 +2033,7 @@ export function createWorld3D(canvas) {
     p.s1 = o && o.s1 ? o.s1 : big ? 7 : 4.5;
     p.a = o && o.a ? o.a : dark ? 0.55 : 0.35;
     p.sp.material.color.setHex(o && o.color != null ? o.color : dark ? 0x1e1e1e : 0x8a8a88);
+    p.light = p.sp.material.color.r > 0.3; // 1.5.6: pale puffs are size-capped and fade out near the camera so they can never blank out a hull
     p.sp.visible = true;
   }
   function updateSmoke(dt) {
@@ -2037,9 +2045,10 @@ export function createWorld3D(canvas) {
       p.sp.position.x += p.vx * dt;
       p.sp.position.y += p.vy * dt;
       p.sp.position.z += p.vz * dt;
-      const s = p.s0 + (p.s1 - p.s0) * k;
+      let s = p.s0 + (p.s1 - p.s0) * k;
+      let nf = 1; if (p.light) { if (s > 4.5) s = 4.5; const dx = p.sp.position.x - camera.position.x, dy = p.sp.position.y - camera.position.y, dz = p.sp.position.z - camera.position.z, dd = Math.sqrt(dx * dx + dy * dy + dz * dz); nf = dd < 8 ? 0 : dd > 30 ? 1 : (dd - 8) / 22; }
       p.sp.scale.set(s, s, 1);
-      p.sp.material.opacity = p.a * (1 - k) * Math.min(1, k * 6 + 0.2);
+      p.sp.material.opacity = p.a * (1 - k) * Math.min(1, k * 6 + 0.2) * nf;
     }
   }
 

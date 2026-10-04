@@ -161,6 +161,7 @@
     burstsPerPass: 1, bursts190: 2,         // 1.4.0: 2 → 3 — tougher 109s press their attacks (balances the tougher Fortresses)
     open1Km: 4.0, open1Up: 1400,  // 1.3.5 opening: Staffel 1 start (km ahead, m above), diving
     open2Km: 5.5,
+    dmgMul109: 1.0, dmgMul190: 1.35, dmgMulSturm: 2.05, // 1.5.6: md constants — German damage multiplier vs a B-17 by type (on top of gerDmg)
     fighterHp: 26, fighterHp190: 34, fighterHpP51: 12, quiet: 18, // 1.5.1: tougher fighters (a 109 takes ~6 hull hits), 18 s quiet opening
      // 1.5.0 (spec §5 phone shortcut): single pool per fighter
     p51Leash: 2300, p51TickHit: 0.075, p51HitDmg: 18, // 1.5.0: Mustang leash (u from the box centre), .50 damage per connecting Mustang burst
@@ -376,6 +377,8 @@
       else if (e.t === "wing_fold") shipCall(s, isP ? "WING'S FOLDING!" : nm + " — WING FOLDING", 1.6, true);
       else if (e.t === "controls") { if (isP) { shipCall(s, "CONTROLS SLOPPY!"); } }
       else if (e.t === "oxygen") { if (isP) shipCall(s, "OXYGEN SYSTEM HIT"); }
+      else if (e.t === "gear") { if (isP) shipCall(s, "HYDRAULICS SHOT UP — NO GEAR!"); }
+      else if (e.t === "ammo_cook") { if (isP) shipCall(s, "AMMO BOX BURNING!"); }
     }
   }
   function syncShip(s) {
@@ -388,6 +391,7 @@
       else if (!q.out && q.hp < 26) e.fire = Math.max(e.fire, 0.14);
     }
     for (let side = 0; side < 2; side++) if (sd.fuel[side].fire) { const e = s.engines[side === 0 ? 3 : 0]; e.fire = Math.max(e.fire, 0.85); }
+    if (sd.fuse && sd.fuse.fire) for (const k of [1, 2]) s.engines[k].fire = Math.max(s.engines[k].fire, 0.7); // 1.5.6 bomb-bay tank fire shows on the inboard nacelles
     if (s === bomber ? !bomber.dead : !s.spiraling) s.health = Math.max(0.5, FC.health(sd));
     if (s !== bomber) { // dead side's wing drops a few degrees
       const left = (s.engines[0].out ? 1 : 0) + (s.engines[1].out ? 1 : 0), right = (s.engines[2].out ? 1 : 0) + (s.engines[3].out ? 1 : 0);
@@ -416,7 +420,7 @@
     id = normBox(id);
     const isP = s === bomber;
     s.lastSrc = src;
-    const gm = (src === "109" || src === "190") ? TUNE.gerDmg * (isP ? TUNE.gerPlayerMul : 1) : 1;
+    const gm = (src === "109" || src === "190") ? TUNE.gerDmg * (isP ? TUNE.gerPlayerMul : 1) * ((opts && opts.dm) || 1) : 1; // 1.5.6: md dmgMul109 1.0 / dmgMul190 1.35 / dmgMulSturm 2.05 ride in opts.dm
     const r = FC.applyHit(s.sd, id, gun, { rf: rf * gm, scale: opts && opts.scale, fireMul: opts && opts.fireMul });
     logHit(src, gun, id, isP ? "player" : "box");
     if (!isP) s.flash = 1;
@@ -488,7 +492,7 @@
   // flak fragments: a handful of HE hits (20 mm-class) at random boxes, scaled by closeness (player's ship takes ~0.3×)
   function flakDamage(s, k, mul) {
     const n = Math.max(1, Math.round(1.1 * k * mul * rand(0.6, 1.4) + (s === bomber ? 0.2 : 0)));
-    for (let i = 0; i < n && shipLive(s); i++) shipHit(s, FC.pickAimBox("beam"), "mg151", 1, "flak", { scale: 0.6, fireMul: 0.3 });
+    for (let i = 0; i < n && shipLive(s); i++) shipHit(s, FC.pickStrike("beam"), "mg151", 1, "flak", { scale: 0.6, fireMul: 0.3 });
   }
 
   // ===== 1.3.4 FRIENDLY FIRE: B-17 hitboxes (matches the world3d mesh, B17_VIS = 16u span-ish) =====
@@ -826,7 +830,7 @@
     shipMiss: [12, 22],
     fireMax: 430, fireOpen: 700, fireMin: 45,
     floorY: -650,
-    v190: 540 * MPH, v190Cap: 580 * MPH, // 1.5.3: 440→500 mph run-in (dive attack; closing 220 mph on the box instead of 160)
+    v190: 540 * MPH, v190Cap: 545 * MPH, /* 1.5.6: md v190 = 540 mph; the 580 cap let dives reach ~575 mph */ // 1.5.3: 440→500 mph run-in (dive attack; closing 220 mph on the box instead of 160)
     v190old: 440 * MPH, v190CapOld: 460 * MPH, // 1.5.1: 190 dive/zoom run-in 465 mph (closing 185 mph on the 280 mph box)
     alt15k: 4572 * U_PER_M,                // 15,000 ft above the box (109s at ~35,000 ft)
   };
@@ -1257,7 +1261,7 @@
         const gun = FC.GUNS[G.g], rf = FC.rangeFactor(gun, FC.toYd(h.t));
         if (Math.random() > rf) continue;
         b.hits++;
-        shipHit(h.s, h.id, G.g, rf, src);
+        shipHit(h.s, h.id, G.g, rf, src, { dm: src === "190" ? (e.sturm ? TUNE.dmgMulSturm : TUNE.dmgMul190) : TUNE.dmgMul109 });
         if (mission) mission.gunHits = (mission.gunHits || 0) + 1;
         if (Math.random() < 0.7) for (let i = 0; i < 2; i++) particles.push({ x: h.x, y: h.y, z: h.z, vx: rand(-9, 9), vy: rand(-3, 9), vz: rand(-9, 9), life: rand(0.1, 0.25), max: 0.25, kind: "spark", r: rand(1, 2.2) });
         if (Math.random() < 0.55) particles.push({ x: h.x, y: h.y, z: h.z, vx: rand(-8, 8), vy: rand(2, 12), vz: rand(-8, 8), life: rand(0.4, 0.8), max: 0.8, kind: "chip", r: rand(0.9, 1.8) });
@@ -1360,7 +1364,7 @@
     const L = mission ? (mission.hitLog || (mission.hitLog = {})) : {};
     const m = L["p51:m2"] || (L["p51:m2"] = {});
     const r = Math.random();
-    const part = r < 0.14 ? "cockpit" : r < 0.34 ? "engine" : r < 0.48 ? "wingroot" : r < 0.58 ? "tail" : r < 0.78 ? "wing" : "hull";
+    const part = r < 0.14 ? "cockpit" : r < 0.34 ? "engine" : r < 0.48 ? "wingroot" : r < 0.58 ? "tail" : r < 0.78 ? "wing" : r < 0.84 ? "radiator" : r < 0.89 ? "fuel" : "hull"; // 1.5.6: radiator / fuselage-tank zones (md §4 fighter parts)
     m[part] = (m[part] || 0) + 1;
     const dmg = TUNE.p51HitDmg * 0.5 * FC.PART_MUL[part] * (T.type === "190" ? 0.82 : 1) * (T.sturm && (part === "engine" || part === "hull" || part === "cockpit") ? 0.7 : 1);
     T.hp -= dmg; T.mHits = (T.mHits || 0) + dmg; T.flash = 1; T.smoke = Math.min(1, (T.smoke || 0) + 0.2);
@@ -1406,7 +1410,7 @@
     if (window.FGAudio && Math.random() < 0.5) window.FGAudio.gun(e.x, e.y, e.z);
     if (Math.random() > p) return false;
     const r = Math.random();
-    const part = r < 0.14 ? "cockpit" : r < 0.34 ? "engine" : r < 0.48 ? "wingroot" : r < 0.58 ? "tail" : r < 0.78 ? "wing" : "hull";
+    const part = r < 0.14 ? "cockpit" : r < 0.34 ? "engine" : r < 0.48 ? "wingroot" : r < 0.58 ? "tail" : r < 0.78 ? "wing" : r < 0.84 ? "radiator" : r < 0.89 ? "fuel" : "hull"; // 1.5.6: radiator / fuselage-tank zones (md §4 fighter parts)
     m[part] = (m[part] || 0) + 1;
     const dmg = TUNE.p51HitDmg * FC.PART_MUL[part] * (T.type === "190" ? 0.82 : 1) * (T.sturm && (part === "engine" || part === "hull" || part === "cockpit") ? 0.7 : 1);
     T.hp -= dmg; T.mHits = (T.mHits || 0) + dmg; T.flash = 1; T.smoke = Math.min(1, (T.smoke || 0) + 0.25);
@@ -2034,7 +2038,7 @@
         for (const f of friendlies) if (friendlyOk(f)) cand.push(f);
         for (const sH of cand) {
           const c = sH === bomber ? CAM : sH, d = Math.hypot(c.x - r.x, c.y - r.y, c.z - r.z);
-          if (d < 26 && Math.random() < 0.7 * (1 - d / 26) + 0.1) { if (K) K.fragHits++; shipHit(sH, FC.pickAimBox("beam"), "wgr21", 1, "190", { scale: 0.22, fireMul: 0.4 }); }
+          if (d < 26 && Math.random() < 0.7 * (1 - d / 26) + 0.1) { if (K) K.fragHits++; shipHit(sH, FC.pickStrike("beam"), "wgr21", 1, "190", { scale: 0.22, fireMul: 0.4 }); }
         }
       }
     }
@@ -2821,6 +2825,7 @@
     downSeq = null; chutes = []; flakBursts = []; rockets = []; stragNow = null; BOX_C.x = BOX_C0.x; BOX_C.y = BOX_C0.y; BOX_C.z = BOX_C0.z;
     if (World3D && World3D.clearDamage) World3D.clearDamage(); // 1.3.8: holes / decals from the last mission EYE.x = CAM.x; EYE.y = CAM.y; EYE.z = CAM.z; viewRoll = 0;
     if (window.FGAudio && window.FGAudio.reset) window.FGAudio.reset();
+    injuryReset();
     setDownHud(false);
     bomber = {
       health: 100,
@@ -3114,7 +3119,7 @@
       pendingPair = null;
       wavePause = 999;
       if (mission && mission.fightersSpawned === 0) {
-        pushCallout("BANDITS INBOUND — 109s HIGH · 190s ASTERN", 2.0);
+        pushCallout("BANDITS INBOUND — 109s 12 O'CLOCK HIGH · 190s 5 AND 7 O'CLOCK", 2.0);
       }
       return;
     }
@@ -3696,6 +3701,35 @@
 
   // ===== 1.5.4 HIT / DAMAGE / CABIN EFFECTS (from the reference clips): clustered multi-flash bursts + 20 mm bloom, shaped camera kicks + blur,
   //       interior-cabin specks / sparks / vignette, gun-sight vibration, torn skin =====
+  // ===== 1.5.6 injured gunner: on a DIRECT flak hit on our ship (once per run, same trigger as the audio ear-ring) the picture goes black-and-white, high-contrast, tunnel-vignetted and slightly blurred
+  // after a white flash, then colour returns over ~10 s. One fixed overlay (backdrop-filter + radial gradient) sits under the HUD and over both canvases; pointer-events:none → input and HUD are untouched.
+  const INJ_SEC = 10, injury = { used: false, t0: -1, el: null, vg: null, fl: null, raf: 0, peakGray: 0, last: "", n: 0, sat: 1 };
+  function injuryEnsure() {
+    if (injury.el) return;
+    const el = document.createElement("div"); el.id = "injFx"; el.style.cssText = "position:fixed;inset:0;z-index:1;pointer-events:none;display:none;will-change:backdrop-filter,opacity";
+    const vg = document.createElement("div"); vg.style.cssText = "position:absolute;inset:0;background:radial-gradient(ellipse at 50% 48%,rgba(0,0,0,0) 22%,rgba(0,0,0,.55) 58%,rgba(0,0,0,.94) 100%)";
+    const fl = document.createElement("div"); fl.style.cssText = "position:absolute;inset:0;background:#fff;opacity:0";
+    el.appendChild(vg); el.appendChild(fl);
+    const hud = document.getElementById("hud"); if (hud && hud.parentNode) hud.parentNode.insertBefore(el, hud); else document.body.appendChild(el);
+    injury.el = el; injury.vg = vg; injury.fl = fl;
+  }
+  function injuryProfile(age) { // → {gray 0..1, flash 0..1}
+    const u = Math.min(1, age / INJ_SEC), hold = 0.16;
+    const x = u <= hold ? 0 : (u - hold) / (1 - hold), ease = x * x * (3 - 2 * x);
+    return { gray: u >= 1 ? 0 : 1 - ease, flash: age < 0.3 ? 0.92 * (1 - age / 0.3) * (1 - age / 0.3) : 0 };
+  }
+  function injuryApply(age) {
+    const p = injuryProfile(age), g = p.gray, el = injury.el; if (!el) return;
+    if (age >= INJ_SEC) { el.style.display = "none"; el.style.webkitBackdropFilter = el.style.backdropFilter = ""; injury.sat = 1; injury.t0 = -1; return false; }
+    const f = "grayscale(" + g.toFixed(3) + ") contrast(" + (1 + 0.55 * g).toFixed(3) + ") brightness(" + (1 - 0.12 * g).toFixed(3) + ") blur(" + (1.8 * g * g).toFixed(2) + "px)";
+    if (f !== injury.last) { injury.last = f; el.style.webkitBackdropFilter = el.style.backdropFilter = f; }
+    el.style.display = "block"; el.style.opacity = "1"; injury.vg.style.opacity = (0.15 + 0.85 * g).toFixed(3); injury.fl.style.opacity = p.flash.toFixed(3); injury.sat = 1 - g; injury.peakGray = Math.max(injury.peakGray, g);
+    return true;
+  }
+  function injuryTick() { injury.raf = 0; if (injury.t0 < 0) return; if (injuryApply((performance.now() - injury.t0) / 1000) !== false) injury.raf = requestAnimationFrame(injuryTick); }
+  function injuredGunner() { if (injury.used) return false; injury.used = true; injury.n++; injuryEnsure(); injury.t0 = performance.now(); injury.last = ""; if (!injury.raf) injury.raf = requestAnimationFrame(injuryTick); return true; }
+  function injuryReset() { injury.used = false; injury.t0 = -1; injury.last = ""; injury.sat = 1; if (injury.raf) { cancelAnimationFrame(injury.raf); injury.raf = 0; } if (injury.el) { injury.el.style.display = "none"; injury.el.style.webkitBackdropFilter = injury.el.style.backdropFilter = ""; } }
+  window.__fgInjury = { state: injury, start: () => injuredGunner(), reset: injuryReset, profile: injuryProfile };
   const fx154 = { kicks: [], cabin: [], vig: 0, blur: 0, blurPx: -1, vib: 0, accum: 0, lastCannonKick: -9, n: { cluster: 0, flashes: 0, bloom: 0, kicks: 0, flakKicks: 0, cannonKicks: 0, specks: 0, sparks: 0, cabinHits: 0, tears: 0 }, peakKick: 0, peakBlur: 0, peakVig: 0 };
   function hitCluster(x, y, z, vx, vy, vz, heavy, sc) { // several offset flashes with staggered starts (irregular, never one uniform dot); heavy (20 mm / 30 mm) adds a white bloom
     const n = (heavy ? 4 : 3) + (Math.random() < 0.4 ? 1 : 0); sc = sc || 1; fx154.n.cluster++;
@@ -3925,10 +3959,11 @@
         F.hitsP++;
         if (window.FGAudio) window.FGAudio.hitOwn("flak");
         bomber.flash = Math.max(bomber.flash || 0, 0.8);
-        if (d < FLAK.lethal && Math.random() < FLAK.playerLethal) { playerShotDown("flak"); return; }
+        if (d < FLAK.lethal && Math.random() < FLAK.playerLethal) { if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); injuredGunner(); playerShotDown("flak"); return; }
         const k = 1 - d / (FLAK.frag + 4);
         pushCallout("FLAK — WE'RE HIT!", 1.2, true);
         flakDamage(bomber, k, FLAK.playerMul);
+        injuredGunner(); if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); // 1.5.6: the ear-ring is tied to flak damage actually applied to OUR ship (once per run, ~10 s)
       } else if (d < 70) F.closeP++;
     }
   }
@@ -4082,6 +4117,7 @@
   function endGame() {
     state = "GAMEOVER";
     input.fire = false;
+    if (guns.fireWas) { guns.fireWas = false; if (window.FGAudio && window.FGAudio.gunRelease) window.FGAudio.gunRelease(); }
     const survived = Math.floor(timeAlive);
     goEyebrow.textContent = bomber.health <= 0 ? "FORTRESS DOWN" : "MISSION OVER";
     goTitle.textContent = bomber.health <= 0 ? "BAIL OUT" : "RTB";
@@ -4096,7 +4132,7 @@
   function update(dt) {
     window.__FG_SIMT = (window.__FG_SIMT || 0) + dt; // 1.3.9: sim clock for the tracer persistence smear
     elapsed += dt;
-    if (window.FGAudio && !update._inAdvance) { const b = lookBasis(); window.FGAudio.frame({ playing: state === "PLAYING", listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: EYE.x, cy: EYE.y, cz: EYE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20), holes: bomber ? Math.max(bomber.holes.length, bomber.holeN || 0) : 0 }); }
+    if (window.FGAudio && !update._inAdvance) { const b = lookBasis(); window.FGAudio.frame({ playing: state === "PLAYING", firing: !!(input.fire && !guns.overheated), listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: EYE.x, cy: EYE.y, cz: EYE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20), holes: bomber ? Math.max(bomber.holes.length, bomber.holeN || 0) : 0 }); }
     if (state === "TITLE") {
       gunner.yaw = 0.25 + Math.sin(elapsed * 0.18) * 0.35;
       gunner.pitch = 0.10 + Math.sin(elapsed * 0.11) * 0.05;
@@ -4113,6 +4149,7 @@
     onTarget = MISSION_MODE ? false : !!screenHitscan();
     if (downSeq) input.fire = false;
     tryFire(dt);
+    { const firingNow = !!(input.fire && !guns.overheated); if (guns.fireWas && !firingNow && window.FGAudio && window.FGAudio.gunRelease) window.FGAudio.gunRelease(); guns.fireWas = firingNow; } // 1.5.6: trigger released / jammed / cut → the gun's end sound (audio plays it once, and only if rounds were fired)
     for (let i = 0; i < 2; i++) {
       guns.recoilLR[i] = Math.max(0, guns.recoilLR[i] - dt * 9);
       guns.flashLR[i] = Math.max(0, guns.flashLR[i] - dt * 13);
@@ -6424,6 +6461,7 @@
       return best.id || true;
     },
     fire: (on) => { input.fire = !!on; },
+    setHeat: (h) => { guns.heat = h; if (h >= 1) guns.overheated = true; }, // test hook (1.5.6): force the overheat cut
     _bul: () => bullets.filter((b) => b.tracer).map((b) => { const sp = Math.hypot(b.vx, b.vy, b.vz) || 1; const tail = Math.min(b.trav || 0, 22); const q = projSeg(b.x, b.y, b.z, b.x - b.vx / sp * tail, b.y - b.vy / sp * tail, b.z - b.vz / sp * tail); return { trav: Math.round(b.trav), life: +b.life.toFixed(2), q: q && q.map((v) => Math.round(v)) }; }),
     attacker: (maxD) => {
       let best = null, bd = maxD || 500;

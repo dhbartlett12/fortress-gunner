@@ -33527,8 +33527,10 @@
     const B17_SHADES = [5068084, 5790267, 4740410, 6119751, 4410161, 5462072];
     const B17_METAL = /* @__PURE__ */ new Set([3, 12]);
     const B17_PATCH = { 5: "tail", 9: "wing", 14: "tail" };
-    const B17_TAIL = [["tri", "A"], ["tri", "B"], ["sq", "J"], ["tri", "C"], ["sq", "D"], ["tri", "G"], ["sq", "H"], ["tri", "L"], ["sq", "K"], ["tri", "A"], ["sq", "P"], ["tri", "B"], ["tri", "C"], ["sq", "J"], ["tri", "G"], ["sq", "D"], ["tri", "L"], ["sq", "H"]];
-    const B17_CODES = ["LN-T", "BK-R", "DF-A", "SO-K", "XK-D", "QW-M", "LL-B", "PU-S", "OR-N", "VP-J", "WF-C", "TU-E", "MZ-P", "GD-F", "BX-H", "JW-L", "KY-G", "NV-Q"];
+    const B17_TAIL = Array.from({ length: 18 }, () => ["sq", "D"]);
+    const B17_ACL = "EXTAKRMBHNPCLGDFJS";
+    const B17_SQN = ["XR", "LN", "XR", "EP", "LD", "XR", "MW", "LN", "XR", "EP", "XR", "LD", "MW", "XR", "LN", "EP", "XR", "LD"];
+    const B17_CODES = B17_SQN.map((q, i) => q + "-" + "EXTAKRMBHNPCLGDFJS"[i]);
     function b17Weather(k, metal) {
       const c = document.createElement("canvas");
       c.width = c.height = 256;
@@ -33609,10 +33611,12 @@
       x.textAlign = "center";
       x.textBaseline = "middle";
       x.fillText(letter, 64, shape === "tri" ? 66 : 57);
-      const serial = "4" + (2 + k % 3) + "-" + (3e4 + k * 7919 % 69999);
+      const serial = String(230088 + k * 137 - (k ? 0 : 0));
       x.fillStyle = metal ? "#15171a" : "#e7c43a";
       x.font = "bold 21px monospace";
-      x.fillText(serial.slice(1).replace("-", ""), 64, 126);
+      x.fillText(serial, 64, 126);
+      x.font = "bold 24px sans-serif";
+      x.fillText(B17_ACL[k % B17_ACL.length], 64, 146);
       const t = new CanvasTexture(c);
       t.colorSpace = SRGBColorSpace;
       t.anisotropy = 4;
@@ -33785,21 +33789,23 @@
       return A[A.length - 1];
     }
     const b17NoseSecs = [
-      { z: 0.262, hw: 0.0335, top: 0.031, bot: -0.0275, n: 2.1 },
-      { z: 0.28, hw: 0.0325, top: 0.0285, bot: -0.029, n: 2 },
-      { z: 0.298, hw: 0.0295, top: 0.022, bot: -0.029, n: 2 },
-      { z: 0.316, hw: 0.0245, top: 0.014, bot: -0.026, n: 2 },
-      { z: 0.331, hw: 0.0175, top: 7e-3, bot: -0.0205, n: 2 },
-      { z: 0.342, hw: 95e-4, top: 1e-3, bot: -0.014, n: 2 },
-      { z: 0.348, hw: 2e-3, top: -3e-3, bot: -9e-3, n: 2 }
+      // 1.5.6: authored in FINAL (post-transform) units; section 0 is identical to the hull's last section so the loft is continuous (no open step behind the cockpit)
+      { z: 0.262, hw: 0.0246, top: 0.0305, bot: -0.0292, n: 2.1 },
+      { z: 0.28, hw: 0.0244, top: 0.0305, bot: -0.0298, n: 2 },
+      { z: 0.3, hw: 0.0236, top: 0.029, bot: -0.0275, n: 2 },
+      { z: 0.318, hw: 0.0212, top: 0.0235, bot: -0.0225, n: 2 },
+      { z: 0.332, hw: 0.0165, top: 0.0185, bot: -0.017, n: 2 },
+      { z: 0.342, hw: 95e-4, top: 0.012, bot: -0.012, n: 2 },
+      { z: 0.348, hw: 3e-3, top: 4e-3, bot: -5e-3, n: 2 }
     ];
-    for (const A of [b17HullSecs, b17NoseSecs]) for (const q of A) {
+    for (const A of [b17HullSecs]) for (const q of A) {
       const yM = (q.top + q.bot) * 0.5, h = (q.top - q.bot) * 0.5 * 0.84;
       q.top = yM * 0.92 + h;
       q.bot = yM * 0.92 - h;
       q.hw *= 0.735;
       if (q.z > 0) q.bot -= 7e-3 * Math.min(1, q.z / 0.15) * (q.z < 0.3 ? 1 : Math.max(0, (0.348 - q.z) / 0.05));
     }
+    b17HullSecs[b17HullSecs.length - 1].top = b17NoseSecs[0].top;
     function b17Loft(secs, N, i0, i1, capEnds) {
       const S = B17_VIS, pos = [], uv = [], idx = [], rows = i1 - i0 + 1;
       for (let r = 0; r < rows; r++) {
@@ -33886,21 +33892,17 @@
       g.userData.hazeMats.push({ m: noseM, col: noseM.color.clone() });
       const nose = new Mesh(b17Loft(b17NoseSecs, 16, 0, b17NoseSecs.length - 1, false), noseM);
       g.add(nose);
-      const chin = new Mesh(new SphereGeometry(0.0165 * S, 10, 7), dark);
-      chin.scale.set(0.95, 1, 1.15);
-      chin.position.set(0, -0.043 * S, 0.292 * S);
-      g.add(chin);
-      const cock = new Mesh(new BoxGeometry(0.045 * S, 0.017 * S, 0.075 * S), glassM);
-      cock.position.set(0, 0.0425 * S, 0.222 * S);
-      cock.rotation.x = -0.14;
+      const cock = new Mesh(new BoxGeometry(0.036 * S, 0.012 * S, 0.06 * S), glassM);
+      cock.position.set(0, 0.0435 * S, 0.205 * S);
+      cock.rotation.x = -0.02;
       g.add(cock);
-      const cockF = new Mesh(new BoxGeometry(0.046 * S, 3e-3 * S, 4e-3 * S), dark);
-      cockF.position.set(0, 0.0512 * S, 0.222 * S);
+      const cockF = new Mesh(new BoxGeometry(0.036 * S, 22e-4 * S, 3e-3 * S), dark);
+      cockF.position.set(0, 0.0495 * S, 0.176 * S);
       g.add(cockF);
       if (metal) {
         const ag = new Mesh(new BoxGeometry(0.04 * S, 4e-3 * S, 0.1 * S), new MeshStandardMaterial({ color: 4146992, roughness: 0.7, metalness: 0.1 }));
-        ag.position.set(0, 0.028 * S, 0.285 * S);
-        ag.rotation.x = 0.28;
+        ag.position.set(0, 0.0315 * S, 0.292 * S);
+        ag.rotation.x = 0.1;
         g.add(ag);
       }
       const top = new Mesh(new SphereGeometry(0.02 * S, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), glassM);
@@ -34025,16 +34027,20 @@
           MB.glass.push([_bgBox(4e-3 * S, 0.014 * S, 0.026 * S), sideX(0.285, -4e-3, sd) * S, -4e-3 * S, 0.285 * S, 0, 0, 0]);
           MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sideX(0.271, -4e-3, sd) * S, -4e-3 * S, 0.271 * S, 0, 0, 0]);
           MB.dark.push([_bgBox(3e-3 * S, 0.016 * S, 14e-4 * S), sideX(0.299, -4e-3, sd) * S, -4e-3 * S, 0.299 * S, 0, 0, 0]);
-          for (const z of [0.188, 0.2, 0.226, 0.248]) MB.dark.push([_bgBox(18e-4 * S, 0.02 * S, 16e-4 * S), sideX(z, 0.04, sd) * S, 0.04 * S, z * S, 0, 0, 0]);
-          MB.glass.push([_bgBox(18e-4 * S, 0.015 * S, 0.05 * S), sideX(0.218, 0.04, sd) * S - sd * 4e-4 * S, 0.04 * S, 0.218 * S, 0, 0, 0]);
+          for (const z of [0.18, 0.192, 0.218, 0.236]) MB.dark.push([_bgBox(18e-4 * S, 0.014 * S, 16e-4 * S), sideX(z, 0.0345, sd) * S, 0.0345 * S, z * S, 0, 0, 0]);
+          MB.glass.push([_bgBox(18e-4 * S, 0.011 * S, 0.05 * S), sideX(0.208, 0.0345, sd) * S - sd * 4e-4 * S, 0.0345 * S, 0.208 * S, 0, 0, 0]);
           MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.034 * S, 5), sd * 55e-4 * S, hullAt(0.15).top * S + 3e-3 * S, 0.172 * S, Z90, 0, 0]);
-          MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.03 * S, 5), sd * 35e-4 * S, -0.038 * S, 0.305 * S, Z90, 0, 0]);
           MB.dark.push([_bgCyl(13e-4 * S, 13e-4 * S, 0.028 * S, 5), sd * 4e-3 * S, -0.058 * S, -0.04 * S, 0.5, 0, 0]);
           MB.dark.push([_bgCyl(16e-4 * S, 16e-4 * S, 0.04 * S, 5), sd * 0.044 * S, 0.012 * S, -0.075 * S, 0, 0, Z90]);
           MB.dark.push([_bgBox(35e-4 * S, 12e-4 * S, 0.1 * S), sideX(-0.1, 0.0205, sd) * S, 0.0245 * S, -0.103 * S, 0, 0, 0]);
         }
-        MB.dark.push([_bgBox(0.058 * S, 16e-4 * S, 2e-3 * S), 0, 0.0365 * S, 0.2585 * S, -0.14, 0, 0]);
-        for (const x of [-0.021, 0, 0.021]) MB.dark.push([_bgBox(16e-4 * S, 0.02 * S, 18e-4 * S), x * S, 0.0445 * S, 0.2585 * S, -0.14, 0, 0]);
+        {
+          const zr0 = 0.24, zr1 = 0.262, yr0 = hullAt(zr0).top, yr1 = hullAt(zr1).top, slope = Math.atan2(yr0 - yr1, zr1 - zr0), len = Math.hypot(yr0 - yr1, zr1 - zr0), zc = (zr0 + zr1) / 2, yc = (yr0 + yr1) / 2 + 9e-4;
+          MB.glass.push([_bgBox(0.026 * S, 16e-4 * S, len * S), 0, yc * S, zc * S, slope, 0, 0]);
+          for (const x of [-0.0105, 0, 0.0105]) MB.dark.push([_bgBox(14e-4 * S, 18e-4 * S, len * S), x * S, (yc + 4e-4) * S, zc * S, slope, 0, 0]);
+          MB.dark.push([_bgBox(0.028 * S, 2e-3 * S, 22e-4 * S), 0, (yr0 + 11e-4) * S, zr0 * S, slope, 0, 0]);
+          MB.dark.push([_bgBox(0.026 * S, 2e-3 * S, 22e-4 * S), 0, (yr1 + 9e-4) * S, zr1 * S, slope, 0, 0]);
+        }
         MB.dark.push([_bgCyl(0.0225 * S, 0.0225 * S, 4e-3 * S, 12), 0, hullAt(0.15).top * S - 1e-3 * S, 0.15 * S, 0, 0, 0]);
         MB.glass.push([_bgBox(0.012 * S, 3e-3 * S, 0.03 * S), 0, 0.0405 * S, -0.03 * S, 0, 0, 0]);
       }
@@ -36539,6 +36545,7 @@
       p.s1 = o && o.s1 ? o.s1 : big ? 7 : 4.5;
       p.a = o && o.a ? o.a : dark ? 0.55 : 0.35;
       p.sp.material.color.setHex(o && o.color != null ? o.color : dark ? 1973790 : 9079432);
+      p.light = p.sp.material.color.r > 0.3;
       p.sp.visible = true;
     }
     function updateSmoke(dt) {
@@ -36553,9 +36560,15 @@
         p.sp.position.x += p.vx * dt;
         p.sp.position.y += p.vy * dt;
         p.sp.position.z += p.vz * dt;
-        const s = p.s0 + (p.s1 - p.s0) * k;
+        let s = p.s0 + (p.s1 - p.s0) * k;
+        let nf = 1;
+        if (p.light) {
+          if (s > 4.5) s = 4.5;
+          const dx = p.sp.position.x - camera.position.x, dy = p.sp.position.y - camera.position.y, dz = p.sp.position.z - camera.position.z, dd = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          nf = dd < 8 ? 0 : dd > 30 ? 1 : (dd - 8) / 22;
+        }
         p.sp.scale.set(s, s, 1);
-        p.sp.material.opacity = p.a * (1 - k) * Math.min(1, k * 6 + 0.2);
+        p.sp.material.opacity = p.a * (1 - k) * Math.min(1, k * 6 + 0.2) * nf;
       }
     }
     const flamePool = [];

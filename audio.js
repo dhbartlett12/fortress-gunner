@@ -1,4 +1,5 @@
-/* Fortress Gunner 1.5.4 — procedural WebAudio sound design + a tiny rendered sample layer (.50 bark, flak thump; synthesised once at unlock, ~0.3 MB).
+/* Fortress Gunner 1.5.6 — gun sound rebuilt against a real M60 reference (sample-led round: crack + body + chest thump + outdoor echo; steady belt cadence; one trigger-release end sound per release);
+ * ear-ring only on a direct flak hit (once per run, ~10 s: whine + muffle easing back). (1.5.4 header follows.) Fortress Gunner 1.5.4 — procedural WebAudio sound design + a tiny rendered sample layer (.50 bark, flak thump; synthesised once at unlock, ~0.3 MB).
  * 1.5.4: speed-of-sound delay + 1/(1+d/ref) gain + air-absorption low-pass for every distant source; noise-based engines (no tonal drone); phone-speaker EQ;
  * wind-through-holes bed that scales with the hole count; noise-based radio intercom (no beeps).
  * (Original 1.3.8 header follows.) Fortress Gunner 1.3.8 — procedural WebAudio sound design (no samples).
@@ -47,7 +48,7 @@
     const eq3 = ctx.createBiquadFilter(); eq3.type = "peaking"; eq3.frequency.value = 520; eq3.Q.value = 0.7; eq3.gain.value = 4.2;
     const eq4 = ctx.createBiquadFilter(); eq4.type = "peaking"; eq4.frequency.value = 2300; eq4.Q.value = 0.9; eq4.gain.value = 0.8;
     const sat = ctx.createWaveShaper(); { const n = 2048, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(1.5 * x) / Math.tanh(1.5) * 0.94; } sat.curve = c; } // 1.5.3: soft ceiling at -0.5 dBFS, never hard-clips
-    G.master.connect(eq0); eq0.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4); eq4.connect(tame); tame.connect(comp); comp.connect(sat); sat.connect(ctx.destination); G.tame = tame; G.vox = []; G.eq = [eq1, eq2, eq3, eq4];
+    G.master.connect(eq0); eq0.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4); eq4.connect(tame); tame.connect(comp); G.comp = comp; comp.connect(sat); sat.connect(ctx.destination); G.tame = tame; G.vox = []; G.eq = [eq1, eq2, eq3, eq4];
     G.noise = makeNoise(ctx, 2.0);
     G.sfx = ctx.createGain(); G.sfx.gain.value = 1.5; G.sfx.connect(G.master);
     // --- 1.5.4 engines: 4 R-1820 radials as NOISE (no tonal drone). Each = a low rumble band chopped at the prop's blade-passing rate (~66 Hz, 4 engines slowly beating)
@@ -121,23 +122,26 @@
   function buildSamples() {
     if (SMP_CACHE) return SMP_CACHE;
     const sr = 44100, bark = [], flak = [];
-    for (let v = 0; v < 6; v++) {
-      const n = Math.floor(sr * 0.3), d = new Float32Array(n), r = (a, b) => a + Math.random() * (b - a);
-      const f1 = biquadBP(r(560, 760), 2.2, sr), f2 = biquadBP(r(1200, 1650), 2.6, sr), f3 = biquadBP(r(2100, 2800), 5, sr), lp = biquadLP(r(700, 1100), 0.7, sr);
-      const fq = r(130, 170), tau = r(0.026, 0.04), dly = Math.floor(sr * r(0.0022, 0.0034)), buf = new Float32Array(dly + 1); let bi = 0;
-      let prev = 0;
+    // 1.5.6 .50 / MG round, matched to a real M60 reference burst (fg_157): a sharp broadband crack (<2 ms) + a 2–5 kHz snap + a punchy 300–1.6 kHz body (~30 ms) + a 150→90 Hz chest thump
+    // + a dense "outdoor" tail (low-passed noise ~110 ms with 3 reflection taps at 20–90 ms: the neighbouring ships / ground) — so each round is a gunshot with an echo, not a noise tick.
+    for (let v = 0; v < 8; v++) {
+      const n = Math.floor(sr * 0.5), d = new Float32Array(n), r = (a, b) => a + Math.random() * (b - a);
+      const fE = biquadBP(r(280, 400), 0.9, sr), fA = biquadBP(r(560, 760), 1.1, sr), fB = biquadBP(r(1150, 1600), 1.0, sr), fC = biquadBP(r(2400, 3300), 0.9, sr), fD = biquadBP(r(4800, 6000), 0.8, sr);
+      const lpT = biquadLP(r(1300, 1900), 0.7, sr), fT = biquadBP(r(700, 1000), 0.6, sr);
+      const taps = [r(0.02, 0.034), r(0.04, 0.06), r(0.065, 0.09)].map((t, i) => ({ i: Math.floor(t * sr), a: r(0.16, 0.28) * (1 - 0.25 * i), f: biquadBP(r(600, 1500), 0.8, sr) }));
+      const f0 = r(150, 185), f1 = r(85, 100); let hp = 0;
       for (let i = 0; i < n; i++) {
         const t = i / sr, w = Math.random() * 2 - 1;
-        const crack = w * Math.exp(-t / 0.0018);
-        const body = (bq(f1, w) * 1.9 + bq(f2, w) * 1.1) * Math.exp(-t / tau);
-        const clank = bq(f3, w) * Math.exp(-Math.max(0, t - 0.009) / 0.012) * (t > 0.009 ? 1 : 0);
-        const ph = 2 * Math.PI * (95 * t + (fq * 1.5 - 95) * 0.03 * (1 - Math.exp(-t / 0.03)));
-        const thump = Math.sin(ph) * Math.exp(-t / 0.035) * 0.3;
-        const tail = bq(lp, w) * Math.exp(-t / 0.075) * 0.55;
-        let x = crack * 0.55 + body * 0.85 + clank * 0.16 + thump + tail * 1.25;
-        x += 0.42 * buf[bi]; buf[bi] = x; bi = (bi + 1) % (dly + 1); // short comb: the bore / turret-ring resonance
-        x = Math.tanh(1.6 * x); d[i] = x - 0.9 * prev; prev = x * 0.0; // soft clip, then a tiny DC-kill
+        let x = w * Math.exp(-t / 0.0010) * 0.85;
+        x += bq(fC, w) * Math.exp(-t / 0.014) * 1.55 + bq(fD, w) * Math.exp(-t / 0.02) * 0.72;
+        x += bq(fB, w) * Math.exp(-t / 0.019) * 1.4 + bq(fA, w) * Math.exp(-t / 0.030) * 1.9 + bq(fE, w) * Math.exp(-t / 0.042) * 1.1;
+        x += Math.sin(2 * Math.PI * (f1 * t + (f0 - f1) * 0.028 * (1 - Math.exp(-t / 0.028)))) * Math.exp(-t / 0.032) * 0.34;
+        x += bq(lpT, bq(fT, w)) * Math.exp(-t / 0.105) * 1.1;
+        for (const tp of taps) if (i >= tp.i) { const k = (i - tp.i) / sr; x += bq(tp.f, w) * tp.a * Math.exp(-k / 0.018) * 1.2; }
+        const y = Math.tanh(1.5 * x); d[i] = y - hp; hp += (y - hp) * 0.004; // soft clip, then a slow DC-kill
       }
+      // 4 ms fade-out at the very end so the buffer never ends on a click
+      for (let i = n - 180; i < n; i++) d[i] *= (n - i) / 180;
       let pk = 0; for (let i = 0; i < n; i++) pk = Math.max(pk, Math.abs(d[i])); for (let i = 0; i < n; i++) d[i] /= pk * 1.05;
       bark.push(d);
     }
@@ -205,15 +209,26 @@
   // sound events --------------------------------------------------------------------------------
   // 1.4.0: every round a little different (pitch, length, level), box gunners duller and further off
   // (heavier low-pass, a late soft "slap" echo off the neighbouring ships), our own rounds + brass clinks.
-  function sGun(G, t, dist, pan, own) { // one .50 cal round (1.5.3: retuned to the user's B-17 shredding clips — bassy "bark" with mid body, short crack on top)
-    const v = 0.88 + Math.random() * 0.24, lv = 0.85 + Math.random() * 0.3;
+  let lastBark = -1;
+  function pickBark(G) { const n = G.smp.bark.length; let k = (Math.random() * n) | 0; if (k === lastBark) k = (k + 1 + ((Math.random() * (n - 1)) | 0)) % n; lastBark = k; return G.smp.bark[k]; } // never the same take twice in a row
+  function sGun(G, t, dist, pan, own) { // one .50 cal round (1.5.6: sample-led — real crack + body + chest thump + outdoor tail, each take different; the 1.5.3 noise-burst synth is the no-sample fallback)
+    const v = 0.88 + Math.random() * 0.24, lv = 0.88 + Math.random() * 0.24;
+    if (G.smp) {
+      if (own) {
+        playSample(G, pickBark(G), t, 0.7 * lv, pan, 0.95 + Math.random() * 0.12);
+        thump(G, t, 150 * v, 62, 0.07, 0.05 * lv, pan, 1800);
+        return;
+      }
+      const near = DM ? 1 : 1 / (1 + dist / 55);
+      playSample(G, pickBark(G), t, 0.5 * near * lv, pan, 0.9 + Math.random() * 0.14);
+      if (dist > 60) noiseHit(G, t + 0.07 + dist / 3000, 0.16, 420, 0.6, 0.10 * near, -pan * 0.5, 900, 0.02); // distant slap
+      return;
+    }
     if (own) {
-      const sm = G.smp ? 0.6 : 0; // rendered bark layer under the synth
-      noiseHit(G, t, 0.07 + Math.random() * 0.03, 620 * v, 0.8, (0.72 - 0.3 * sm) * lv, pan, 3200, 0.002); // chesty bark (300–1k)
-      noiseHit(G, t, 0.045, 1250 * v, 0.8, (0.34 - 0.1 * sm) * lv, pan, 5000, 0.001); // body
-      noiseHit(G, t, 0.018, 2200 * v, 0.7, 0.09 * lv, pan, 5200, 0.0006); // crack (kept faint: refs have <5 % above 3 kHz)
+      noiseHit(G, t, 0.07 + Math.random() * 0.03, 620 * v, 0.8, 0.72 * lv, pan, 3200, 0.002);
+      noiseHit(G, t, 0.045, 1250 * v, 0.8, 0.34 * lv, pan, 5000, 0.001);
+      noiseHit(G, t, 0.018, 2200 * v, 0.7, 0.09 * lv, pan, 5200, 0.0006);
       thump(G, t, 125 * v, 48, 0.085, 0.12 * lv, pan, 5000);
-      if (G.smp) playSample(G, G.smp.bark[(Math.random() * G.smp.bark.length) | 0], t, 0.62 * lv, pan, 0.93 + Math.random() * 0.15);
       return;
     }
     const near = DM ? 1 : 1 / (1 + dist / 55);
@@ -221,8 +236,21 @@
     noiseHit(G, t, 0.1 + Math.random() * 0.05, 640 * v, 0.7, 0.8 * near * lv, pan, lp, 0.004);
     noiseHit(G, t, 0.05, 1300 * v, 0.7, 0.3 * near * lv, pan, lp, 0.002);
     thump(G, t, 105 * v, 42, 0.12, 0.12 * near * lv, pan, lp * 0.7);
-    if (G.smp) playSample(G, G.smp.bark[(Math.random() * G.smp.bark.length) | 0], t, 0.5 * near * lv, pan, 0.88 + Math.random() * 0.16);
-    if (dist > 60) noiseHit(G, t + 0.07 + dist / 3000, 0.16, 420, 0.6, 0.12 * near, -pan * 0.5, 900, 0.02); // distant slap
+    if (dist > 60) noiseHit(G, t + 0.07 + dist / 3000, 0.16, 420, 0.6, 0.12 * near, -pan * 0.5, 900, 0.02);
+  }
+  // 1.5.6 gun end sound — what you hear when you let go of the trigger: the last round's echo rolling off the neighbouring ships and the ground, a low settle, and the ringing in the cabin dying away (~1.1 s).
+  // Starts 2 ms after its anchor with a 4 ms fade-in and ends on an exponential fade to silence (no click); the last shot's own tail keeps playing underneath.
+  function sGunEnd(G, t, own) {
+    const ctx = G.ctx, k = own ? 1 : 0.7;
+    for (const [dt, f, q, dur, gain, lp] of [[0.004, 520, 0.55, 1.15, 0.30, 1500], [0.004, 1500, 0.7, 0.55, 0.12, 3200], [0.012, 240, 0.7, 0.8, 0.14, 700]]) {
+      const s = ctx.createBufferSource(); s.buffer = G.noise; s.playbackRate.value = 0.9 + Math.random() * 0.2;
+      const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = f; bp.Q.value = q;
+      const e = ctx.createGain(), t0 = t + dt;
+      e.gain.setValueAtTime(0, t0); e.gain.linearRampToValueAtTime(1, t0 + 0.004); e.gain.setTargetAtTime(0.0001, t0 + 0.02, dur / 4.6); e.gain.linearRampToValueAtTime(0, t0 + dur + 0.25);
+      s.connect(bp); bp.connect(e); e.connect(out(G, t0, gain * k, 0, lp)); s.start(t0, Math.random() * 1.2); s.stop(t0 + dur + 0.3);
+    }
+    for (const [dt, a, f] of [[0.075, 0.12, 900], [0.17, 0.08, 700], [0.31, 0.05, 550]]) noiseHit(G, t + dt, 0.12, f, 0.7, a * k, (Math.random() - 0.5) * 0.5, 2000, 0.01); // slap echoes
+    thump(G, t + 0.01, 110, 55, 0.18, 0.05 * k, 0, 900); // settle
   }
   function sBrass(G, t, pan) { // spent .50 cases rattling off the turret floor / ring
     const ctx = G.ctx, n = 1 + ((Math.random() * 2) | 0);
@@ -239,12 +267,14 @@
     thump(G, t, 180 + Math.random() * 60, 70, 0.08, 0.22, (Math.random() - 0.5) * 0.3, 1400);
     noiseHit(G, t, 0.05, 900, 0.9, 0.12, 0, 2200);
   }
-  function sEnemyGun(G, t, dist, pan) { // 20 mm MG 151 + MG 131 burst (~0.5 s)
+  function sEnemyGun(G, t, dist, pan) { // MG 131 / MG 151/20 burst (~0.5 s). 1.5.6: the same real-round samples — MG 131 pitched up and snappy, the 20 mm every 3rd round pitched down with a heavy thump — on a steady belt cadence
     const near = DM ? 1 : 1 / (1 + dist / 90), lp = DM ? 9000 : Math.max(600, 3500 - dist * 4);
     for (let k = 0; k < 9; k++) {
-      const tt = t + k * 0.055 + Math.random() * 0.01;
-      if (k % 3 === 0) thump(G, tt, 90, 38, 0.12, 0.5 * near, pan, lp); // cannon
-      noiseHit(G, tt, 0.05, 1100, 1.0, 0.3 * near, pan, lp);
+      const tt = t + k * 0.055 + (Math.random() - 0.5) * 0.004, cannon = k % 3 === 0;
+      if (G.smp) {
+        playSample(G, pickBark(G), tt, (cannon ? 0.36 : 0.23) * near * (0.9 + Math.random() * 0.2), pan, cannon ? 0.74 + Math.random() * 0.06 : 1.22 + Math.random() * 0.14);
+        if (cannon) thump(G, tt, 90, 38, 0.12, 0.3 * near, pan, lp);
+      } else { if (cannon) thump(G, tt, 90, 38, 0.12, 0.5 * near, pan, lp); noiseHit(G, tt, 0.05, 1100, 1.0, 0.3 * near, pan, lp); }
     }
   }
   // 1.4.1: rounds hitting OUR ship — sharp metallic cracks, tearing aluminium, a debris rattle and a low thud through
@@ -364,20 +394,28 @@
     return tt;
   }
   // (b) flak -----------------------------------------------------------------------------------------
-  // ear-ring + muffle: low-passes the whole mix for ~1.2 s and adds a faint 3 kHz whine that dies away
-  // 1.5.5: the ring happens AT MOST ONCE PER RUN (stats.ringsThisRun, cleared by reset()) and only for a very close, heavy burst (depth >= RING_MIN).
-  // Every other burst keeps its thump / shake / shrapnel but no muffle and no whine.
-  const RING_MIN = 0.78;
-  function earDuck(G, t, depth) {
+  // ear-ring + muffle (1.5.6): ONLY on a direct flak hit on the player's own ship (game.js calls FGAudio.earRing() when flak damage is actually applied to our B-17),
+  // at most once per run (stats.ringsThisRun, re-armed by reset()). No distance trigger: near-miss bursts keep their thump / shake / shrapnel but never ring.
+  // Lasts RING_SEC (~10 s): the mix low-pass slams to ~450 Hz, holds ~1.5 s, then eases back to normal by t+10 s (exponential), while a high whine (3.1 kHz + faint 4.7 kHz, slow drift)
+  // sits post-filter, swells in over 0.12 s, holds a while and fades out with a long tail that reaches zero exactly at t+10 s (no click).
+  const RING_SEC = 10;
+  function ringCore(G, t, depth) {
+    const T = G.tame, C = G.ctx, d = depth == null ? 1 : depth; if (!T) return;
+    T.frequency.cancelScheduledValues(t); T.frequency.setValueAtTime(TAME_F, t);
+    T.frequency.exponentialRampToValueAtTime(450, t + 0.02); T.frequency.setValueAtTime(450, t + 1.5);
+    T.frequency.exponentialRampToValueAtTime(TAME_F, t + RING_SEC);
+    const e = C.createGain(); e.gain.setValueAtTime(0, t + 0.03); e.gain.linearRampToValueAtTime(0.05 * d, t + 0.15);
+    e.gain.setValueAtTime(0.05 * d, t + 1.5); e.gain.exponentialRampToValueAtTime(0.0012 * d, t + RING_SEC - 0.6); e.gain.linearRampToValueAtTime(0, t + RING_SEC);
+    e.connect(G.comp || C.destination); G.ringEnv = e;
+    for (const [f, a, f2] of [[3100, 1, 2960], [4700, 0.3, 4560]]) {
+      const o = C.createOscillator(); o.type = "sine"; o.frequency.setValueAtTime(f, t + 0.03); o.frequency.linearRampToValueAtTime(f2, t + RING_SEC);
+      const g = C.createGain(); g.gain.value = a; o.connect(g); g.connect(e); o.start(t + 0.03); o.stop(t + RING_SEC + 0.05);
+    }
+  }
+  function earRingNow(G, t, depth) { // gated: once per run
     stats.ringTries = (stats.ringTries || 0) + 1;
-    if (depth < RING_MIN || stats.ringsThisRun >= 1) return;
-    stats.ringsThisRun = 1; stats.ringsTotal = (stats.ringsTotal || 0) + 1;
-    const T = G.tame; if (!T) return;
-    T.frequency.cancelScheduledValues(t); T.frequency.setValueAtTime(TAME_F, t); T.frequency.linearRampToValueAtTime(Math.max(380, 2400 - 2000 * depth), t + 0.015);
-    T.frequency.setTargetAtTime(7200, t + 0.35 + depth * 0.4, 0.5 + depth * 0.4);
-    const o = G.ctx.createOscillator(); o.type = "sine"; o.frequency.value = 3100; const e = G.ctx.createGain();
-    e.gain.setValueAtTime(0.0001, t + 0.05); e.gain.linearRampToValueAtTime(0.045 * depth, t + 0.18); e.gain.exponentialRampToValueAtTime(0.0001, t + 1.8 + depth);
-    o.connect(e); e.connect(G.sfx); o.start(t + 0.05); o.stop(t + 2.8 + depth);
+    if (stats.ringsThisRun >= 1) return false;
+    stats.ringsThisRun = 1; stats.ringsTotal = (stats.ringsTotal || 0) + 1; ringCore(G, t, depth); return true;
   }
   function flakFragments(G, t, v, pan) { // shrapnel peppering the skin: fast gravelly ticks + a few tinks, thinning out over ~0.6 s
     const n = 14 + ((Math.random() * 10) | 0);
@@ -400,7 +438,6 @@
     thump(G, t + 0.03, 46, 24, 0.9, 0.7 * vv, 0, 200); // sub
     flakFragments(G, t + 0.02 + dist / 700, 0.6 + 0.6 * k, pan);
     if (G.smp) playSample(G, G.smp.flak[(Math.random() * G.smp.flak.length) | 0], t, 1.1 * vv, pan * 0.4, 0.95 + Math.random() * 0.1);
-    earDuck(G, t + 0.01, 0.35 + 0.65 * k);
   }
   function sFlakDistant(G, t, dist, pan) { // far burst: the thump arrives late and soft ("crump"): sub-120 Hz body, no crack, a faint lumpy tail
     const near = DM ? 1 : 1 / (1 + dist / 380);
@@ -443,7 +480,6 @@
     noiseHit(G, t + 0.01, 0.6, 900, 0.5, 6.0 * k, pan, 2200, 0.004); // mid body of the blast (ref: mid ~11–13 dB under the low band)
     for (let i = 0; i < 6; i++) thump(G, t + 0.08 + i * (0.09 + Math.random() * 0.05), 95 - i * 8, 38, 0.14, (0.8 - i * 0.1) * k, pan * 0.5, 400); // secondary thumps
     flakFragments(G, t + 0.04, 0.9 * k, pan);
-    earDuck(G, t + 0.01, 0.6 * k);
   }
   // 1.5.4 radio intercom: squelch-open click, a syllabic noise "voice" burble through a 350–2600 Hz radio band, squelch-close tail. NO tones/beeps.
   function sIntercom(G, t) {
@@ -603,6 +639,8 @@
     noiseHit(G, t + 0.25, 1.4, 500, 0.4, 0.3, 0, 1500, 0.2); // wind through the open bay
   }
   function restoreGraph(G, t) {
+    if (G.tame) { G.tame.frequency.cancelScheduledValues(t); G.tame.frequency.setValueAtTime(TAME_F, t); }
+    if (G.ringEnv) { try { G.ringEnv.gain.cancelScheduledValues(t); G.ringEnv.gain.setTargetAtTime(0, t, 0.03); } catch (e) {} G.ringEnv = null; }
     for (const E of G.eng) {
       E.saw.frequency.cancelScheduledValues(t); E.buzz.frequency.cancelScheduledValues(t); E.g.gain.cancelScheduledValues(t);
       E.saw.frequency.setValueAtTime(E.f0, t); E.buzz.frequency.setValueAtTime(E.f0 * E.kb, t); E.g.gain.setValueAtTime(E.level, t);
@@ -652,6 +690,7 @@
   let ctx = null, G = null;
   const L = { fx: 0, fy: 0, fz: 1, rx: -1, ry: 0, rz: 0, cx: 0, cy: 0, cz: 0 }; // listener basis (view)
   const budget = { t: 0, n: 0 };
+  const shotClock = { t: 0, real: 0, last: 0, n: 0, fired: 0, P: 0.05 }; // own-gun belt clock + rounds since the last end sound
   const passes = new Map(); // fighter id → {minD, done}
   let muted = false, lastDistGun = 0, nextFarFlak = 0;
   function ok() { return !!(ctx && G && ctx.state === "running") && !muted; }
@@ -671,6 +710,7 @@
       if (!ok()) return;
       try {
         const t = ctx.currentTime;
+        if (shotClock.n > 0 && s.firing === false && t - shotClock.last > 0.35) API.gunRelease(); // safety net: a missed trigger-release edge still gets its single end sound
         Object.assign(L, s.listener || {});
         G.master.gain.setTargetAtTime(s.playing ? 0.8 : 0.35, t, 0.5);
         { const h = s.down ? 0 : Math.max(0, s.holes || 0), k = Math.sqrt(h); // 1.5.4 wind through the holes: level ∝ √holes (cap 0.17), pitch & flutter rise with holes
@@ -714,11 +754,20 @@
       withDM(q.d, 300, (m) => sGun(G, t + m.delay + Math.random() * 0.02, q.d, q.pan, false)); count("p51Gun");
     },
     intercom() { if (!ok()) return; sIntercom(G, ctx.currentTime); count("intercom"); },
-    ownShot(side) {
+    ownShot(side) { // 1.5.6: rounds ride a steady belt clock (real guns are mechanical: ~6 % timing jitter, not the 20 % the frame loop gives), re-synced after a pause
       if (!ok()) return;
-      const t = ctx.currentTime + 0.003 + Math.random() * 0.006; // tiny timing jitter: no machine-perfect cadence
+      const now = ctx.currentTime, gap = now - shotClock.real, burst = shotClock.last > 0 && gap < 0.14;
+      if (burst) shotClock.P = Math.min(0.075, Math.max(0.04, shotClock.P * 0.85 + gap * 0.15)); // belt period follows the game's real average cadence (frame-quantised 50/66 ms → smooth ~58)
+      let t = burst ? shotClock.t + shotClock.P * (0.97 + Math.random() * 0.06) : now + 0.004;
+      if (t < now + 0.002 || t > now + 0.09) t = now + 0.004 + Math.random() * 0.004; // fell behind / ran ahead of the real trigger → resync
+      shotClock.t = t; shotClock.real = now; shotClock.last = t; shotClock.n++; shotClock.fired++;
       sGun(G, t, 0, side ? 0.25 : -0.25, true); count("ownGun");
       if (Math.random() < 0.28) { sBrass(G, t + 0.18 + Math.random() * 0.25, side ? 0.35 : -0.35); count("brass"); }
+    },
+    gunRelease() { // 1.5.6: trigger let go (finger lifted, guns overheated/cut, or the run ended): ONE end sound if at least one round was fired since the last end sound, else nothing
+      if (!ok()) { shotClock.n = 0; return false; }
+      if (shotClock.n < 1) return false;
+      shotClock.n = 0; sGunEnd(G, Math.max(ctx.currentTime + 0.002, shotClock.last + 0.02), true); count("gunEnd"); stats.gunEnds = (stats.gunEnds || 0) + 1; return true;
     },
     hitEnemy() { if (!ok()) return; const t = ctx.currentTime + 0.05; tink(G, t, 0.12, 0); sHitThump(G, t + 0.01); count("hitEnemy"); },
     hitOwn(kind, pan, n) { // 1.5.3: kind mg|cannon|engine|self|flak; pan -1..1 = which side of the ship; n>1 = a strafing burst (hit count)
@@ -749,6 +798,7 @@
     bombsAway() { if (!ok()) return; sBombsAway(G, ctx.currentTime); count("bombsAway"); },
     mute(b) { muted = !!b; if (ctx && G) G.master.gain.setTargetAtTime(b ? 0.0001 : 0.35, ctx.currentTime, 0.05); },
     results() { muted = false; if (ctx && G) { restoreGraph(G, ctx.currentTime); G.master.gain.setTargetAtTime(0.35, ctx.currentTime, 0.6); } count("results"); },
+    earRing(depth) { if (!ok()) return false; const r = earRingNow(G, ctx.currentTime + 0.01, depth); if (r) count("earRing"); return r; },
     reset() { muted = false; stats.ringsThisRun = 0; passes.clear(); if (ctx && G) restoreGraph(G, ctx.currentTime); count("reset"); },
     // offline demo: the same synth graph rendered to a buffer (verification + a listenable sample)
     renderSample(sec, part) {
