@@ -40,7 +40,7 @@
       muzzle: { x: 0.3, y: -0.5, z: 1.6 }, sx: [0.44, 0.56], sy: 0.80 },
     // eye at Cheyenne opening: aft tip of ownShip cone (local to top-turret CAM origin)
     tail: { id: "tail", label: "TAIL", eye: { x: 0, y: -1.20, z: -14.35 }, yawBase: TAIL_BASE_YAW, yawLim: TAIL_YAW, pitchMin: TAIL_PITCH_MIN, pitchMax: TAIL_PITCH_MAX,
-      muzzle: { x: 0.07, y: -0.12, z: 1.8 }, sx: [0.47, 0.53], sy: 0.48 },
+      muzzle: { x: 0.05, y: -0.10, z: 1.8 }, sx: [0.47, 0.53], sy: 0.82 },
   };
 
   // --- Flight model (see FLIGHT_MODEL.md) ---
@@ -513,10 +513,32 @@
     const W = fromShipA(a, h.x, h.y, h.z);
     return { id: h.id, t: h.t, x: W[0], y: W[1], z: W[2] };
   }
-  // flak fragments: a handful of HE hits (20 mm-class) at random boxes, scaled by closeness (player's ship takes ~0.3×)
-  function flakDamage(s, k, mul) {
-    const n = Math.max(1, Math.round(1.1 * k * mul * rand(0.6, 1.4) + (s === bomber ? 0.2 : 0)));
-    for (let i = 0; i < n && shipLive(s); i++) shipHit(s, FC.pickStrike("beam"), "mg151", 1, "flak", { scale: 0.6, fireMul: 0.3 });
+  // 1.6.2 flak: closeness k in [0,1], hits the zone nearest the burst (not a random beam pick)
+  function flakFalloff(dU) {
+    if (dU > FLAK.radiusU + 1e-6) return 0;
+    if (dU <= FLAK.fullU) return 1;
+    const t = 1 - (dU - FLAK.fullU) / (FLAK.radiusU - FLAK.fullU);
+    // small but non-zero at the 10 m rim so "within 10 m" always bites
+    return Math.max(0.12, Math.pow(Math.max(0, t), 1.25));
+  }
+  function flakNearestId(s, bx, by, bz) {
+    let lx, ly, lz;
+    if (s === bomber) { lx = bx - CAM.x; ly = by - CAM.y; lz = bz - CAM.z; }
+    else { const L = friendlyLocal(s, bx - s.x, by - s.y, bz - s.z); lx = L.x; ly = L.y; lz = L.z; }
+    return FC.boxAt(lx, ly, lz) || "fuselage_mid";
+  }
+  function flakDamage(s, k, mul, bx, by, bz) {
+    const kk = Math.max(0, Math.min(1, k)) * (mul == null ? 1 : mul);
+    if (kk <= 0) return 0;
+    // meaningful but not a massacre: 1–3 HE pellets, scale 0.35–1.35 with closeness
+    const n = Math.max(1, Math.min(3, Math.round(0.7 + 2.2 * kk * rand(0.75, 1.15))));
+    const scale = 0.35 + 1.0 * kk;
+    const id = (bx != null) ? flakNearestId(s, bx, by, bz) : FC.pickStrike("beam");
+    let dealt = 0;
+    const h0 = s.health;
+    for (let i = 0; i < n && shipLive(s); i++) shipHit(s, id, "mg151", 1, "flak", { scale, fireMul: 0.35 + 0.4 * kk });
+    dealt = Math.max(0, h0 - (s.health || 0));
+    return dealt;
   }
 
   // ===== 1.3.4 FRIENDLY FIRE: B-17 hitboxes (matches the world3d mesh, B17_VIS = 16u span-ish) =====
@@ -3799,7 +3821,7 @@
     const prev = gunner.station;
     gunner.station = next;
     // snap aim into the new station's natural look (keep mission state; aim within station arcs)
-    if (next === "tail") { gunner.yaw = TAIL_BASE_YAW; gunner.pitch = clamp(-0.02, TAIL_PITCH_MIN, TAIL_PITCH_MAX); }
+    if (next === "tail") { gunner.yaw = TAIL_BASE_YAW; gunner.pitch = clamp(0.10, TAIL_PITCH_MIN, TAIL_PITCH_MAX); }
     else if (prev === "tail") { gunner.yaw = 0.12; gunner.pitch = clamp(gunner.pitch, PITCH_MIN, PITCH_MAX); }
     gunner.yawV = 0; gunner.pitchV = 0;
     clampStationAim();
@@ -4464,7 +4486,15 @@
   // < 5u (7 m) direct hit → blown apart; < 22u fragments (damage, engines, fires); close bursts shake
   // our view and rattle shrapnel on our skin.
   let flakBursts = [], flakSeq = 0;
-  const FLAK = { lethal: 5, frag: 24, dmg: 24, engChance: 0.25, playerMul: 0.3, blowChance: 0.5, playerLethal: 0.1 };
+  // 1.6.2: every burst within 10 m damages (smooth falloff). 1 u = 1.5 m → 10 m = 10/1.5 u.
+  const FLAK = {
+    radiusM: 10, radiusU: 10 / 1.5, fullM: 2, fullU: 2 / 1.5,
+    playerMul: 0.85, aiMul: 1.0,
+    // rare catastrophic only inside ~2 m (not the old 5 u / 50% blow that never landed)
+    blowU: 2 / 1.5, blowChance: 0.12, playerLethal: 0.04,
+    // legacy names kept so any leftover refs don't explode
+    lethal: 2 / 1.5, frag: 10 / 1.5, dmg: 24, engChance: 0.25,
+  };
   function flakRate(m) { // bursts per second along the route (time left tl)
     if (window.__FG_SCN && window.__FG_SCN.noflak) return 0;
     const tl = m.timeLeft, post = m.post || 0;
@@ -4476,8 +4506,8 @@
   }
   function updateFlakSim(dt) {
     const m = mission; if (!m) return;
-    const F = m.flakStats || (m.flakStats = { bursts: 0, near: 0, hitsF: 0, lostF: 0, blown: 0, hitsP: 0, closeP: 0 });
-    for (const b of flakBursts) { b.t += dt; b.z -= VF * dt; b.y += 0.5 * dt; if (b.pending && b.t >= 0) flakDetonate(b); }
+    const F = m.flakStats || (m.flakStats = { bursts: 0, near: 0, hitsF: 0, lostF: 0, blown: 0, hitsP: 0, closeP: 0, dmgP: 0, dmgF: 0, in10: 0, histM: [0, 0, 0, 0, 0, 0, 0] });
+    for (const b of flakBursts) { b.t += dt; if (b.pending && b.t >= 0) flakDetonate(b); b.z -= VF * dt; b.y += 0.5 * dt; } // 1.6.2: fuse at aim point BEFORE stream-aft drift
     flakBursts = flakBursts.filter((b) => b.t < 14);
     if (state !== "PLAYING" || m.evaluated) return;
     // 1.4.1: over the target the sky fills — extra "show" salvos that burst around (never inside) the box: each burst
@@ -4504,12 +4534,17 @@
     while (m.flakAcc >= 1) {
       m.flakAcc -= 1;
       // the battery's aim error shrinks salvo by salvo ("walking in"); a fresh battery starts wide again
-      if (B.err <= 0 || Math.random() < 0.12) { B.err = rand(260, 420); const a = rand(0, TAU); B.ex = Math.cos(a); B.ez = Math.sin(a); B.ey = rand(-1, 1); }
-      else B.err = Math.max(18, B.err * rand(0.55, 0.8));
-      const cx = BOX_C.x + B.ex * B.err + rand(-40, 40), cy = BOX_C.y + B.ey * B.err * 0.25 + rand(-18, 18), cz = BOX_C.z + 60 + B.ez * B.err + rand(-120, 300); // predicted fire: many salvos burst ahead (misses the box flies past), some right in it
-      // 1.4.0: ragged salvos — 2–6 guns, uneven fuzes and spread, so bursts never line up as an even "string of beads"
+      // 1.6.2: walk-in on a random live B-17 (player or AI) so some bursts land inside 10 m of someone
+      if (B.err <= 0 || Math.random() < 0.10) { B.err = rand(55, 160); const a = rand(0, TAU); B.ex = Math.cos(a); B.ez = Math.sin(a); B.ey = rand(-1, 1); }
+      else B.err = Math.max(2.2, B.err * rand(0.48, 0.75));
+      const aims = [];
+      if (bomber && !bomber.dead) aims.push(CAM);
+      for (const f of friendlies) if (friendlyOk(f)) aims.push(f);
+      const T = aims.length ? aims[(Math.random() * aims.length) | 0] : BOX_C;
+      const cx = T.x + B.ex * B.err + rand(-8, 8), cy = T.y + B.ey * B.err * 0.18 + rand(-6, 6), cz = T.z + B.ez * B.err + rand(-10, 10);
       const nb = 2 + ((Math.random() * 5) | 0);
-      for (let k = 0; k < nb; k++) spawnFlakBurst(cx + rand(-70, 70), cy + rand(-28, 28), cz + rand(-90, 90), rand(0, 1.4) * rand(0.3, 1), F);
+      const spr = Math.max(3, Math.min(28, B.err * 0.30));
+      for (let k = 0; k < nb; k++) spawnFlakBurst(cx + rand(-spr, spr), cy + rand(-spr * 0.35, spr * 0.35), cz + rand(-spr, spr), rand(0, 1.1) * rand(0.2, 1), F);
     }
   }
   function spawnFlakBurst(x, y, z, delay, F) {
@@ -4519,42 +4554,55 @@
     b.pending = true;
     F.bursts++;
   }
-  function flakDetonate(b) { // at t crossing 0
+  function flakDetonate(b) { // at t crossing 0 — 1.6.2: damage iff within 10 m, falloff by closeness, nearest zone
     b.pending = false;
     vFlak(b);
-    const F = mission.flakStats;
+    const F = mission.flakStats || (mission.flakStats = { bursts: 0, near: 0, hitsF: 0, lostF: 0, blown: 0, hitsP: 0, closeP: 0, dmgP: 0, dmgF: 0, in10: 0, histM: [0, 0, 0, 0, 0, 0, 0] });
     if (window.FGAudio) window.FGAudio.flak(b.x, b.y, b.z);
+    // distance histogram vs nearest live B-17 (metres) — bins: 0-2,2-5,5-10,10-20,20-50,50-100,>100
+    {
+      let best = 1e9;
+      if (bomber && !bomber.dead) best = Math.min(best, Math.hypot(CAM.x - b.x, CAM.y - b.y, CAM.z - b.z));
+      for (const f of friendlies) if (friendlyOk(f)) best = Math.min(best, Math.hypot(f.x - b.x, f.y - b.y, f.z - b.z));
+      const dm = best * 1.5;
+      const hi = F.histM || (F.histM = [0, 0, 0, 0, 0, 0, 0]);
+      const bi = dm <= 2 ? 0 : dm <= 5 ? 1 : dm <= 10 ? 2 : dm <= 20 ? 3 : dm <= 50 ? 4 : dm <= 100 ? 5 : 6;
+      hi[bi]++;
+      if (dm <= 10) F.in10 = (F.in10 || 0) + 1;
+    }
     for (const f of friendlies) {
       if (!friendlyOk(f)) continue;
       const d = Math.hypot(f.x - b.x, f.y - b.y, f.z - b.z);
-      if (d > FLAK.frag) continue;
+      if (d > FLAK.radiusU) continue;
       F.near++;
-      if (d < FLAK.lethal && Math.random() < FLAK.blowChance) { // direct hit — blown apart
+      const k = flakFalloff(d);
+      if (d <= FLAK.blowU && Math.random() < FLAK.blowChance) {
         F.blown++; F.lostF++;
         f.blownApart = true;
         downFriendly(f, "flak");
-        f.health = -1; // nothing left to spiral down
-        f.bailPlan = Math.random() < 0.25 ? [rand(0.8, 2)] : []; // rarely one man is thrown clear
+        f.health = -1;
+        f.bailPlan = Math.random() < 0.25 ? [rand(0.8, 2)] : [];
         pushCallout((f.name || "FORTRESS") + " — DIRECT HIT! BLOWN APART!", 2.2, true);
         continue;
       }
       F.hitsF++;
-      const k = 1 - d / FLAK.frag;
-      flakDamage(f, k, 1);
+      const dealt = flakDamage(f, k, FLAK.aiMul, b.x, b.y, b.z);
+      F.dmgF = (F.dmgF || 0) + dealt;
       if (!friendlyOk(f)) F.lostF++;
     }
     if (bomber && !bomber.dead && !godMode) {
       const d = Math.hypot(CAM.x - b.x, CAM.y - b.y, CAM.z - b.z);
-      if (d < 90) { gunner.shake = Math.max(gunner.shake, 1.5 * (1 - d / 90)); rumble = Math.max(rumble, 1 - d / 90); addKick('flak', 0.08 + 0.42 * Math.pow(1 - d / 90, 0.8)); if (d < 55) cabinHit(0.9 * (1 - d / 55) + 0.1, 'flak'); } // 1.5.4: a flak shaped kick (jolt + wobble) and, when close, cabin debris
-      if (d < FLAK.frag + 4) {
+      if (d < 90) { gunner.shake = Math.max(gunner.shake, 1.5 * (1 - d / 90)); rumble = Math.max(rumble, 1 - d / 90); addKick('flak', 0.08 + 0.42 * Math.pow(1 - d / 90, 0.8)); if (d < 55) cabinHit(0.9 * (1 - d / 55) + 0.1, 'flak'); }
+      if (d <= FLAK.radiusU) {
         F.hitsP++;
         if (window.FGAudio) window.FGAudio.hitOwn("flak");
         bomber.flash = Math.max(bomber.flash || 0, 0.8);
-        if (d < FLAK.lethal && Math.random() < FLAK.playerLethal) { if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); injuredGunner(); playerShotDown("flak"); return; }
-        const k = 1 - d / (FLAK.frag + 4);
+        if (d <= FLAK.blowU && Math.random() < FLAK.playerLethal) { if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); injuredGunner(); playerShotDown("flak"); return; }
+        const k = flakFalloff(d);
         pushCallout("FLAK — WE'RE HIT!", 1.2, true);
-        flakDamage(bomber, k, FLAK.playerMul);
-        injuredGunner(); if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); // 1.5.6: the ear-ring is tied to flak damage actually applied to OUR ship (once per run, ~10 s)
+        const dealt = flakDamage(bomber, k, FLAK.playerMul, b.x, b.y, b.z);
+        F.dmgP = (F.dmgP || 0) + dealt;
+        injuredGunner(); if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); // once per run
       } else if (d < 70) F.closeP++;
     }
   }
@@ -6048,38 +6096,29 @@
   }
 
   function drawTailOverlay() {
-    // 1.6.1: ONE olive/khaki welded Cheyenne frame + SOLID opaque bottom (ref_tail_bottom).
-    // Twin .50s are 3D (world3d tailGuns) — track aim, flash, tracers. 2D draws frame + ring sight only.
+    // 1.6.2 TARGET2: centred trapezoid, slim bars (~2.2% W), open sky (no side darkening),
+    // sight window sill→bottom ~11% solid band, ring low-centre; 3D twin .50s in window.
     ctx.save();
     const u = Math.min(W, H) / 412;
-    const topY = H * 0.02, botY = H * 0.80;
-    const topL = W * 0.34, topR = W * 0.66;
-    const botL = W * 0.10, botR = W * 0.90;
-    const barT = W * 0.026;
+    const topY = H * 0.208, botY = H * 0.888;
+    const topL = W * 0.337, topR = W * 0.661;
+    const botL = W * 0.107, botR = W * 0.889;
+    const barT = W * 0.022;
     const lerp = (a, b, t) => a + (b - a) * t;
     const edgeX = (side, t) => side < 0 ? lerp(topL, botL, t) : lerp(topR, botR, t);
     const edgeY = (t) => lerp(topY, botY, t);
-    const tSill = 0.50;
+    const tCross = 0.352;
+    const tSill = 0.569;
     const sillY = edgeY(tSill), sillL = edgeX(-1, tSill), sillR = edgeX(1, tSill);
-    const winL = W * 0.22, winR = W * 0.78, winT = sillY, winB = H * 0.72;
+    const winL = W * 0.220, winR = W * 0.780, winT = sillY, winB = H * 0.888;
 
-    // Soft vignette OUTSIDE trapezoid only (above sill) — do NOT darken ground below window (solid mass will cover)
-    ctx.beginPath(); ctx.rect(0, 0, W, winB);
-    ctx.moveTo(topL, topY); ctx.lineTo(topR, topY); ctx.lineTo(botR, botY); ctx.lineTo(botL, botY); ctx.closePath();
-    ctx.fillStyle = "rgba(8, 10, 8, 0.22)"; ctx.fill("evenodd");
+    // Open sky outside the frame — no vignette / side panes
 
-    // Upper glass tint
     ctx.beginPath();
     ctx.moveTo(topL + barT * 0.4, topY + barT * 0.5);
     ctx.lineTo(topR - barT * 0.4, topY + barT * 0.5);
     ctx.lineTo(sillR - barT * 0.3, sillY); ctx.lineTo(sillL + barT * 0.3, sillY); ctx.closePath();
-    ctx.fillStyle = "rgba(155, 180, 200, 0.06)"; ctx.fill();
-    ctx.save(); ctx.clip();
-    const rg = ctx.createLinearGradient(W * 0.25, topY, W * 0.6, sillY);
-    rg.addColorStop(0, "rgba(255,255,255,0)"); rg.addColorStop(0.42, "rgba(220,235,250,0.09)");
-    rg.addColorStop(0.55, "rgba(220,235,250,0)"); rg.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = rg; ctx.fillRect(0, 0, W, sillY + 2);
-    ctx.restore();
+    ctx.fillStyle = "rgba(155, 180, 200, 0.05)"; ctx.fill();
 
     const solidBar = (x0, y0, x1, y1, thick) => {
       const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
@@ -6096,61 +6135,63 @@
       ctx.beginPath(); ctx.moveTo(x0 - hx * 0.75, y0 - hy * 0.75); ctx.lineTo(x1 - hx * 0.75, y1 - hy * 0.75); ctx.stroke();
       const n = Math.max(3, Math.floor(len / (thick * 1.05)));
       for (let i = 1; i < n; i++) {
-        const t = i / n, px = x0 + dx * t, py = y0 + dy * t, rr = Math.max(1.4, thick * 0.11);
+        const t = i / n, px = x0 + dx * t, py = y0 + dy * t, rr = Math.max(1.3, thick * 0.10);
         const rg2 = ctx.createRadialGradient(px - rr * 0.3, py - rr * 0.3, 0, px, py, rr);
         rg2.addColorStop(0, "#e8d070"); rg2.addColorStop(0.55, "#c4a030"); rg2.addColorStop(1, "#6a5010");
         ctx.fillStyle = rg2; ctx.beginPath(); ctx.arc(px, py, rr, 0, 6.28); ctx.fill();
       }
     };
 
-    // Trapezoid + sill + window (same olive) — vertical posts continue INTO solid bottom mass
     solidBar(topL, topY, botL, botY, barT);
     solidBar(topR, topY, botR, botY, barT);
     solidBar(topL, topY, topR, topY, barT);
-    const t1 = 0.30;
-    solidBar(edgeX(-1, t1), edgeY(t1), edgeX(1, t1), edgeY(t1), barT);
+    solidBar(edgeX(-1, tCross), edgeY(tCross), edgeX(1, tCross), edgeY(tCross), barT);
     solidBar(sillL, sillY, sillR, sillY, barT);
-    // Window sides continue down past winB into the solid mass
-    const massBot = H;
-    solidBar(winL, winT, winL, massBot, barT);
-    solidBar(winR, winT, winR, massBot, barT);
+    solidBar(winL, winT, winL, winB, barT);
+    solidBar(winR, winT, winR, winB, barT);
     solidBar(winL, winB, winR, winB, barT);
 
-    // SOLID opaque bottom (ref_tail_bottom): everything below sight window — no ground bleed
-    ctx.fillStyle = "#0c0e0a";
-    ctx.fillRect(0, winB, W, H - winB);
-    // faint panel edges + olive brown variation
     const pg = ctx.createLinearGradient(0, winB, 0, H);
-    pg.addColorStop(0, "rgba(28, 30, 22, 0.95)"); pg.addColorStop(0.35, "rgba(18, 20, 14, 0.98)"); pg.addColorStop(1, "#080a06");
+    pg.addColorStop(0, "rgba(28, 30, 22, 0.98)"); pg.addColorStop(0.4, "rgba(14, 16, 12, 0.99)"); pg.addColorStop(1, "#080a06");
     ctx.fillStyle = pg; ctx.fillRect(0, winB, W, H - winB);
-    ctx.strokeStyle = "rgba(50, 54, 38, 0.45)"; ctx.lineWidth = 1.2 * u;
-    for (const yy of [winB + H * 0.06, winB + H * 0.14, winB + H * 0.22]) {
+    ctx.strokeStyle = "rgba(50, 54, 38, 0.4)"; ctx.lineWidth = 1.1 * u;
+    for (const yy of [winB + H * 0.035, winB + H * 0.07]) {
       ctx.beginPath(); ctx.moveTo(W * 0.05, yy); ctx.lineTo(W * 0.95, yy); ctx.stroke();
     }
-    // rivets on dark mass
     ctx.fillStyle = "#8a7028";
-    for (let row = 0; row < 3; row++) for (let i = 0; i < 18; i++) {
+    for (let row = 0; row < 2; row++) for (let i = 0; i < 18; i++) {
       ctx.beginPath();
-      ctx.arc(W * (0.06 + i * 0.05), winB + (8 + row * 14) * u, 1.5 * u, 0, 6.28); ctx.fill();
+      ctx.arc(W * (0.06 + i * 0.05), winB + (6 + row * 12) * u, 1.4 * u, 0, 6.28); ctx.fill();
     }
-    // re-draw vertical posts over the mass so they read continuous
-    solidBar(winL, winT, winL, massBot, barT);
-    solidBar(winR, winT, winR, massBot, barT);
     solidBar(winL, winB, winR, winB, barT);
 
-    // Ring-and-post (2D silhouette low in window; barrels are 3D behind/through)
+    // Ring-and-post iron sight (TARGET2): bold black silhouette low-centre, between / just above the barrels
     ctx.save();
     ctx.beginPath();
     ctx.rect(winL + barT * 0.55, winT + barT * 0.55, (winR - winL) - barT * 1.1, (winB - winT) - barT * 1.1);
     ctx.clip();
-    const rx = W * 0.5, ry = winT + (winB - winT) * 0.58, rr = 13 * u;
-    ctx.strokeStyle = "rgba(8, 10, 8, 0.9)"; ctx.lineWidth = 2.0 * u;
+    const rx = W * 0.5, ry = H * 0.737, rr = W * 0.033;
+    const lw = Math.max(2.8, W * 0.0036);
+    // outer dark halo so the ring reads on bright sky/ground
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.55)"; ctx.lineWidth = lw + 2.2;
     ctx.beginPath(); ctx.arc(rx, ry, rr, 0, 6.28); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(rx - rr * 0.9, ry); ctx.lineTo(rx + rr * 0.9, ry);
-    ctx.moveTo(rx, ry - rr * 0.9); ctx.lineTo(rx, ry + rr * 0.45); ctx.stroke();
-    ctx.fillStyle = "rgba(10, 12, 10, 0.92)";
-    ctx.fillRect(rx - 2 * u, ry + rr * 0.08, 4 * u, Math.max(8 * u, winB - ry - rr - 4 * u));
-    ctx.fillRect(rx - 10 * u, ry + rr, 20 * u, 2.5 * u);
+    ctx.strokeStyle = "#050605"; ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.arc(rx, ry, rr, 0, 6.28); ctx.stroke();
+    // cross wires
+    ctx.beginPath();
+    ctx.moveTo(rx - rr * 0.92, ry); ctx.lineTo(rx + rr * 0.92, ry);
+    ctx.moveTo(rx, ry - rr * 0.92); ctx.lineTo(rx, ry + rr * 0.55);
+    ctx.stroke();
+    // bead at ring centre
+    ctx.fillStyle = "#050605";
+    ctx.beginPath(); ctx.arc(rx, ry, Math.max(2.2, W * 0.0032), 0, 6.28); ctx.fill();
+    // post down to the guns / bottom bar
+    const postW = Math.max(3.2, W * 0.0045);
+    const postTop = ry + rr * 0.35;
+    const postBot = winB - H * 0.006;
+    ctx.fillRect(rx - postW * 0.5, postTop, postW, Math.max(8, postBot - postTop));
+    // foot plate just above bottom bar
+    ctx.fillRect(rx - W * 0.016, postBot - H * 0.006, W * 0.032, Math.max(3, H * 0.007));
     ctx.restore();
     ctx.restore();
   }
@@ -7299,6 +7340,14 @@
       }
       return e.id;
     },
+    // 1.6.2 test: freeze bandit WITHOUT e.hold (hold skips player hitTestBullet). _testFreeze zeros motion.
+    holdEnemy: (id) => {
+      const e = enemies.find((q) => q.id === id) || enemies[enemies.length - 1];
+      if (!e) return false;
+      e.hold = false; e._testFreeze = true; e.vx = 0; e.vy = 0; e.vz = 0; e.V = 0;
+      e.phase = "debug"; e.alive = true; e.burst = null; e.burstsLeft = 0;
+      return e.id;
+    },
     damage: (n) => { if (bomber) flakDamage(bomber, n || 10, 1); return bomber ? bomber.health : 0; }, // test hook (1.5.4: was a dead reference)
     tune: (o) => Object.assign(TUNE, o || {}),
     gunsDbg: () => { const out = []; for (const f of friendlies) { if (!f.guns || !friendlyOk(f)) continue; const c = Math.cos(f.yaw || 0), sn = Math.sin(f.yaw || 0); f.guns.forEach((g, gi) => { if (!(g.burst > 0 && g.tgt && g.tgt.alive)) return; const G = CPU_GUNS[gi]; const ox = f.x + G.p[0] * c + G.p[2] * sn, oy = f.y + G.p[1], oz = f.z - G.p[0] * sn + G.p[2] * c; const dx = g.tgt.x - ox, dy = g.tgt.y - oy, dz = g.tgt.z - oz, d = Math.hypot(dx, dy, dz) || 1; out.push({ gi, n: CPU_GUNS.length, tid: g.tgt.id, lx: (dx * c - dz * sn) / d, ly: dy / d, lz: (dx * sn + dz * c) / d, ship: f.name }); }); } return out; },
@@ -7379,7 +7428,7 @@
     dbg: () => (mission ? { geo: mission.geo ? { x: +mission.geo.x.toFixed(1), z: +mission.geo.z.toFixed(1) } : null, odo: mission.odo, heading: mission.heading || 0, post: mission.post || 0, turning: !!mission.turningBack, timeLeft: mission.timeLeft, phase: mission.phase, geoRot: mission.geo ? mission.geo.rot : 0 } : null),
     friendliesRaw: () => friendlies.map((f) => ({ ...f })),
     skyTrailCount: () => skyTrails.length,
-    flak: (x, y, z, delay) => { if (!mission) return; const F = mission.flakStats || (mission.flakStats = { bursts: 0, near: 0, hitsF: 0, lostF: 0, blown: 0, hitsP: 0, closeP: 0 }); spawnFlakBurst(x, y, z, delay || 0, F); },
+    flak: (x, y, z, delay) => { if (!mission) return; const F = mission.flakStats || (mission.flakStats = { bursts: 0, near: 0, hitsF: 0, lostF: 0, blown: 0, hitsP: 0, closeP: 0, dmgP: 0, dmgF: 0, in10: 0, histM: [0, 0, 0, 0, 0, 0, 0] }); spawnFlakBurst(x, y, z, delay || 0, F); },
     flakList: () => flakBursts.map((b) => ({ id: b.id, x: b.x, y: b.y, z: b.z, t: b.t })),
     boxC: () => ({ x: BOX_C.x, y: BOX_C.y, z: BOX_C.z }),
     god: (b) => { godMode = !!b; },

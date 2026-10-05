@@ -39872,8 +39872,40 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     tailFrame.visible = false;
     const tailGuns = [];
     {
-      const steel = new MeshStandardMaterial({ color: 1711128, roughness: 0.45, metalness: 0.7 });
-      const red = new MeshStandardMaterial({ color: 12855326, roughness: 0.4, metalness: 0.35, emissive: 4851720, emissiveIntensity: 0.25 });
+      const jacketTex = (() => {
+        const W = 128, H = 256, c = document.createElement("canvas");
+        c.width = W;
+        c.height = H;
+        const x = c.getContext("2d");
+        x.fillStyle = "#1a1c18";
+        x.fillRect(0, 0, W, H);
+        for (let x0 = 0; x0 < W; x0 += 3) {
+          x.fillStyle = x0 % 6 ? "rgba(30,34,28,0.2)" : "rgba(8,10,8,0.15)";
+          x.fillRect(x0, 0, 1, H);
+        }
+        for (let row = 0; row < 28; row++) {
+          const yy = 10 + row * 8.5;
+          for (let col = 0; col < 8; col++) {
+            const xx = 10 + col * 15 + row % 2 * 7;
+            x.fillStyle = "rgba(4,5,4,0.95)";
+            x.beginPath();
+            x.arc(xx, yy, 2.2, 0, 6.28);
+            x.fill();
+            x.fillStyle = "rgba(55,60,52,0.35)";
+            x.beginPath();
+            x.arc(xx - 0.6, yy - 0.6, 0.9, 0, 6.28);
+            x.fill();
+          }
+        }
+        const t = new CanvasTexture(c);
+        t.wrapS = RepeatWrapping;
+        t.wrapT = ClampToEdgeWrapping;
+        t.colorSpace = SRGBColorSpace;
+        return t;
+      })();
+      const steel = new MeshBasicMaterial({ map: jacketTex, color: 16777215 });
+      const bare = new MeshStandardMaterial({ color: 1316370, roughness: 0.35, metalness: 0.75 });
+      const red = new MeshStandardMaterial({ color: 12855326, roughness: 0.4, metalness: 0.35, emissive: 5246992, emissiveIntensity: 0.3 });
       const flashTex2 = (() => {
         const c = document.createElement("canvas");
         c.width = 64;
@@ -39887,36 +39919,38 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         x.fillRect(0, 0, 64, 64);
         return new CanvasTexture(c);
       })();
+      const JL = 1.15, BL = 0.5, RL = 0.12;
+      const JR = 0.012, BR = 8e-3, RR = 0.01;
       for (const side of [-1, 1]) {
         const g = new Group();
-        const jacket = new Mesh(new CylinderGeometry(0.022, 0.024, 0.55, 10), steel);
+        const jacket = new Mesh(new CylinderGeometry(JR, JR * 1.05, JL, 12, 1, false), steel);
         jacket.rotation.x = Math.PI / 2;
-        jacket.position.set(0, 0, -0.35);
+        jacket.position.set(0, 0, -(JL * 0.5));
         g.add(jacket);
-        for (let k = 0; k < 8; k++) {
-          const ring = new Mesh(new TorusGeometry(0.025, 3e-3, 6, 12), new MeshStandardMaterial({ color: 790026, roughness: 0.8, metalness: 0.4 }));
-          ring.position.set(0, 0, -0.12 - k * 0.055);
-          g.add(ring);
-        }
-        const tip = new Mesh(new CylinderGeometry(0.016, 0.018, 0.12, 8), red);
+        const barrel = new Mesh(new CylinderGeometry(BR, BR, BL, 10), bare);
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0, 0, -(JL + BL * 0.5));
+        g.add(barrel);
+        const tip = new Mesh(new CylinderGeometry(RR * 0.92, RR, RL, 10), red);
         tip.rotation.x = Math.PI / 2;
-        tip.position.set(0, 0, -0.68);
+        tip.position.set(0, 0, -(JL + BL + RL * 0.5));
         g.add(tip);
+        const mzZ = -(JL + BL + RL);
         const muzzle = new Object3D();
-        muzzle.position.set(0, 0, -0.75);
+        muzzle.position.set(0, 0, mzZ);
         g.add(muzzle);
         const flash = new Sprite(new SpriteMaterial({ map: flashTex2, transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0 }));
-        flash.position.set(0, 0, -0.78);
-        flash.scale.set(0.12, 0.12, 1);
+        flash.position.set(0, 0, mzZ - 0.02);
+        flash.scale.set(0.1, 0.1, 1);
         flash.visible = false;
         g.add(flash);
-        g.position.set(side * 0.055, -0.16, -0.55);
-        g.rotation.set(0.04, 0, 0);
+        g.position.set(side * 0.042, -0.205, -0.5);
+        g.rotation.set(-0.04, 0, 0);
         tailFrame.add(g);
         tailGuns.push({ group: g, muzzle, flash, rest: g.position.clone(), lastRec: 0 });
       }
-      const house = new Mesh(new BoxGeometry(0.22, 0.06, 0.14), new MeshStandardMaterial({ color: 2764322, roughness: 0.7, metalness: 0.25 }));
-      house.position.set(0, -0.22, -0.48);
+      const house = new Mesh(new BoxGeometry(0.16, 0.045, 0.1), new MeshStandardMaterial({ color: 2764322, roughness: 0.7, metalness: 0.25 }));
+      house.position.set(0, -0.195, -0.38);
       tailFrame.add(house);
       toOverlay(tailFrame);
     }

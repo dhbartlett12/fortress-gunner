@@ -4065,43 +4065,71 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     sightBox.position.set(0.29, -0.228, -0.5); sightBox.rotation.set(0.2, -0.42, 0.02);
     camera.add(sightBox); toOverlay(sightBox);
   }
-  // 1.6.1 Cheyenne twin .50s (camera-locked): perforated jackets + red tips, track aim; muzzleOut/flash/tracers from tips.
-  const tailFrame = new THREE.Group(); // kept name for visibility toggle
+  // 1.6.2 Cheyenne twin .50s: LONG slim barrels (ref_tail_pov_inflight). Jacket = dark cylinder + hole-dot texture (NO torus rings);
+  // then slimmer bare barrel; RED muzzle tips. Side-by-side under sill, recede aft to VP; flash/tracers from tips.
+  const tailFrame = new THREE.Group();
   camera.add(tailFrame); tailFrame.visible = false;
   const tailGuns = [];
   {
-    const steel = new THREE.MeshStandardMaterial({ color: 0x1a1c18, roughness: 0.45, metalness: 0.7 });
-    const red = new THREE.MeshStandardMaterial({ color: 0xc4281e, roughness: 0.4, metalness: 0.35, emissive: 0x4a0808, emissiveIntensity: 0.25 });
+    const jacketTex = (() => {
+      const W = 128, H = 256, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+      x.fillStyle = "#1a1c18"; x.fillRect(0, 0, W, H);
+      // soft lengthwise wear only (NO circumferential bands — those read as ring stacks)
+      for (let x0 = 0; x0 < W; x0 += 3) { x.fillStyle = x0 % 6 ? "rgba(30,34,28,0.2)" : "rgba(8,10,8,0.15)"; x.fillRect(x0, 0, 1, H); }
+      // small perforation dots (NOT rings) — staggered rows along length
+      for (let row = 0; row < 28; row++) {
+        const yy = 10 + row * 8.5;
+        for (let col = 0; col < 8; col++) {
+          const xx = 10 + col * 15 + (row % 2) * 7;
+          x.fillStyle = "rgba(4,5,4,0.95)"; x.beginPath(); x.arc(xx, yy, 2.2, 0, 6.28); x.fill();
+          x.fillStyle = "rgba(55,60,52,0.35)"; x.beginPath(); x.arc(xx - 0.6, yy - 0.6, 0.9, 0, 6.28); x.fill();
+        }
+      }
+      const t = new THREE.CanvasTexture(c); t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
+      t.colorSpace = THREE.SRGBColorSpace; return t;
+    })();
+    const steel = new THREE.MeshBasicMaterial({ map: jacketTex, color: 0xffffff }); // unlit: dots read as holes, not lit rings
+    const bare = new THREE.MeshStandardMaterial({ color: 0x141612, roughness: 0.35, metalness: 0.75 });
+    const red = new THREE.MeshStandardMaterial({ color: 0xc4281e, roughness: 0.4, metalness: 0.35, emissive: 0x501010, emissiveIntensity: 0.3 });
     const flashTex = (() => {
       const c = document.createElement("canvas"); c.width = 64; c.height = 64; const x = c.getContext("2d");
       const g = x.createRadialGradient(32, 32, 0, 32, 32, 30); g.addColorStop(0, "rgba(255,240,180,1)"); g.addColorStop(0.35, "rgba(255,140,40,0.7)"); g.addColorStop(1, "rgba(255,80,0,0)");
       x.fillStyle = g; x.fillRect(0, 0, 64, 64);
       return new THREE.CanvasTexture(c);
     })();
+    // lengths in camera space: jacket long, bare further, red tip — covers good chunk of lower window, stays slim
+    const JL = 1.15, BL = 0.50, RL = 0.12; // jacket / bare / red — long slim (TARGET2 low window)
+    const JR = 0.012, BR = 0.008, RR = 0.010; // radii — slim
     for (const side of [-1, 1]) {
       const g = new THREE.Group();
-      // jacket (perforated look via dark rings)
-      const jacket = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.024, 0.55, 10), steel);
-      jacket.rotation.x = Math.PI / 2; jacket.position.set(0, 0, -0.35); g.add(jacket);
-      for (let k = 0; k < 8; k++) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.025, 0.003, 6, 12), new THREE.MeshStandardMaterial({ color: 0x0c0e0a, roughness: 0.8, metalness: 0.4 }));
-        ring.position.set(0, 0, -0.12 - k * 0.055); g.add(ring);
-      }
-      // barrel tip + red jacket end
-      const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, 0.12, 8), red);
-      tip.rotation.x = Math.PI / 2; tip.position.set(0, 0, -0.68); g.add(tip);
-      const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0, -0.75); g.add(muzzle);
+      // perforated cooling jacket (texture holes)
+      const jacket = new THREE.Mesh(new THREE.CylinderGeometry(JR, JR * 1.05, JL, 12, 1, false), steel);
+      jacket.rotation.x = Math.PI / 2;
+      jacket.position.set(0, 0, -(JL * 0.5)); // starts at group origin, extends aft (−Z)
+      g.add(jacket);
+      // slimmer bare barrel beyond jacket
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(BR, BR, BL, 10), bare);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, 0, -(JL + BL * 0.5));
+      g.add(barrel);
+      // RED-painted tip / muzzle jacket
+      const tip = new THREE.Mesh(new THREE.CylinderGeometry(RR * 0.92, RR, RL, 10), red);
+      tip.rotation.x = Math.PI / 2;
+      tip.position.set(0, 0, -(JL + BL + RL * 0.5));
+      g.add(tip);
+      const mzZ = -(JL + BL + RL);
+      const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0, mzZ); g.add(muzzle);
       const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 }));
-      flash.position.set(0, 0, -0.78); flash.scale.set(0.12, 0.12, 1); flash.visible = false; g.add(flash);
-      // rest pose: low-center in view, side by side, running aft (cam −Z)
-      g.position.set(side * 0.055, -0.16, -0.55);
-      g.rotation.set(0.04, 0, 0);
+      flash.position.set(0, 0, mzZ - 0.02); flash.scale.set(0.10, 0.10, 1); flash.visible = false; g.add(flash);
+      // TARGET2: low-centre in sight window (≈ x450–575, y455–518 of 1024×597); tips toward VP
+      g.position.set(side * 0.042, -0.205, -0.50);
+      g.rotation.set(-0.04, 0, 0); // slight tip-up toward horizon/VP
       tailFrame.add(g);
       tailGuns.push({ group: g, muzzle, flash, rest: g.position.clone(), lastRec: 0 });
     }
-    // small housing under sill
-    const house = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.14), new THREE.MeshStandardMaterial({ color: 0x2a2e22, roughness: 0.7, metalness: 0.25 }));
-    house.position.set(0, -0.22, -0.48); tailFrame.add(house);
+    // housing under sill (minimal — does not hide barrels)
+    const house = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.045, 0.10), new THREE.MeshStandardMaterial({ color: 0x2a2e22, roughness: 0.7, metalness: 0.25 }));
+    house.position.set(0, -0.195, -0.38); tailFrame.add(house);
     toOverlay(tailFrame);
   }
 
