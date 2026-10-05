@@ -31,9 +31,9 @@
   const PITCH_MIN = -1.55; // 1.3.5: ~−89°, straight down past our own wings/fuselage (no cap)
   const PITCH_MAX = 1.54;  // ~88°, straight overhead
   // 1.6.1 TAIL GUNNER (B-17G Cheyenne): look AFT, ±30° traverse, −40°/+30° elevation
-  const TAIL_YAW = 30 * Math.PI / 180;
-  const TAIL_PITCH_MAX = 30 * Math.PI / 180;
-  const TAIL_PITCH_MIN = -40 * Math.PI / 180;
+  const TAIL_YAW = 60 * Math.PI / 180; // 1.6.3: ±60° (was ±30°)
+  const TAIL_PITCH_MAX = 40 * Math.PI / 180; // 1.6.3
+  const TAIL_PITCH_MIN = -45 * Math.PI / 180; // 1.6.3
   const TAIL_BASE_YAW = Math.PI; // looking aft (−Z)
   const STATIONS = {
     top: { id: "top", label: "TOP", eye: { x: 0, y: 0, z: 0 }, yawBase: null, yawLim: null, pitchMin: PITCH_MIN, pitchMax: PITCH_MAX,
@@ -6108,16 +6108,16 @@
     const edgeX = (side, t) => side < 0 ? lerp(topL, botL, t) : lerp(topR, botR, t);
     const edgeY = (t) => lerp(topY, botY, t);
     const tCross = 0.352;
-    const tSill = 0.569;
-    const sillY = edgeY(tSill), sillL = edgeX(-1, tSill), sillR = edgeX(1, tSill);
-    const winL = W * 0.220, winR = W * 0.780, winT = sillY, winB = H * 0.888;
+    // 1.6.3: REMOVE the sill bar (was tSill≈0.57 / ~60% H) — second horizontal from top that bisected the sight window
+    const crossY = edgeY(tCross), crossL = edgeX(-1, tCross), crossR = edgeX(1, tCross);
+    const winL = W * 0.220, winR = W * 0.780, winT = crossY, winB = H * 0.888;
 
     // Open sky outside the frame — no vignette / side panes
 
     ctx.beginPath();
     ctx.moveTo(topL + barT * 0.4, topY + barT * 0.5);
     ctx.lineTo(topR - barT * 0.4, topY + barT * 0.5);
-    ctx.lineTo(sillR - barT * 0.3, sillY); ctx.lineTo(sillL + barT * 0.3, sillY); ctx.closePath();
+    ctx.lineTo(crossR - barT * 0.3, crossY); ctx.lineTo(crossL + barT * 0.3, crossY); ctx.closePath();
     ctx.fillStyle = "rgba(155, 180, 200, 0.05)"; ctx.fill();
 
     const solidBar = (x0, y0, x1, y1, thick) => {
@@ -6145,8 +6145,8 @@
     solidBar(topL, topY, botL, botY, barT);
     solidBar(topR, topY, botR, botY, barT);
     solidBar(topL, topY, topR, topY, barT);
-    solidBar(edgeX(-1, tCross), edgeY(tCross), edgeX(1, tCross), edgeY(tCross), barT);
-    solidBar(sillL, sillY, sillR, sillY, barT);
+    solidBar(crossL, crossY, crossR, crossY, barT); // upper cross-bar kept
+    // sill REMOVED (1.6.3) — posts run from cross-bar down to bottom bar
     solidBar(winL, winT, winL, winB, barT);
     solidBar(winR, winT, winR, winB, barT);
     solidBar(winL, winB, winR, winB, barT);
@@ -6165,33 +6165,29 @@
     }
     solidBar(winL, winB, winR, winB, barT);
 
-    // Ring-and-post iron sight (TARGET2): bold black silhouette low-centre, between / just above the barrels
+    // 1.6.3: iron ring-and-post IS the aim reference — centred on the sight line (same as former yellow reticle)
     ctx.save();
     ctx.beginPath();
     ctx.rect(winL + barT * 0.55, winT + barT * 0.55, (winR - winL) - barT * 1.1, (winB - winT) - barT * 1.1);
     ctx.clip();
-    const rx = W * 0.5, ry = H * 0.737, rr = W * 0.033;
-    const lw = Math.max(2.8, W * 0.0036);
-    // outer dark halo so the ring reads on bright sky/ground
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.55)"; ctx.lineWidth = lw + 2.2;
+    const vb = fx154.vib || 0;
+    const rx = W * 0.5 + gunner.shake * (Math.sin(elapsed * 73) * 1.1) + vb * Math.sin(elapsed * 211) * 1.5 + (gunner.kx || 0) * W * 0.25;
+    const ry = H * 0.5 + gunner.recoil * 2 + gunner.shake * (Math.cos(elapsed * 61) * 0.6) + vb * Math.cos(elapsed * 187) * 1.1 + (gunner.ky || 0) * H * 0.25;
+    const rr = Math.max(18, Math.min(28, H * 0.048));
+    const lw = Math.max(2.6, W * 0.0034);
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.55)"; ctx.lineWidth = lw + 2.0;
     ctx.beginPath(); ctx.arc(rx, ry, rr, 0, 6.28); ctx.stroke();
     ctx.strokeStyle = "#050605"; ctx.lineWidth = lw;
     ctx.beginPath(); ctx.arc(rx, ry, rr, 0, 6.28); ctx.stroke();
-    // cross wires
     ctx.beginPath();
     ctx.moveTo(rx - rr * 0.92, ry); ctx.lineTo(rx + rr * 0.92, ry);
     ctx.moveTo(rx, ry - rr * 0.92); ctx.lineTo(rx, ry + rr * 0.55);
     ctx.stroke();
-    // bead at ring centre
     ctx.fillStyle = "#050605";
-    ctx.beginPath(); ctx.arc(rx, ry, Math.max(2.2, W * 0.0032), 0, 6.28); ctx.fill();
-    // post down to the guns / bottom bar
-    const postW = Math.max(3.2, W * 0.0045);
-    const postTop = ry + rr * 0.35;
-    const postBot = winB - H * 0.006;
-    ctx.fillRect(rx - postW * 0.5, postTop, postW, Math.max(8, postBot - postTop));
-    // foot plate just above bottom bar
-    ctx.fillRect(rx - W * 0.016, postBot - H * 0.006, W * 0.032, Math.max(3, H * 0.007));
+    ctx.beginPath(); ctx.arc(rx, ry, Math.max(2.0, W * 0.003), 0, 6.28); ctx.fill();
+    // short post toward the barrels (down), not a long shaft to the sill
+    const postW = Math.max(2.8, W * 0.004);
+    ctx.fillRect(rx - postW * 0.5, ry + rr * 0.4, postW, Math.min(H * 0.12, winB - ry - rr - 4));
     ctx.restore();
     ctx.restore();
   }
@@ -6446,7 +6442,8 @@
     const cx = W * 0.5 + gunner.shake * (Math.sin(elapsed * 73) * 1.1) + vb * Math.sin(elapsed * 211) * 1.5 + (gunner.kx || 0) * W * 0.25;
     const cy = H * 0.5 + gunner.recoil * 2 + gunner.shake * (Math.cos(elapsed * 61) * 0.6) + vb * Math.cos(elapsed * 187) * 1.1 + (gunner.ky || 0) * H * 0.25;
     ctx.save();
-    {
+    // 1.6.3: TAIL uses the iron ring-and-post as the aim reference (drawn in drawTailOverlay) — no yellow reflector
+    if (gunner.station !== "tail") {
       const hot = guns.overheated;
       const R = Math.max(18, Math.min(26, H * 0.045));
       const line = (col, lw) => {

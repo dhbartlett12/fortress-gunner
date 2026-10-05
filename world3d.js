@@ -2472,13 +2472,21 @@ export function createWorld3D(canvas) {
   earth.add(groundFrame);
   const landG = new THREE.Group(); landG.scale.setScalar(KR); groundFrame.add(landG);
   farmTex.repeat.set(92 * FARM_REP, 92 * FARM_REP); // 1.5.8: real 25,000 ft: fields keep their (old) world size scaled by the new altitude
+  // 1.6.3: town footprint baked into the GROUND shader (no depth). Mobile 16-bit Z at 25k ft
+  // has ~7.8k u resolution — a raised mesh / polygonOffset cannot win; coplanar decals vanish.
+  const townBakeU = {
+    uTown: { value: null },
+    uTownXZ: { value: new THREE.Vector2(0, 0) },
+    uTownR: { value: 1 },
+  };
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(60000, 60000),
     (() => {
       const m = new THREE.MeshBasicMaterial({ map: farmTex, color: 0xc4cab6, fog: true });
       m.onBeforeCompile = (sh) => {
         sh.uniforms.uShadow = { value: cloudShadowTex }; sh.uniforms.uMacro = { value: macroTex };
-        sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;\nuniform sampler2D uMacro;").replace("#include <map_fragment>", `
+        sh.uniforms.uTown = townBakeU.uTown; sh.uniforms.uTownXZ = townBakeU.uTownXZ; sh.uniforms.uTownR = townBakeU.uTownR;
+        sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;\nuniform sampler2D uMacro;\nuniform sampler2D uTown;\nuniform vec2 uTownXZ;\nuniform float uTownR;").replace("#include <map_fragment>", `
 #ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv );
   vec2 muv = mat2(${Math.cos(MACRO_ROT).toFixed(5)}, ${Math.sin(MACRO_ROT).toFixed(5)}, ${(-Math.sin(MACRO_ROT)).toFixed(5)}, ${Math.cos(MACRO_ROT).toFixed(5)}) * vMapUv * ${(1 / MACRO_REP).toFixed(5)} + vec2(0.31, 0.17);
@@ -2496,6 +2504,16 @@ export function createWorld3D(canvas) {
   float shd = texture2D(uShadow, vMapUv * 0.9 + vec2(0.13, 0.41)).r * 0.65 + texture2D(uShadow, vMapUv * 0.37 + vec2(0.7, 0.2)).r * 0.35;
   col *= 1.0 - 0.34 * smoothstep(0.35, 0.75, shd);
   col = mix(col, vec3(0.45, 0.58, 0.76), 0.04);
+  // 1.6.3: CITY baked into ground albedo (depth-safe). Soft irregular edge via texture alpha.
+  {
+    vec2 gxz = vec2((vMapUv.x - 0.5) * 60000.0, (0.5 - vMapUv.y) * 60000.0);
+    vec2 tuv = (gxz - uTownXZ) / max(uTownR, 1.0) * 0.5 + 0.5;
+    if (tuv.x > -0.02 && tuv.x < 1.02 && tuv.y > -0.02 && tuv.y < 1.02) {
+      vec4 tw = texture2D(uTown, clamp(tuv, 0.0, 1.0));
+      float w = tw.a * 1.0;
+      col = mix(col, tw.rgb, w);
+    }
+  }
   diffuseColor.rgb *= col;
 #endif
 `);
@@ -2513,28 +2531,153 @@ export function createWorld3D(canvas) {
   const TOWN_Z = 1238;          // ground-frame local z (1.5.7: 1653 → 1048 for the 180 mph box): ~24 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
   const TOWN_X = -15.3;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
   const town = new THREE.Group();
-  town.position.set(TOWN_X, 3.2, TOWN_Z); // 1.6.1: ~22 world-u above the farm plane (was 0.05→0.35u) so depth precision at 25,000 ft does not z-fight the town away
+  town.position.set(TOWN_X, 6.5, TOWN_Z); // 1.6.3: ~45 world-u up for 3D roofs on 24-bit GPUs; altitude city mass is ground-baked (16-bit safe)
   const TOWN_S = 1.5 * Math.sqrt(15); // 1.6.0: the town is 15x larger BY AREA (x3.873 linear on the 1.5.9 footprint, ≈ 6 km across, readable from 25,000 ft)
   town.scale.set(TOWN_S, TOWN_S, TOWN_S);
   landG.add(town);
-  // 1.6.1: city blotch on landG (not inside town scale) — a dark disc + street grid that always reads from 25,000 ft
+  // 1.6.3: BAKE a WWII aerial-recon town into the ground shader (depth-safe on mobile 16-bit Z).
+  // Soft irregular edge, muted grey-brown fabric, organic streets, rail yard, factory, matching river.
   {
-    const N = 256, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
-    x.fillStyle = "#2e2a26"; x.beginPath(); x.arc(N/2, N/2, N*0.48, 0, Math.PI*2); x.fill();
-    x.fillStyle = "#252220"; x.beginPath(); x.arc(N/2-10, N/2, N*0.22, 0, Math.PI*2); x.fill();
-    x.strokeStyle = "rgba(170,160,150,0.45)"; x.lineWidth = 2;
-    for (let i = -5; i <= 5; i++) {
-      x.beginPath(); x.moveTo(20, N/2 + i*18); x.lineTo(N-20, N/2 + i*18); x.stroke();
-      x.beginPath(); x.moveTo(N/2 + i*18, 20); x.lineTo(N/2 + i*18, N-20); x.stroke();
+    const N = 1024, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
+    x.clearRect(0, 0, N, N);
+    let sd = 1944; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    const cx = N * 0.50, cy = N * 0.52, rad = N * 0.46;
+    // irregular urban mask (alpha)
+    const mask = document.createElement("canvas"); mask.width = mask.height = N; const mx = mask.getContext("2d");
+    mx.fillStyle = "#fff";
+    mx.beginPath();
+    for (let i = 0; i <= 48; i++) {
+      const a = i / 48 * Math.PI * 2, rr = rad * (0.62 + R() * 0.48 + 0.08 * Math.sin(i * 1.7));
+      if (i === 0) mx.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      else mx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
     }
-    x.fillStyle = "rgba(40,70,90,0.55)"; // river through city
-    x.fillRect(N*0.42, 10, N*0.08, N-20);
-    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.92, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -12, polygonOffsetUnits: -12 });
-    // size in landG units: town is ~TOWN_S*60 across; use ~90 so blotch ≈ town footprint in world
-    const blot = new THREE.Mesh(new THREE.CircleGeometry(TOWN_S * 55, 48), mat);
-    blot.rotation.x = -Math.PI / 2; blot.position.set(TOWN_X, 0.35, TOWN_Z); blot.renderOrder = 4; blot.frustumCulled = false;
-    landG.add(blot);
+    mx.closePath(); mx.fill();
+    // soft edge: blur then use as alpha
+    try { mx.filter = "blur(22px)"; } catch (e) {}
+    const m2 = document.createElement("canvas"); m2.width = m2.height = N; const m2x = m2.getContext("2d");
+    m2x.drawImage(mask, 0, 0);
+    try { mx.filter = "none"; } catch (e) {}
+    // base farmland bleed under edge (transparent outside)
+    x.globalCompositeOperation = "source-over";
+    // built-up base (muted grey-brown, not black)
+    x.fillStyle = "#3f3c36"; // 1.6.3: darker mass vs green farmland
+    x.beginPath();
+    for (let i = 0; i <= 48; i++) {
+      const a = i / 48 * Math.PI * 2, rr = rad * (0.62 + ((i * 37) % 17) / 40);
+      if (i === 0) x.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      else x.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+    }
+    x.closePath(); x.fill();
+    // denser medieval core around cathedral square
+    x.fillStyle = "#35322c";
+    x.beginPath(); x.arc(cx - N * 0.06, cy - N * 0.02, rad * 0.28, 0, Math.PI * 2); x.fill();
+    x.fillStyle = "#2c2a26";
+    x.beginPath(); x.arc(cx - N * 0.06, cy - N * 0.02, rad * 0.12, 0, Math.PI * 2); x.fill(); // square
+    // parks / trees (small green patches)
+    for (let k = 0; k < 18; k++) {
+      const a = R() * Math.PI * 2, rr = rad * (0.2 + R() * 0.7);
+      x.fillStyle = "rgba(62,78,48," + (0.35 + R() * 0.35).toFixed(2) + ")";
+      x.beginPath(); x.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 6 + R() * 18, 0, Math.PI * 2); x.fill();
+    }
+    // roof fabric speckles (terracotta + slate + beige)
+    const roofCols = ["#6e4a38", "#5a4034", "#4a4844", "#7a5a40", "#3e3c38", "#8a6a50", "#58544c"];
+    for (let k = 0; k < 7200; k++) {
+      const a = R() * Math.PI * 2, rr = Math.pow(R(), 0.65) * rad * 0.95;
+      const px = cx + Math.cos(a) * rr, py = cy + Math.sin(a) * rr;
+      const dens = rr < rad * 0.28 ? 1 : rr < rad * 0.55 ? 0.7 : 0.35;
+      if (R() > dens) continue;
+      x.fillStyle = roofCols[(R() * roofCols.length) | 0];
+      const w = 1.5 + R() * (rr < rad * 0.3 ? 4 : 2.5), h = 1.2 + R() * 2.5;
+      x.save(); x.translate(px, py); x.rotate(R() * 0.4); x.fillRect(-w / 2, -h / 2, w, h); x.restore();
+    }
+    // organic radial main roads from square
+    x.strokeStyle = "rgba(130,122,108,0.9)"; x.lineWidth = 6; x.lineCap = "round";
+    for (let i = 0; i < 8; i++) {
+      const a0 = i * (Math.PI * 2 / 8) + 0.15;
+      x.beginPath();
+      let px = cx - N * 0.06, py = cy - N * 0.02;
+      x.moveTo(px, py);
+      for (let s = 1; s <= 14; s++) {
+        const t = s / 14, ang = a0 + Math.sin(t * 3 + i) * 0.12;
+        px = cx - N * 0.06 + Math.cos(ang) * rad * 0.92 * t;
+        py = cy - N * 0.02 + Math.sin(ang) * rad * 0.92 * t;
+        x.lineTo(px, py);
+      }
+      x.stroke();
+    }
+    // ring road
+    x.strokeStyle = "rgba(140,132,118,0.85)"; x.lineWidth = 5.5;
+    x.beginPath();
+    for (let i = 0; i <= 64; i++) {
+      const a = i / 64 * Math.PI * 2, rr = rad * (0.55 + 0.03 * Math.sin(i * 0.7));
+      const px = cx - N * 0.04 + Math.cos(a) * rr, py = cy + Math.sin(a) * rr * 0.92;
+      if (i === 0) x.moveTo(px, py); else x.lineTo(px, py);
+    }
+    x.closePath(); x.stroke();
+    // secondary streets (quieter, irregular grid fragments — not bright white wireframe)
+    x.strokeStyle = "rgba(120,114,100,0.65)"; x.lineWidth = 2.4;
+    for (let i = 0; i < 22; i++) {
+      const a = R() * Math.PI * 2, r0 = rad * (0.15 + R() * 0.7), len = rad * (0.15 + R() * 0.35);
+      const ox = Math.cos(a + 1.2), oy = Math.sin(a + 1.2);
+      const px = cx + Math.cos(a) * r0, py = cy + Math.sin(a) * r0;
+      x.beginPath(); x.moveTo(px - ox * len, py - oy * len); x.lineTo(px + ox * len, py + oy * len); x.stroke();
+    }
+    // rail lines into depot (SE of core) — grey ballast + twin tracks
+    x.save();
+    x.translate(cx + N * 0.10, cy + N * 0.08); x.rotate(-0.12);
+    x.fillStyle = "#6a6660"; x.fillRect(-N * 0.045, -N * 0.28, N * 0.09, N * 0.52); // ballast bed
+    x.strokeStyle = "rgba(55,52,48,0.9)"; x.lineWidth = 1.4;
+    for (let t = -3; t <= 3; t++) {
+      x.beginPath(); x.moveTo(t * 5.5, -N * 0.27); x.lineTo(t * 5.5, N * 0.23); x.stroke();
+    }
+    // factory compound (large grey roofs)
+    x.fillStyle = "#6e6a64"; x.fillRect(N * 0.06, -N * 0.08, N * 0.14, N * 0.16);
+    x.fillStyle = "#5c5852";
+    for (let i = 0; i < 3; i++) x.fillRect(N * 0.07, -N * 0.06 + i * N * 0.045, N * 0.12, N * 0.032);
+    x.restore();
+    // river matching macro terrain rivers (muted blue-grey-green), meandering through town
+    const riverPts = [];
+    for (let k = 0; k <= 40; k++) {
+      const t = k / 40;
+      riverPts.push([
+        cx - rad * 0.95 + t * rad * 1.9,
+        cy + rad * 0.22 + Math.sin(t * 3.2 + 0.5) * rad * 0.18 + t * rad * 0.08,
+      ]);
+    }
+    const strokeR = (w, col) => {
+      x.strokeStyle = col; x.lineWidth = w; x.lineCap = "round"; x.lineJoin = "round";
+      x.beginPath(); x.moveTo(riverPts[0][0], riverPts[0][1]);
+      for (let i = 1; i < riverPts.length; i++) x.lineTo(riverPts[i][0], riverPts[i][1]);
+      x.stroke();
+    };
+    strokeR(14, "rgba(58,82,46,0.45)");
+    strokeR(9, "rgba(78,96,70,0.7)");
+    strokeR(5.5, "rgba(100,122,132,0.92)");
+    // bridges (dark strips across river)
+    for (const t of [0.28, 0.55, 0.72]) {
+      const i = (t * (riverPts.length - 1)) | 0;
+      const [px, py] = riverPts[i], [qx, qy] = riverPts[Math.min(riverPts.length - 1, i + 1)];
+      const dx = qx - px, dy = qy - py, L = Math.hypot(dx, dy) || 1;
+      x.strokeStyle = "rgba(70,66,60,0.9)"; x.lineWidth = 3.5;
+      x.beginPath(); x.moveTo(px - dy / L * 10, py + dx / L * 10); x.lineTo(px + dy / L * 10, py - dx / L * 10); x.stroke();
+    }
+    // suburbs thinning: lighter patches toward edge
+    x.globalCompositeOperation = "source-atop";
+    for (let k = 0; k < 40; k++) {
+      const a = R() * Math.PI * 2, rr = rad * (0.65 + R() * 0.35);
+      x.fillStyle = "rgba(90,100,70," + (0.08 + R() * 0.12).toFixed(2) + ")";
+      x.beginPath(); x.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 10 + R() * 28, 0, Math.PI * 2); x.fill();
+    }
+    x.globalCompositeOperation = "destination-in";
+    x.drawImage(m2, 0, 0); // soft irregular alpha edge
+    x.globalCompositeOperation = "source-over";
+
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter;
+    townBakeU.uTown.value = tex;
+    townBakeU.uTownXZ.value.set(TOWN_X * KR, TOWN_Z * KR);
+    townBakeU.uTownR.value = TOWN_S * 62 * KR;
   }
   const townMats = [];
   // 1.5.3: the town's structures as data (town-local x, z, half-width, half-depth, yaw) so game.js can resolve real bomb landings against them
@@ -2581,9 +2724,11 @@ export function createWorld3D(canvas) {
     // main line out of town both ways (a thin dark line across the countryside)
     const line = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 900), bas(0x3e3a34));
     line.rotation.set(-Math.PI / 2, 0, YARD_A); line.position.y = -0.01;
+    line.visible = false; // 1.6.3: rail into countryside is in the bake
     town.add(line);
     const branch = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 500), bas(0x423e38));
     branch.rotation.set(-Math.PI / 2, 0, YARD_A + 0.9); branch.position.set(-2, -0.01, -26);
+    branch.visible = false;
     town.add(branch);
     const ax = (u, v) => { // yard-aligned coordinates → town local
       const c = Math.cos(YARD_A), s = Math.sin(YARD_A);
@@ -2625,34 +2770,19 @@ export function createWorld3D(canvas) {
         st.rotation.y = -a + Math.PI / 2; CXG.add(st); TL.stalls.push([st.position.x, st.position.z, 0.31, 0.75, st.rotation.y]); TS.stallMesh.push(st);
       }
     }
-    // river with a bridge where the main line crosses
-    {
-      const pts = [];
-      for (let k = 0; k <= 24; k++) { const t = k / 24; pts.push(new THREE.Vector2(-70 + t * 140, 28 * Math.sin(t * 3.1 + 0.4) - 30 + t * 18)); }
-      const shape = [];
-      const pos = [], idx = [];
-      for (let k = 0; k < pts.length; k++) {
-        const p = pts[k], q2 = pts[Math.min(pts.length - 1, k + 1)], p0 = pts[Math.max(0, k - 1)];
-        const dx = q2.x - p0.x, dy = q2.y - p0.y, l = Math.hypot(dx, dy) || 1, w = 1.6 + Math.sin(k) * 0.3;
-        pos.push(p.x - dy / l * w, 0.015, p.y + dx / l * w, p.x + dy / l * w, 0.015, p.y - dx / l * w);
-        if (k) { const a = (k - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
-      }
-      void shape;
-      const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
-      const river = new THREE.Mesh(g, bas(0x46545a, { side: THREE.DoubleSide }));
-      town.add(river);
+    // 1.6.3: river + street planes removed (were bright cyan strips / white grid on black disc).
+    // Streets exist as centerline data for house placement; visual streets live in the ground bake.
+    const streetM = bas(0x7a766c); // kept for factory access road only
+    const streets = []; // [cx, cz, halfLen along, yaw] centerlines
+    for (let k = -4; k <= 3; k++) streets.push([k * 7.5 - 12, 0, 28, 0]);           // N-S
+    for (let k = -4; k <= 4; k++) streets.push([-16, k * 6.5, 31, Math.PI / 2]); // E-W
+    streets.push([-8, -4, 30, 0.55]); streets.push([-20, 10, 25, -0.8]);
+    // radial avenues from cathedral square
+    for (let i = 0; i < 8; i++) {
+      const a = i * (Math.PI * 2 / 8) + 0.15;
+      streets.push([-14 + Math.cos(a) * 12, 0.5 + Math.sin(a) * 12, 18, a]);
     }
-    // streets (pale) + houses (walls + gabled roofs, instanced)
-    const streetM = bas(0x8e8a80);
-    const streets = [];
-    for (let k = -4; k <= 3; k++) streets.push([k * 7.5 - 12, 0, 0.35, 56, 0.12]);
-    for (let k = -4; k <= 4; k++) streets.push([-16, k * 6.5, 62, 0.35, 0.12]);
-    streets.push([-8, -4, 0.45, 60, 0.55]); streets.push([-20, 10, 0.45, 50, -0.8]);
-    for (const [cx, cz, w, d, rot] of streets) {
-      const st = new THREE.Mesh(new THREE.PlaneGeometry(w, d), streetM);
-      st.rotation.set(-Math.PI / 2, 0, rot); st.position.set(cx, 0.01, cz); town.add(st);
-    }
-    const N = 1500;
+    const N = 1100;
     const wallG = new THREE.BoxGeometry(1, 0.55, 1); wallG.translate(0, 0.275, 0);
     const roofG = (() => { // gable prism, ridge along x
       const v = [-0.55, 0.55, -0.58, 0.55, 0.55, -0.58, 0.55, 0.95, 0, -0.55, 0.95, 0, -0.55, 0.55, 0.58, 0.55, 0.55, 0.58];
@@ -2660,40 +2790,56 @@ export function createWorld3D(canvas) {
       const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3)); g.setIndex(i);
       g.computeVertexNormals(); return g;
     })();
-    const walls = new THREE.InstancedMesh(wallG, lam(0xb4ada0), N);
+    const walls = new THREE.InstancedMesh(wallG, lam(0xa8a298), N);
     const roofs = new THREE.InstancedMesh(roofG, lam(0xffffff), N);
-    const roofPal = [0xb85438, 0xa04430, 0xc46840, 0x8a3c2c, 0x9a5038, 0x6e6660] // 1.6.1: hotter reds so roof mass reads from altitude;
+    // 1.6.3: muted WWII aerial colours — terracotta / dark slate (no hot red slabs)
+    const roofPal = [0x6e4a38, 0x5a4034, 0x4a4844, 0x5a5854, 0x7a5a40, 0x58544c, 0x3e3c38];
     let n = 0;
     const scl = new THREE.Vector3(), rq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
-    const place = (x0, z0, rot, len, wid) => {
+    const place = (x0, z0, rot, len, wid, tall) => {
       if (n >= N) return;
-      if (Math.hypot(x0 + 14, z0 - 0.5) < 5.2) return; // the cathedral close
-      if (x0 > -3.2 && x0 < 12.5 && z0 > -16 && z0 < 10.5) return; // the target complex (yard, depot, factory)
-      pv.set(x0, 0, z0); scl.set(len, 1.0 + rnd() * 0.9, wid); rq.setFromAxisAngle(up, rot); // 1.6.1 taller mass
+      if (Math.hypot(x0 + 14, z0 - 0.5) < 4.5) return; // cathedral close
+      if (x0 > -3.2 && x0 < 12.5 && z0 > -16 && z0 < 10.5) return; // yard / depot / factory
+      pv.set(x0, 0.04, z0); // slight raise vs bake plane
+      scl.set(len, (tall || 1) * (0.85 + rnd() * 0.55), wid); rq.setFromAxisAngle(up, rot);
       m4.compose(pv, rq, scl); walls.setMatrixAt(n, m4); roofs.setMatrixAt(n, m4); TL.houses.push([x0, z0, len / 2, wid / 2, rot]); TS.houseM.push(m4.clone());
-      const rc = new THREE.Color(roofPal[(rnd() * roofPal.length) | 0]).multiplyScalar(0.95 + rnd() * 0.25);
-      roofs.setColorAt(n, rc); walls.setColorAt(n, new THREE.Color(1, 1, 1).multiplyScalar(0.85 + rnd() * 0.2));
+      const rc = new THREE.Color(roofPal[(rnd() * roofPal.length) | 0]).multiplyScalar(0.9 + rnd() * 0.2);
+      roofs.setColorAt(n, rc); walls.setColorAt(n, new THREE.Color(0xd0c8b8).multiplyScalar(0.75 + rnd() * 0.25));
       n++;
     };
-    // old town: dense blocks between the streets, west of the yard
-    for (let bx = -4; bx < 3; bx++) for (let bz = -4; bz < 4; bz++) {
-      const cx = bx * 7.5 - 12 + 3.75, cz = bz * 6.5 + 3.25;
-      const dcen = Math.hypot(cx + 14, cz);
-      if (dcen > 24 && rnd() < 0.45) continue;
-      for (let k = 0; k < 14; k++) {
-        const side = k % 4, t = rnd() * 5.4 - 2.7;
-        const ox = side === 0 ? t : side === 1 ? t : side === 2 ? -2.9 : 2.9;
-        const oz = side === 0 ? -2.3 : side === 1 ? 2.3 : t * 0.8;
-        place(cx + ox, cz + oz, side < 2 ? 0 : Math.PI / 2, 1.5 + rnd() * 1.4, 1.15 + rnd() * 0.55); // 1.6.1 larger roofs
+    // 1.6.3: place houses ALONG street centerlines (both sides), denser near cathedral
+    for (const [scx, scz, half, yaw] of streets) {
+      const ca = Math.cos(yaw), sa = Math.sin(yaw);
+      const nx = -sa, nz = ca; // sideways
+      const steps = Math.max(6, (half * 2 / 1.35) | 0);
+      for (let s = 0; s < steps; s++) {
+        const t = (s / (steps - 1) - 0.5) * 2 * half;
+        const px = scx + ca * t, pz = scz + sa * t;
+        const dcen = Math.hypot(px + 14, pz - 0.5);
+        if (dcen > 38 && rnd() < 0.55) continue; // thin suburbs
+        if (dcen > 28 && rnd() < 0.3) continue;
+        for (const side of [-1, 1]) {
+          if (rnd() < 0.12) continue; // gaps / yards
+          const setback = 1.55 + rnd() * 0.55;
+          place(px + nx * side * setback, pz + nz * side * setback, yaw + (side < 0 ? Math.PI : 0), 1.15 + rnd() * 1.1, 0.95 + rnd() * 0.45, dcen < 12 ? 1.25 : 1);
+        }
       }
     }
-    // villas / outskirts scattered along the roads
-    while (n < N) {
-      const a = rnd() * Math.PI * 2, r = 16 + rnd() * 44;
-      place(Math.cos(a) * r - 12, Math.sin(a) * r, rnd() * Math.PI, 1.0 + rnd() * 0.7, 0.85 + rnd() * 0.4);
+    // fill remaining budget with a few outskirts along radials only (not random scatter)
+    let guard = 0;
+    while (n < N * 0.92 && guard++ < 4000) {
+      const st = streets[(rnd() * streets.length) | 0];
+      const [scx, scz, half, yaw] = st;
+      const ca = Math.cos(yaw), sa = Math.sin(yaw), nx = -sa, nz = ca;
+      const t = (rnd() - 0.5) * 2 * half * 1.15;
+      const side = rnd() < 0.5 ? -1 : 1;
+      place(scx + ca * t + nx * side * (2.2 + rnd()), scz + sa * t + nz * side * (2.2 + rnd()), yaw, 0.9 + rnd() * 0.6, 0.8 + rnd() * 0.35, 0.9);
     }
+    walls.count = n; roofs.count = n;
     walls.instanceMatrix.needsUpdate = true; roofs.instanceMatrix.needsUpdate = true;
-    walls.renderOrder = 1; // 1.6.0 perf: roofs draw first, so the (hidden) wall tops under them fail the depth test instead of being shaded then overdrawn
+    if (walls.instanceColor) walls.instanceColor.needsUpdate = true;
+    if (roofs.instanceColor) roofs.instanceColor.needsUpdate = true;
+    walls.renderOrder = 1;
     town.add(walls); town.add(roofs); TS.walls = walls; TS.roofs = roofs;
     { // 1.6.0/1.6.1 CATHEDRAL: landmark scaled up so the spire reads from altitude
       const slate = lam(0x4a5560), cx0 = -14, cz0 = 0.5;
@@ -2712,7 +2858,7 @@ export function createWorld3D(canvas) {
             const [ex, ez] = ax(6.2, -35.1); TS.depotC = [ex * KC, ez * KC];
     }
     { // 1.6.0 FACTORY (target): a works district east of the yard — three long sawtooth halls, a power house, two tall brick chimneys and storage tanks
-      const FX = 10, hallM = lam(0x7e7468), saw = lam(0x58504a), chim = lam(0x8a4a38), tankM = lam(0xb9b4a6);
+      const FX = 10, hallM = lam(0x7e7468), saw = lam(0x58504a), chim = lam(0x6a4a40), tankM = lam(0xb9b4a6); // 1.6.3 muted chimneys
       const keyD = (name, w, d, x, z, m, kind) => { TL.keys.push([x, z, w / 2, d / 2, 0, name, kind || "f"]); TS.keyMesh.push(m); return m; };
       const put = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); CXG.add(m); return m; };
       for (let i = 0; i < 3; i++) {
@@ -2727,69 +2873,12 @@ export function createWorld3D(canvas) {
       const road = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 40), streetM); road.rotation.set(-Math.PI / 2, 0, 0); road.position.set(23, 0.012, 3); CXG.add(road);
     }
 
-    { // 1.6.1 ALTITUDE LANDMARKS: a few very large masses (not targets) so the town reads as a city from 25,000 ft
-      const big = lam(0xb8a090), bigR = lam(0xa04028), dark = lam(0x4a4540);
-      const put = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); town.add(m); return m; };
-      for (let i = 0; i < 3; i++) { put(new THREE.BoxGeometry(4.5, 2.2, 3.2), big, -22 - i * 5.5, 1.1, -6 + i * 2); put(new THREE.BoxGeometry(4.6, 0.5, 3.3), bigR, -22 - i * 5.5, 2.35, -6 + i * 2); }
-      put(new THREE.BoxGeometry(14, 2.8, 4.0), dark, -6, 1.4, 22); put(new THREE.BoxGeometry(14.2, 0.55, 4.2), bigR, -6, 2.95, 22);
-      for (let i = 0; i < 5; i++) { put(new THREE.BoxGeometry(2.2, 3.4, 2.0), big, 8 + i * 2.6, 1.7, 14); put(new THREE.BoxGeometry(2.3, 0.4, 2.1), bigR, 8 + i * 2.6, 3.5, 14); }
-    }
+    // 1.6.3: altitude landmarks (red slabs) removed — city mass is ground-baked
     for (const A of [TL.wagons, TL.tracks, TL.stalls, TL.keys]) for (const e of A) { e[0] *= KC; e[1] *= KC; e[2] *= KC; e[3] *= KC; } // 1.6.0: complex coordinates → town-local
   }
 
-  // ===== 1.6.1 TOWN FROM ALTITUDE: a dark built-up footprint + street grid so the town reads from 25,000 ft
-  // as a real city mass (roofs alone were ~2 px at 20 km and vanished into farmland). No sky sprites — ground only.
-  {
-    const N = 512, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
-    x.fillStyle = "#0000"; x.clearRect(0, 0, N, N);
-    // irregular urban blotch (darker paved / built-up)
-    x.fillStyle = "rgba(42, 38, 34, 1)";
-    x.beginPath();
-    let sd = 77; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
-    const cx = N * 0.48, cy = N * 0.52, rad = N * 0.46;
-    x.moveTo(cx + rad, cy);
-    for (let i = 1; i <= 24; i++) {
-      const a = i / 24 * Math.PI * 2, rr = rad * (0.72 + R() * 0.4);
-      x.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
-    }
-    x.closePath(); x.fill();
-    // denser core
-    x.fillStyle = "rgba(32, 28, 26, 1)";
-    x.beginPath(); x.arc(cx - N * 0.04, cy, rad * 0.45, 0, Math.PI * 2); x.fill();
-    // street grid (light)
-    x.strokeStyle = "rgba(180, 170, 160, 0.5)"; x.lineWidth = 2.5;
-    for (let i = -6; i <= 6; i++) {
-      const o = i * (N * 0.055);
-      x.beginPath(); x.moveTo(cx - rad * 0.85, cy + o); x.lineTo(cx + rad * 0.85, cy + o); x.stroke();
-      x.beginPath(); x.moveTo(cx + o, cy - rad * 0.85); x.lineTo(cx + o, cy + rad * 0.85); x.stroke();
-    }
-    // diagonal boulevards
-    x.strokeStyle = "rgba(200, 195, 185, 0.4)"; x.lineWidth = 3;
-    x.beginPath(); x.moveTo(cx - rad * 0.7, cy - rad * 0.5); x.lineTo(cx + rad * 0.75, cy + rad * 0.55); x.stroke();
-    x.beginPath(); x.moveTo(cx - rad * 0.6, cy + rad * 0.65); x.lineTo(cx + rad * 0.55, cy - rad * 0.4); x.stroke();
-    // rail yard dark strip (reads from altitude)
-    x.fillStyle = "rgba(35, 33, 30, 0.75)";
-    x.save(); x.translate(cx + N * 0.08, cy - N * 0.08); x.rotate(-0.35);
-    x.fillRect(-N * 0.06, -N * 0.22, N * 0.12, N * 0.44); x.restore();
-    // river glint through town
-    x.strokeStyle = "rgba(90, 130, 150, 0.55)"; x.lineWidth = 5;
-    x.beginPath(); x.moveTo(cx - rad * 0.9, cy + rad * 0.2);
-    x.quadraticCurveTo(cx, cy + rad * 0.35, cx + rad * 0.85, cy - rad * 0.1); x.stroke();
-    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-    const fpMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }); // 1.6.1: no earth-fog washout at 20 km
-    townMats.push(fpMat);
-    // town-local: cover the built-up area (~±50 units outskirts). World size ≈ 50*TOWN_S*K_LAND ≈ 2 km radius blotch.
-    const under = new THREE.Mesh(new THREE.CircleGeometry(72, 32), new THREE.MeshBasicMaterial({ color: 0x3a3530, fog: false, depthWrite: false, transparent: true, opacity: 0.85, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }));
-    under.rotation.x = -Math.PI / 2; under.position.set(-8, 0.06, 2); under.renderOrder = 2; under.frustumCulled = false; town.add(under); townMats.push(under.material);
-    const fp = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), fpMat);
-    fp.rotation.x = -Math.PI / 2; fp.position.set(-8, 0.12, 2); fp.renderOrder = 3; fp.frustumCulled = false;
-    town.add(fp);
-    // industrial / depot darker pad (extra contrast near targets)
-    const padMat = new THREE.MeshBasicMaterial({ color: 0x2a2824, transparent: true, opacity: 0.75, fog: false, depthWrite: false });
-    townMats.push(padMat);
-    const pad = new THREE.Mesh(new THREE.PlaneGeometry(28, 36), padMat);
-    pad.rotation.x = -Math.PI / 2; pad.position.set(2, 0.025, -8); pad.frustumCulled = false; town.add(pad);
-  }
+  // 1.6.3: coplanar black disc / white grid / pad removed — townBakeU owns the altitude read
+
   // 1.6.1: keep town meshes drawing at long range (instanced houses had default frustum spheres that culled early)
   if (TS.walls) { TS.walls.frustumCulled = false; TS.roofs.frustumCulled = false; }
   town.traverse((o) => { if (o.isMesh || o.isInstancedMesh) o.frustumCulled = false; });
@@ -2928,7 +3017,7 @@ export function createWorld3D(canvas) {
       p.life = p.max = 20 + Math.random() * 18; p.vy = (55 + Math.random() * 50) / K; p.vx = (6 + Math.random() * 16) / K;
       p.s0 = (28 + Math.random() * 30) * size / K; p.s1 = (200 + Math.random() * 220) * size * rich / K; p.a = 0.55 + Math.random() * 0.35;
       p.sp.material.rotation = Math.random() * 6.28;
-      p.sp.material.color.setHex(Math.random() < 0.35 ? 0x5a5248 : 0x1a1816); p.sp.visible = true;
+      p.sp.material.color.setHex(Math.random() < 0.5 ? 0x8a8278 : 0x6e6860); p.sp.visible = true; // 1.6.3: lighter grey (no black tunnel)
     }
     // vertical column seed: stack of smaller puffs up the axis
     for (let k = 0; k < (CR.chuteRich ? 22 : 8); k++) {
@@ -2938,7 +3027,9 @@ export function createWorld3D(canvas) {
       p.life = p.max = 24 + Math.random() * 20; p.vy = (70 + Math.random() * 40) / K; p.vx = (4 + Math.random() * 8) / K;
       p.s0 = (18 + Math.random() * 16) * size / K; p.s1 = (140 + Math.random() * 120) * size * rich / K; p.a = 0.5 + Math.random() * 0.3;
       p.sp.material.rotation = Math.random() * 6.28;
-      p.sp.material.color.setHex(0x22201c); p.sp.visible = true;
+      p.a = 0.28 + Math.random() * 0.22; // thinner column alpha
+      p.vx = (14 + Math.random() * 22) / K; // wind drift
+      p.sp.material.color.setHex(Math.random() < 0.5 ? 0x7a746c : 0x9a948a); p.sp.visible = true; // 1.6.3
     }
     if (window.FGAudio && window.FGAudio.crash) window.FGAudio.crash(P.x, P.y, P.z, size);
   }
@@ -2967,11 +3058,15 @@ export function createWorld3D(canvas) {
         // prefer a rising column of varied soft puffs (not one flat disc)
         const col = Math.random() < 0.55;
         const h0 = col ? (1.5 + Math.random() * 14) * (c.rich || 1) : (0.4 + Math.random() * 1.5);
-        p.sp.position.set(c.lx + (Math.random() - 0.5) * (col ? 28 : 55) * sz / K_LAND, h0 / K_LAND, c.lz + (Math.random() - 0.5) * (col ? 28 : 55) * sz / K_LAND);
-        p.life = p.max = 28 + Math.random() * 24; p.vy = (50 + Math.random() * 45) / K_LAND; p.vx = (8 + Math.random() * 14) / K_LAND;
-        p.s0 = (22 + Math.random() * 30) * sz / K_LAND; p.s1 = (180 + Math.random() * 200) * sz / K_LAND; p.a = 0.5 + Math.random() * 0.35;
+        // 1.6.3: wind-drifted lighter column — thin near base, soft alpha (no nadir black tunnel)
+        const wind = 18 + Math.random() * 28;
+        const drift = (h0 * 0.35);
+        p.sp.position.set(c.lx + (Math.random() - 0.5) * (col ? 36 : 70) * sz / K_LAND + drift / K_LAND, h0 / K_LAND, c.lz + (Math.random() - 0.5) * (col ? 36 : 70) * sz / K_LAND + drift * 0.4 / K_LAND);
+        p.life = p.max = 26 + Math.random() * 22; p.vy = (42 + Math.random() * 38) / K_LAND; p.vx = wind / K_LAND;
+        const baseThin = col ? (0.55 + Math.min(1, h0 / 12) * 0.45) : 1;
+        p.s0 = (12 + Math.random() * 18) * sz * baseThin / K_LAND; p.s1 = (120 + Math.random() * 140) * sz / K_LAND; p.a = 0.22 + Math.random() * 0.28;
         p.sp.material.rotation = Math.random() * 6.28;
-        p.sp.material.color.setHex(Math.random() < 0.25 ? 0x5a5048 : 0x1c1a18); p.sp.visible = true;
+        p.sp.material.color.setHex(Math.random() < 0.4 ? 0x9a948a : 0x7a746c); p.sp.visible = true;
       }
       // secondary pops early on
       if (c.rich && c.t < 6 && Math.random() < 0.04) {
@@ -2984,13 +3079,13 @@ export function createWorld3D(canvas) {
       if (p.life <= 0) continue;
       p.life -= dt; if (p.life <= 0) { p.sp.visible = false; continue; }
       const k = 1 - p.life / p.max;
-      p.sp.position.y += p.vy * dt * (1 - k * 0.5); p.sp.position.x += p.vx * dt; p.sp.position.z += p.vx * 0.35 * dt;
+      p.sp.position.y += p.vy * dt * (1 - k * 0.5); p.sp.position.x += p.vx * dt; p.sp.position.z += p.vx * 0.55 * dt; // 1.6.3: more wind lean
       const sc = p.s0 + (p.s1 - p.s0) * Math.sqrt(k);
-      // 1.6.1: tall soft columns + slow spin so overlapping puffs do not read as one disc from nadir
-      const tall = 1.55 + 2.1 * k;
-      p.sp.scale.set(sc * (0.7 + 0.25 * Math.sin(p.life * 1.7)), sc * tall, 1);
-      if (p.sp.material) p.sp.material.rotation += dt * (0.15 + (p.vx || 0) * 0.02);
-      p.sp.material.opacity = p.a * Math.min(1, k * 10) * (1 - k * k) * 0.88;
+      // wider than tall as it ages so nadir view is a soft plume, not a black shaft
+      const tall = 1.15 + 0.85 * k;
+      p.sp.scale.set(sc * (0.95 + 0.35 * k), sc * tall, 1);
+      if (p.sp.material) p.sp.material.rotation += dt * (0.12 + (p.vx || 0) * 0.015);
+      p.sp.material.opacity = p.a * Math.min(1, k * 8) * (1 - k * k) * 0.7;
     }
   }
   function crashReset() {
@@ -4138,10 +4233,16 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   function updateGuns(opts) {
     const rec = opts.recoilLR || [0, 0];
     const fl = opts.flashLR || [0, 0];
+    const atTailGuns = (opts.station === "tail");
+    // 1.6.3: tip half-spacing ~0.09 (close-paired Cheyenne). tipLocal.x is ~±0.30, so
+    // compensate so the MUZZLE tip — not the group root — lands at ±TAIL_HALF.
+    const TAIL_HALF = 0.09;
     for (let i = 0; i < gunGroups.length; i++) {
       const gg = gunGroups[i];
       // barrel + receiver slide straight back along the bore, then run out
-      gg.group.position.set(gg.rest.x, gg.rest.y + rec[i] * 0.004, gg.rest.z + rec[i] * 0.12);
+      const side = (gg.rest.x < 0) ? -1 : 1;
+      const bx = atTailGuns ? (side * TAIL_HALF - gg.tipLocal.x) : gg.rest.x;
+      gg.group.position.set(bx, gg.rest.y + rec[i] * 0.004, gg.rest.z + rec[i] * 0.12);
       gg.group.rotation.set(rec[i] * 0.018, 0, (i ? -1 : 1) * rec[i] * 0.006); // 1.3.9: muzzle climb + a little twist on each kick
       if (rec[i] > gg.lastRec + 0.4) { // a round just fired on this gun
         ejectFrom(gg, gg.ejectLocal.x + gg.group.position.x < 0 ? -1 : 1);
@@ -4169,31 +4270,16 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     updateEject();
     camera.updateMatrixWorld(true);
     let strobeI = fl[1] > fl[0] ? 1 : 0;
-    const atTail = (opts.station === "tail");
-    if (atTail && tailGuns.length) {
-      for (let i = 0; i < 2; i++) {
-        const tg = tailGuns[i], rec = (opts.recoilLR || [0, 0])[i] || 0, fl = (opts.flashLR || [0, 0])[i] || 0;
-        tg.group.position.set(tg.rest.x, tg.rest.y + rec * 0.003, tg.rest.z + rec * 0.04);
-        tg.flash.visible = fl > 0.3;
-        if (tg.flash.visible) { const s = (0.14 + Math.random() * 0.06) * (0.55 + 0.45 * fl); tg.flash.scale.set(s, s, 1); tg.flash.material.opacity = 0.4 + 0.45 * fl; }
-        tg.muzzle.getWorldPosition(_mw);
-        muzzleOut[i].x = _mw.x; muzzleOut[i].y = _mw.y; muzzleOut[i].z = _mw.z;
-        if (i === strobeI) { muzzleStrobe.position.copy(_mw); camera.worldToLocal(muzzleStrobe.position); muzzleStrobe.position.z += 0.1; }
-        _mw.project(camera);
-        muzzleOut[i].sx = (_mw.x + 1) * 0.5 * window.innerWidth;
-        muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
-      }
-    } else {
-      for (let i = 0; i < gunGroups.length && i < 2; i++) {
-        const gg = gunGroups[i];
-        _mw.copy(gg.tipLocal);
-        gg.group.localToWorld(_mw);
-        muzzleOut[i].x = _mw.x; muzzleOut[i].y = _mw.y; muzzleOut[i].z = _mw.z;
-        if (i === strobeI) { muzzleStrobe.position.copy(_mw); camera.worldToLocal(muzzleStrobe.position); muzzleStrobe.position.z += 0.15; }
-        _mw.project(camera);
-        muzzleOut[i].sx = (_mw.x + 1) * 0.5 * window.innerWidth;
-        muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
-      }
+    // 1.6.3: always drive muzzleOut from the TOP twin .50 meshes (also used in TAIL, closer-spaced)
+    for (let i = 0; i < gunGroups.length && i < 2; i++) {
+      const gg = gunGroups[i];
+      _mw.copy(gg.tipLocal);
+      gg.group.localToWorld(_mw);
+      muzzleOut[i].x = _mw.x; muzzleOut[i].y = _mw.y; muzzleOut[i].z = _mw.z;
+      if (i === strobeI) { muzzleStrobe.position.copy(_mw); camera.worldToLocal(muzzleStrobe.position); muzzleStrobe.position.z += 0.15; }
+      _mw.project(camera);
+      muzzleOut[i].sx = (_mw.x + 1) * 0.5 * window.innerWidth;
+      muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
     }
   }
 
@@ -5197,11 +5283,20 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       CR.chuteRich = inChute; // 1.6.1: richer crash/ground FX only in parachute view
       const atTail = (opts.station === "tail");
       CR.tailDim = atTail;
-      // 1.6.1 MASTER: Cheyenne look is the 2D overlay; hide Sperry mount + old 3D tunnel frame at tail
-      turretAnchor.visible = !inChute && !window.__FG_FREECAM && !atTail;
+      // 1.6.3: LOD — 3D house instances only when near (bake owns the altitude recon look)
+      if (TS.walls) {
+        const tw = town.getWorldPosition(_mw);
+        const dTown = camera.position.distanceTo(tw);
+        const nearH = dTown < 2200; // ~3.3 km
+        TS.walls.visible = nearH; TS.roofs.visible = nearH;
+        if (TS.wagons) TS.wagons.visible = dTown < 3500;
+      }
+
+      // 1.6.3: TAIL reuses TOP turret twin .50 barrel meshes (closer-spaced in updateGuns); hide cage/sightBox + old procedural tailGuns
+      turretAnchor.visible = !inChute && !window.__FG_FREECAM;
       updateCage(pitch, inChute || !!window.__FG_FREECAM || atTail); if (window.__FG_FREECAM) arch.visible = false;
       sightBox.visible = !inChute && !window.__FG_FREECAM && !atTail;
-      if (tailFrame) tailFrame.visible = atTail && !inChute && !window.__FG_FREECAM; // 3D twin .50s
+      if (tailFrame) tailFrame.visible = false; // procedural cylinders retired
       // 1.6.1: at the Cheyenne opening, hide extreme aft tip skin once tagged so we look OUT (not into a tunnel)
       if (ownShip) {
         if (!ownShip.userData._tailTagged) {
@@ -5210,7 +5305,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
             if (!o.isMesh || !o.geometry || o.userData.part || o.userData.noHit) return;
             if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
             const cz = o.geometry.boundingSphere.center.z + o.position.z;
-            if (cz < -12.9) o.userData._tailHide = true; // clear Cheyenne opening (eye aft of rudder)
+            if (cz < -12.4) o.userData._tailHide = true; // 1.6.3: slightly more aft skin cleared for ±60° look
           });
         }
         ownShip.traverse((o) => { if (o.userData._tailHide) o.visible = !atTail; });
