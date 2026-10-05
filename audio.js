@@ -50,7 +50,8 @@
     const eq3 = ctx.createBiquadFilter(); eq3.type = "peaking"; eq3.frequency.value = 520; eq3.Q.value = 0.7; eq3.gain.value = 4.2;
     const eq4 = ctx.createBiquadFilter(); eq4.type = "peaking"; eq4.frequency.value = 2300; eq4.Q.value = 0.9; eq4.gain.value = 0.8;
     const sat = ctx.createWaveShaper(); { const n = 2048, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(1.5 * x) / Math.tanh(1.5) * 0.94; } sat.curve = c; } // 1.5.3: soft ceiling at -0.5 dBFS, never hard-clips
-    G.master.connect(eq0); eq0.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4); eq4.connect(tame); tame.connect(comp); G.comp = comp; comp.connect(sat); sat.connect(ctx.destination); G.tame = tame; G.vox = []; G.eq = [eq1, eq2, eq3, eq4];
+    // 1.6.0: duck bus — engines/guns/everything dips ~6 dB under a crew voice (voice.js)
+    G.duckG = ctx.createGain(); G.duckG.gain.value = 1; G.master.connect(G.duckG); G.duckG.connect(eq0); eq0.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4); eq4.connect(tame); tame.connect(comp); G.comp = comp; comp.connect(sat); sat.connect(ctx.destination); G.sat = sat; G.tame = tame; G.vox = []; G.eq = [eq1, eq2, eq3, eq4];
     G.noise = makeNoise(ctx, 2.0);
     G.sfx = ctx.createGain(); G.sfx.gain.value = 1.5; G.sfx.connect(G.master);
     // --- 1.5.4 engines: 4 R-1820 radials as NOISE (no tonal drone). Each = a low rumble band chopped at the prop's blade-passing rate (~66 Hz, 4 engines slowly beating)
@@ -771,6 +772,13 @@
       const t = ctx.currentTime + distModel(q.d, 300).delay + Math.random() * 0.02;
       if (!aiGunAllowed(t, q.d)) return; aiRound(G, t, q.d, q.pan); count("p51Gun");
     },
+    // 1.6.0: crew voices ride on their own bus straight to the destination (post master/EQ/compressor, so they are never ducked or squashed by the battle); duck(on) dips everything else 6 dB (50 ms attack, ~150 ms release)
+    voiceBus() { if (!ctx || !G || ctx.state !== "running" || muted) return null; if (!G.vbus) { // the battle mix (soft-clipped to −0.5 dBFS) and the voices share ONE final limiter, so a line landing on a full-scale gun burst cannot clip (measured: 136 clipped samples / 110 s without it, 0 with)
+        G.vbus = ctx.createGain(); G.vbus.gain.value = 1.4; // +3 dB: a line must stay readable over the player's own guns (the limiter below catches the peaks)
+        const fin = ctx.createGain(), lim = ctx.createDynamicsCompressor(); lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.1;
+        try { G.sat.disconnect(); } catch (e) {} G.sat.connect(fin); G.vbus.connect(fin); fin.connect(lim); lim.connect(ctx.destination); G.vlim = lim;
+      } return { ctx, bus: G.vbus }; },
+    duck(on) { if (!ctx || !G || !G.duckG) return; const t = ctx.currentTime; G.duckG.gain.cancelScheduledValues(t); G.duckG.gain.setTargetAtTime(on ? 0.5 : 1, t, on ? 0.02 : 0.06); count(on ? "duckOn" : "duckOff"); },
     intercom() { if (!ok()) return; sIntercom(G, ctx.currentTime); count("intercom"); },
     ownShot(side) { // 1.5.6: rounds ride a steady belt clock (real guns are mechanical: ~6 % timing jitter, not the 20 % the frame loop gives), re-synced after a pause
       if (!ok()) return;

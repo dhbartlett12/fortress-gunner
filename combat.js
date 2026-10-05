@@ -355,6 +355,40 @@
     }
     return ev;
   }
+  // ===== 1.6.0 ROCKET DIRECT HIT (WGr.21, ~40 kg warhead): devastating by design, NOT scaled by the global German gun scale (TUNE.gerDmg) that made it ~7 % (player) / 14 % (AI) of a normal hit.
+  // Every direct hit takes 66 hull points (1 hit → hull 34 = badly holed, leaves the box; 2 hits → hull <= 0 = break-up) plus a zone effect. Returns { ev, dmg } like applyHit.
+  const ROCKET_HULL = 66;
+  function rocketDirect(sd, id, rng) {
+    rng = rng || Math.random;
+    if (sd.destroyed) return { ev: [], dmg: 0 };
+    const h0 = sd.hull, r = applyHit(sd, id, "wgr21", { rf: 1, scale: 1.6, rng }), ev = r.ev, fam = FAM[id] || "fuselage";
+    const dropped = h0 - sd.hull; if (dropped < ROCKET_HULL) sd.hull = Math.max(0, sd.hull - (ROCKET_HULL - dropped));
+    if (fam === "cockpit" || fam === "nose" || id === "gun_nose" || id === "gun_chin") {
+      sd.crew = Math.max(0, sd.crew - (fam === "cockpit" ? 55 : 35));
+      if (fam === "cockpit" || rng() < 0.5) { if (sd.pilotCrit < 2) { sd.pilotCrit++; sd.crew = Math.min(sd.crew, 100 - 50 * sd.pilotCrit); ev.push({ t: "pilot_crit", n: sd.pilotCrit }); } }
+      sd.controls = Math.max(0, sd.controls - 20); ev.push({ t: "controls" });
+    } else if (fam === "engine" || fam === "prop" || fam === "oil") {
+      const k = ID_ENG[fam === "engine" ? id : fam === "oil" ? "engine_" + id.slice(11) : "engine_" + id.slice(5)], e = sd.eng[k];
+      if (e && !e.out) { e.hp = 0; e.out = true; ev.push({ t: "engine_out", i: k, how: "hit" }); }
+      if (e && !e.fire) { e.fire = true; e.fireT = 0; ev.push({ t: "engine_fire", i: k }); }
+    } else if (fam === "wingroot" || fam === "wing_in") {
+      const s = id.startsWith("wing_l") || id.endsWith("_l") ? 0 : 1;
+      sd.wr[s] = Math.max(0, sd.wr[s] - (fam === "wingroot" ? 70 : 50)); if (sd.wr[s] <= 0) ev.push({ t: "wing_fold", side: s });
+    } else if (fam === "wing_out") {
+      const s = id.startsWith("wing_l") ? 0 : 1; sd.wr[s] = Math.max(0, sd.wr[s] - 30); fuelHit(sd, s, "wgr21", 1, rng, ev, 30);
+    } else if (fam === "fuel" || fam === "fuelfuse") {
+      const f = fam === "fuelfuse" ? sd.fuse : sd.fuel[id.endsWith("_l") ? 0 : 1];
+      if (f && !f.fire) { f.fire = true; f.fireT = 0; ev.push({ t: "fuel_fire", side: fam === "fuelfuse" ? 2 : id.endsWith("_l") ? 0 : 1 }); }
+    } else if (fam === "tail") {
+      sd.tail = 0; sd.controls = Math.max(0, sd.controls - 30); ev.push({ t: "controls" });
+    } else if (fam === "gun") {
+      damageGun(sd, id.slice(4), 100, ev);
+    } else { // fuselage, gear, ammo, controls, oxygen: the blast cuts cables and starts a fire in the cabin
+      sd.controls = Math.max(0, sd.controls - 30); sd.ctlJitter = 1; ev.push({ t: "controls" });
+      if (fam === "ammo") { sd.ammoBoom++; ev.push({ t: "ammo_cook", st: "top" }); }
+    }
+    return { ev, dmg: ROCKET_HULL };
+  }
   // leave-box (German score) and destroyed checks
   function status(sd) {
     const r = { leave: null, destroy: null };
@@ -398,7 +432,7 @@
 
   const API = {
     GUNS, BOXES, ENG_X, ENG_ID, ID_ENG, STATIONS, U_PER_YD, toYd, rangeFactor,
-    rayBoxes, boxAt, boxCenter, pickAimBox, pickStrike, resolveStrike, newShip, applyHit, tick, status, health, engOutCount,
+    rayBoxes, boxAt, boxCenter, pickAimBox, pickStrike, resolveStrike, newShip, applyHit, rocketDirect, ROCKET_HULL, tick, status, health, engOutCount,
     TUNE_C, PART_MUL, FIGHTER, classifyFighterHit, fighterRound, FAM,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = API;

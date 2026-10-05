@@ -1360,7 +1360,7 @@ export function createWorld3D(canvas) {
   // 1.5.3: faint vertical streak above each falling bomb (slight motion blur once it is moving fast) — one instanced mesh, one draw
   const bombStreak = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.12, 1, 5, 1, true), new THREE.MeshBasicMaterial({ color: 0x9a9d96, transparent: true, opacity: 0.17, depthWrite: false, side: THREE.DoubleSide }), BOMB_N);
   bombStreak.count = 0; bombStreak.frustumCulled = false; scene.add(bombStreak);
-  const BOMB_G = 6.54, BOMB_AZ = 0.18, BOMB_CZ = 0.0016; // 1.5.8: g = 9.81 m/s² at 1.5 m/u; from 25,000 ft (5,080 u) a stick reaches the ground ~39 s after release (was ~24 s from 1,400 u); it trails the airframe (drag) by BOMB_AZ·t² + BOMB_CZ·t³
+  const BOMB_G = 5.013, BOMB_AZ = 0.18, BOMB_CZ = 0.0016, BOMB_SPACING = 0.34; // 1.6.0: g 6.54 → 5.013 (drag-slowed fall: ~45 s from 25,000 ft instead of 39 s), 0.34 s between bombs of a stick (was 0.12) so a stick is a visible LINE of explosions; // 1.5.8: g = 9.81 m/s² at 1.5 m/u; from 25,000 ft (5,080 u) a stick reaches the ground ~39 s after release (was ~24 s from 1,400 u); it trails the airframe (drag) by BOMB_AZ·t² + BOMB_CZ·t³
   const _tw = new THREE.Vector3();
   let _geoNow = { x: 0, z: 0, rot: 0 };
   const bombs = []; const bombStats = { live: 0, dropped: 0 };
@@ -1369,7 +1369,7 @@ export function createWorld3D(canvas) {
   function dropBombs(list) {
     for (const st of list) {
       for (let k = 0; k < st.n && bombs.length < BOMB_N; k++) { // a stick: one after another, ~0.12 s apart, out of alternate sides of the bay
-        bombs.push({ ph: Math.random() * 6.28, x0: st.x + (k % 2 ? 0.28 : -0.28), y0: st.y + (k % 3) * 0.12, z0: st.z + (st.own ? 0 : 0.3), t: -(st.delay + k * 0.12), yawJ: (Math.random() - 0.5) * 0.1, rollS: (Math.random() - 0.5) * 1.2, lead: st.lead, own: !!st.own });
+        bombs.push({ ph: Math.random() * 6.28, x0: st.x + (k % 2 ? 0.28 : -0.28), y0: st.y + (k % 3) * 0.12, z0: st.z + (st.own ? 0 : 0.3), t: -(st.delay + k * BOMB_SPACING), yawJ: (Math.random() - 0.5) * 0.1, rollS: (Math.random() - 0.5) * 1.2, lead: st.lead, own: !!st.own });
         bombStats.dropped++;
       }
     }
@@ -1390,7 +1390,7 @@ export function createWorld3D(canvas) {
       const vy = -BOMB_G * t, vz = -2 * BOMB_AZ * t - 3 * BOMB_CZ * t * t;
       const pitch = Math.atan2(-vy, 53.6 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05; // nose down as the fall steepens
       const wob = Math.min(1, t / 1.2) * 0.07; // slight tumble/precession as they drop
-      _be.set(pitch + Math.sin(t * 2.7 + b.ph) * wob, b.yawJ + Math.cos(t * 2.1 + b.ph) * wob, b.rollS * t * 0.3, "YXZ"); _bq.setFromEuler(_be);
+      _be.set(pitch + Math.sin(t * 2.7 + b.ph) * wob, (_geoNow.rot || 0) + b.yawJ + Math.cos(t * 2.1 + b.ph) * wob, b.rollS * t * 0.3, "YXZ"); _bq.setFromEuler(_be); // 1.6.0: the nose follows the bomb's own ground track (its release heading), not the airframe that turns away
       { const dd = camera.position.distanceTo(_bp), sc = Math.max(1.3, dd / 450); _bs.set(sc, sc, sc); } _bm.compose(_bp, _bq, _bs); bombMesh.setMatrixAt(n, _bm);
       const sl = Math.min(7, Math.max(0, (-vy - 6) * 0.2)); // streak length grows with fall speed
       if (sl > 0.4) { _bsq.identity(); _bss.set(1, sl, 1); _bsp.set(_bp.x, _bp.y + sl * 0.5, _bp.z + 0.25 * sl * 0.2); _bm.compose(_bsp, _bsq, _bss); } else { _bss.set(0.0001, 0.0001, 0.0001); _bm.compose(_bp, _bsq.identity(), _bss); }
@@ -1565,6 +1565,7 @@ export function createWorld3D(canvas) {
       ownShip.position.set(CAM.x, CAM.y + _lift, CAM.z);
       ownShip.rotation.set(-_liftP, 0, -(opts.roll || 0));
     }
+    ownShip.visible = !(FALL && FALL.ship && FALL.ship.crashed); // 1.6.0: she has hit the ground (the crash fx stay)
     ownShip.updateMatrixWorld(true);
     updateOwnWreck(FALL, rdt);
     const engs = (opts.own && opts.own.engines) || [];
@@ -2291,6 +2292,7 @@ export function createWorld3D(canvas) {
         }
       });
     }
+    // 1.6.0: the large forests and the big rivers live in the separate, much larger MACRO texture (macroTex) — not in this 10 km tile, where they repeated visibly and darkened the shader's low-frequency modulation
     // River: meandering, crosses the tile top→bottom (enters/exits at the same x → seamless)
     {
       const x0 = rnd() * N;
@@ -2329,6 +2331,19 @@ export function createWorld3D(canvas) {
         }
       });
     }
+    // 1.6.0 SMALL VILLAGES: ~40 hamlets of 4-11 roofs strung along a short lane (so they read as places, not noise)
+    for (let k = 0; k < 40; k++) {
+      const cx = rnd() * N, cy = rnd() * N, n = 4 + ((rnd() * 8) | 0), ang = rnd() * Math.PI, ca = Math.cos(ang), sa = Math.sin(ang), len = 6 + rnd() * 8;
+      wrap(() => {
+        x.strokeStyle = "rgba(170,162,134,0.7)"; x.lineWidth = 1.1;
+        x.beginPath(); x.moveTo(cx - ca * (len + 4), cy - sa * (len + 4)); x.lineTo(cx + ca * (len + 4), cy + sa * (len + 4)); x.stroke();
+        for (let i = 0; i < n; i++) {
+          const t2 = (rnd() - 0.5) * 2 * len, off = (rnd() < 0.5 ? -1 : 1) * (2.2 + rnd() * 2.2), hx = cx + ca * t2 - sa * off, hy = cy + sa * t2 + ca * off, hs = 1.6 + rnd() * 1.8;
+          x.fillStyle = rnd() < 0.62 ? "rgba(146,76,56,0.95)" : "rgba(172,166,152,0.95)";
+          x.fillRect(hx - hs / 2, hy - hs * 0.4, hs, hs * 0.8);
+        }
+      });
+    }
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -2337,6 +2352,60 @@ export function createWorld3D(canvas) {
     t.minFilter = THREE.LinearMipmapLinearFilter;
     t.magFilter = THREE.LinearFilter;
     t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 4);
+    return t;
+  })();
+  // 1.6.0 MACRO LAND LAYER: large forests + big rivers (with tributaries that JOIN them, never cross) on their own 2048² tile, ~3.7x the farm tile (~38 km) and rotated 23° to it,
+  // so neither repeats in step with the fields; sampled by the ground shader (uMacro) and laid over the field colour before the 1.5.9 tone chain (haze/fog untouched)
+  const MACRO_REP = 3.7, MACRO_ROT = 0.4;
+  const macroTex = (() => {
+    const N = 2048, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
+    let seed = 2026; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const wrap = (ctx, fn) => { for (const ox of [-N, 0, N]) for (const oy of [-N, 0, N]) { ctx.save(); ctx.translate(ox, oy); fn(ctx); ctx.restore(); } };
+    // --- forests: solid canopy mask (random-walk arms of round crowns-of-wood), softened edge, then crown mottling painted only inside the wood
+    const L = document.createElement("canvas"); L.width = L.height = N; const lx = L.getContext("2d");
+    const woods = [];
+    for (let k = 0; k < 15; k++) {
+      const cx = rnd() * N, cy = rnd() * N, arms = 2 + ((rnd() * 4) | 0), big = 0.7 + rnd() * 0.8;
+      for (let a = 0; a < arms; a++) {
+        let fx = cx, fy = cy, ang = rnd() * Math.PI * 2; const steps = 8 + ((rnd() * 22 * big) | 0);
+        for (let i = 0; i < steps; i++) { ang += (rnd() - 0.5) * 1.1; fx += Math.cos(ang) * 11; fy += Math.sin(ang) * 11; woods.push([fx + (rnd() - 0.5) * 14, fy + (rnd() - 0.5) * 14, (12 + rnd() * 20) * big]); }
+      }
+    }
+    for (let k = 0; k < 40; k++) { const cx = rnd() * N, cy = rnd() * N, n = 2 + ((rnd() * 5) | 0); for (let i = 0; i < n; i++) woods.push([cx + (rnd() - 0.5) * 40, cy + (rnd() - 0.5) * 40, 7 + rnd() * 11]); } // copses
+    lx.fillStyle = "rgb(48,66,38)";
+    wrap(lx, (q) => { for (const [bx, by, br] of woods) { q.beginPath(); q.arc(bx, by, br, 0, Math.PI * 2); q.fill(); } });
+    lx.globalCompositeOperation = "source-atop";
+    wrap(lx, (q) => { for (const [bx, by, br] of woods) for (let m = 0; m < 7; m++) { const r2 = 1.0 + rnd() * 2.0; q.fillStyle = rnd() < 0.5 ? "rgba(76,98,56,0.6)" : "rgba(30,44,24,0.6)"; q.beginPath(); q.arc(bx + (rnd() - 0.5) * br * 1.6, by + (rnd() - 0.5) * br * 1.6, r2, 0, Math.PI * 2); q.fill(); } });
+    lx.globalCompositeOperation = "source-over";
+    try { x.filter = "blur(1.6px)"; } catch (e) {}
+    x.globalAlpha = 0.9; for (const ox of [-N, 0, N]) for (const oy of [-N, 0, N]) x.drawImage(L, ox, oy);
+    x.globalAlpha = 1; try { x.filter = "none"; } catch (e) {}
+    L.width = L.height = 1;
+    // --- rivers: two big meandering rivers (periodic in x, half a tile apart: they can never meet) + tributaries that flow into them
+    const strokeRiver = (pts, w) => wrap(x, (q) => {
+      const path = () => { q.beginPath(); q.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) q.lineTo(pts[i][0], pts[i][1]); };
+      q.lineCap = "round"; q.lineJoin = "round";
+      q.strokeStyle = "rgba(58,82,46,0.5)"; q.lineWidth = w * 2.6; path(); q.stroke();
+      q.strokeStyle = "rgba(78,96,70,0.8)"; q.lineWidth = w * 1.5; path(); q.stroke();
+      q.strokeStyle = "rgba(100,122,132,0.96)"; q.lineWidth = w; path(); q.stroke();
+    });
+    const mains = [];
+    for (let r = 0; r < 2; r++) {
+      const y0 = N * (0.22 + 0.5 * r) + (rnd() - 0.5) * 60, H = [[1, 70 + rnd() * 60], [2, 30 + rnd() * 30], [5, 16 + rnd() * 14], [11, 6 + rnd() * 5], [19, 3]].map(([k, A]) => [k, A, rnd() * 6.283]);
+      const f = (xx) => { let y = y0; for (const [k, A, ph] of H) y += A * Math.sin(6.2832 * k * xx / N + ph); return y; };
+      mains.push(f); const pts = []; for (let xx = 0; xx <= N; xx += 3) pts.push([xx, f(xx)]);
+      strokeRiver(pts, r ? 6.5 : 9);
+    }
+    for (let k = 0; k < 5; k++) { // tributaries: rise half-way between the rivers, wander, and end ON the nearer one
+      const r = k % 2, f = mains[r], g = mains[1 - r]; let xx = rnd() * N; const yS = (f(xx) + g(xx) + (r ? 0 : N)) * 0.5 % N, pts = [];
+      const steps = 70; let yy = yS; const dir = (((f(xx) - yS) % N + N * 1.5) % N - N * 0.5) > 0 ? 1 : -1;
+      for (let i = 0; i <= steps; i++) { pts.push([xx, yy]); xx += Math.sin(i * 0.31 + k) * 4 + (rnd() - 0.5) * 3; const tgt = f(xx); let dy = ((tgt - yy) % N + N * 1.5) % N - N * 0.5; if (Math.abs(dy) < 4) { pts.push([xx, yy + dy]); break; } yy += Math.sign(dy) * Math.min(Math.abs(dy), 6 + i * 0.12); }
+      strokeRiver(pts, 3.4); void dir;
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter;
+    t.anisotropy = window.__FG_MACRO_ANI != null ? window.__FG_MACRO_ANI : Math.min(4, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 4); // 1.6.0 perf: x4 is plenty for this soft, low-frequency layer (was x8)
     return t;
   })();
   const horizonHaze = (() => {
@@ -2400,10 +2469,13 @@ export function createWorld3D(canvas) {
     (() => {
       const m = new THREE.MeshBasicMaterial({ map: farmTex, color: 0xc4cab6, fog: true });
       m.onBeforeCompile = (sh) => {
-        sh.uniforms.uShadow = { value: cloudShadowTex };
-        sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;").replace("#include <map_fragment>", `
+        sh.uniforms.uShadow = { value: cloudShadowTex }; sh.uniforms.uMacro = { value: macroTex };
+        sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;\nuniform sampler2D uMacro;").replace("#include <map_fragment>", `
 #ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+  vec2 muv = mat2(${Math.cos(MACRO_ROT).toFixed(5)}, ${Math.sin(MACRO_ROT).toFixed(5)}, ${(-Math.sin(MACRO_ROT)).toFixed(5)}, ${Math.cos(MACRO_ROT).toFixed(5)}) * vMapUv * ${(1 / MACRO_REP).toFixed(5)} + vec2(0.31, 0.17);
+  vec4 mac = texture2D( uMacro, muv );
+  sampledDiffuseColor.rgb = mix( sampledDiffuseColor.rgb, mac.rgb, mac.a ); // 1.6.0 forests + rivers
   vec3 lo1 = texture2D( map, vMapUv * 0.113 + vec2(0.37, 0.61) ).rgb;
   vec3 lo2 = texture2D( map, vec2(vMapUv.y, -vMapUv.x) * 0.031 + vec2(0.2, 0.7) ).rgb;
   float l1 = dot(lo1, vec3(0.333)), l2 = dot(lo2, vec3(0.333));
@@ -2430,11 +2502,12 @@ export function createWorld3D(canvas) {
   // 1.3.6 TARGET: a small German town with a railway depot (local units: 1 = 10 world u ≈ 15 m).
   // Rail yard (12 tracks, wagons), engine shed, roundhouse + turntable, station, a river with a
   // bridge, streets with gabled roofs, a church, a few sheds/works along the yard.
-  const TOWN_Z = 1173;          // ground-frame local z (1.5.7: 1653 → 1048 for the 180 mph box): ~24 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
-  const TOWN_X = -7.7;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
+  const TOWN_Z = 1238;          // ground-frame local z (1.5.7: 1653 → 1048 for the 180 mph box): ~24 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
+  const TOWN_X = -15.3;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
   const town = new THREE.Group();
   town.position.set(TOWN_X, 0.05, TOWN_Z);
-  town.scale.set(1.5, 1.5, 1.5); // a readable town from 5 km (≈1.4 km across)
+  const TOWN_S = 1.5 * Math.sqrt(15); // 1.6.0: the town is 15x larger BY AREA (x3.873 linear on the 1.5.9 footprint, ≈ 6 km across, readable from 25,000 ft)
+  town.scale.set(TOWN_S, TOWN_S, TOWN_S);
   landG.add(town);
   const townMats = [];
   // 1.5.3: the town's structures as data (town-local x, z, half-width, half-depth, yaw) so game.js can resolve real bomb landings against them
@@ -2445,7 +2518,10 @@ export function createWorld3D(canvas) {
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     const lam = (c) => { const m = new THREE.MeshLambertMaterial({ color: c, fog: true }); townMats.push(m); return m; };
     const bas = (c, o) => { const m = new THREE.MeshBasicMaterial(Object.assign({ color: c, fog: true }, o || {})); townMats.push(m); return m; };
-    const YARD_A = 0.35; // yard / main line bearing (rad) relative to the ground frame
+    const YD_X = -13.3, YD_Z = -36.5; // the depot hall (yard-aligned (0,-39) in town-local coords): no houses on it
+    const YARD_A = 0.0; // 1.6.0: the yard / depot / factory complex lies ALONG the bomb track (was tilted 0.35 rad)
+    const KC = 0.4, VS = 0.7; // 1.6.0: the target complex keeps ~its 1.5.9 physical size (x0.28 of the x3.87 town), yard 30 % shorter, so a real stick of bombs can still catch depot AND factory
+    const CXG = new THREE.Group(); CXG.scale.set(KC, KC, KC); town.add(CXG);
     // canvas texture for the yard: ballast bed, rails, wagons in rows
     const yardTex = (() => {
       const c = document.createElement("canvas"); c.width = 128; c.height = 1024;
@@ -2472,9 +2548,9 @@ export function createWorld3D(canvas) {
       t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
       return t;
     })();
-    const yard = new THREE.Mesh(new THREE.PlaneGeometry(6.2, 58), bas(0xffffff, { map: yardTex }));
+    const yard = new THREE.Mesh(new THREE.PlaneGeometry(6.2, 58 * VS), bas(0xffffff, { map: yardTex }));
     yard.rotation.set(-Math.PI / 2, 0, YARD_A);
-    town.add(yard);
+    CXG.add(yard);
     // main line out of town both ways (a thin dark line across the countryside)
     const line = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 900), bas(0x3e3a34));
     line.rotation.set(-Math.PI / 2, 0, YARD_A); line.position.y = -0.01;
@@ -2484,7 +2560,7 @@ export function createWorld3D(canvas) {
     town.add(branch);
     const ax = (u, v) => { // yard-aligned coordinates → town local
       const c = Math.cos(YARD_A), s = Math.sin(YARD_A);
-      return [u * c + v * s, -u * s + v * c];
+      v *= VS; return [u * c + v * s, -u * s + v * c];
     };
     // freight wagons in 3D (catch the sun), engine shed, roundhouse, station
     const wagonGeo = new THREE.BoxGeometry(0.2, 0.2, 0.85);
@@ -2497,29 +2573,29 @@ export function createWorld3D(canvas) {
       pv.set(px, 0.1, pz); m4.compose(pv, yq, sc); wagons.setMatrixAt(i, m4); TL.wagons.push([px, pz, 0.1, 0.425, YARD_A]); TS.wagonM.push(m4.clone());
       const tint = 0.75 + rnd() * 0.5; wagons.setColorAt(i, new THREE.Color(0x5a4638).multiplyScalar(tint));
     }
-    town.add(wagons); TS.wagons = wagons;
-    for (let tr = 0; tr < 12; tr++) for (let j = 0; j < 13; j++) { const [tx, tz] = ax(-3.1 + 0.25 + tr * (5.7 / 11), -24 + 4 * j); TL.tracks.push([tx, tz, 0.15, 2.0, YARD_A]); }
+    CXG.add(wagons); TS.wagons = wagons;
+    for (let tr = 0; tr < 12; tr++) for (let j = 0; j < 13; j++) { const [tx, tz] = ax(-3.1 + 0.25 + tr * (5.7 / 11), -24 + 4 * j); TL.tracks.push([tx, tz, 0.15, 2.0 * VS, YARD_A]); }
     const box = (w, h, d, u, v, mat, rotExtra) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       const [px, pz] = ax(u, v); m.position.set(px, h / 2, pz); m.rotation.y = YARD_A + (rotExtra || 0);
-      town.add(m); return m;
+      CXG.add(m); return m;
     };
-    const keyB = (name, w, d, u, v, m) => { const [px, pz] = ax(u, v); TL.keys.push([px, pz, w / 2, d / 2, YARD_A, name]); TS.keyMesh.push(m); return m; };
+    const keyB = (name, w, d, u, v, m, kind) => { const [px, pz] = ax(u, v); TL.keys.push([px, pz, w / 2, d / 2, YARD_A, name, kind || "d"]); TS.keyMesh.push(m); return m; }; // kind: "d" = depot target, "f" = factory target
     const roofDark = lam(0x4a4642), brick = lam(0x7a5a4a), stone = lam(0x9a968c);
     keyB("engine shed", 2.2, 9, 4.6, 12, box(2.2, 0.7, 9, 4.6, 12, roofDark));           // engine shed (long, dark)
     keyB("station", 1.6, 5.5, -4.8, -2, box(1.6, 0.9, 5.5, -4.8, -2, stone));           // station building
     keyB("goods shed", 1.0, 1.4, -4.8, -6.2, box(1.0, 0.6, 1.4, -4.8, -6.2, brick));         // goods shed
-    keyB("works", 3.2, 1.8, 5.2, -14, box(3.2, 0.9, 1.8, 5.2, -14, brick));           // works / warehouse
-    keyB("factory hall", 2.4, 3.2, -6.2, 16, box(2.4, 1.1, 3.2, -6.2, 16, brick));           // factory hall
+    keyB("works", 3.2, 1.8, 5.2, -14, box(3.2, 0.9, 1.8, 5.2, -14, brick), "d");           // works / warehouse
+    keyB("goods hall", 2.4, 3.2, -6.2, 16, box(2.4, 1.1, 3.2, -6.2, 16, brick), "d");           // factory hall
     { // roundhouse: a 3/4 ring of stalls around a turntable
       const [cx, cz] = ax(5.5, 22);
       const tt = new THREE.Mesh(new THREE.CircleGeometry(0.8, 20), bas(0x4a4640));
-      tt.rotation.x = -Math.PI / 2; tt.position.set(cx, 0.02, cz); town.add(tt);
+      tt.rotation.x = -Math.PI / 2; tt.position.set(cx, 0.02, cz); CXG.add(tt);
       for (let k = 0; k < 14; k++) {
         const a = -0.6 + k * (4.2 / 13);
         const st = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.45, 1.5), roofDark);
         st.position.set(cx + Math.cos(a) * 1.9, 0.22, cz + Math.sin(a) * 1.9);
-        st.rotation.y = -a + Math.PI / 2; town.add(st); TL.stalls.push([st.position.x, st.position.z, 0.31, 0.75, st.rotation.y]); TS.stallMesh.push(st);
+        st.rotation.y = -a + Math.PI / 2; CXG.add(st); TL.stalls.push([st.position.x, st.position.z, 0.31, 0.75, st.rotation.y]); TS.stallMesh.push(st);
       }
     }
     // river with a bridge where the main line crosses
@@ -2542,14 +2618,14 @@ export function createWorld3D(canvas) {
     // streets (pale) + houses (walls + gabled roofs, instanced)
     const streetM = bas(0x8e8a80);
     const streets = [];
-    for (let k = -3; k <= 3; k++) streets.push([k * 7.5 - 16, 0, 0.35, 44, 0.12]);
-    for (let k = -3; k <= 3; k++) streets.push([-16, k * 6.5, 44, 0.35, 0.12]);
+    for (let k = -4; k <= 3; k++) streets.push([k * 7.5 - 12, 0, 0.35, 56, 0.12]);
+    for (let k = -4; k <= 4; k++) streets.push([-16, k * 6.5, 62, 0.35, 0.12]);
     streets.push([-8, -4, 0.45, 60, 0.55]); streets.push([-20, 10, 0.45, 50, -0.8]);
     for (const [cx, cz, w, d, rot] of streets) {
       const st = new THREE.Mesh(new THREE.PlaneGeometry(w, d), streetM);
       st.rotation.set(-Math.PI / 2, 0, rot); st.position.set(cx, 0.01, cz); town.add(st);
     }
-    const N = 520;
+    const N = 1500;
     const wallG = new THREE.BoxGeometry(1, 0.55, 1); wallG.translate(0, 0.275, 0);
     const roofG = (() => { // gable prism, ridge along x
       const v = [-0.55, 0.55, -0.58, 0.55, 0.55, -0.58, 0.55, 0.95, 0, -0.55, 0.95, 0, -0.55, 0.55, 0.58, 0.55, 0.55, 0.58];
@@ -2564,6 +2640,8 @@ export function createWorld3D(canvas) {
     const scl = new THREE.Vector3(), rq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
     const place = (x0, z0, rot, len, wid) => {
       if (n >= N) return;
+      if (Math.hypot(x0 + 14, z0 - 0.5) < 5.2) return; // the cathedral close
+      if (x0 > -3.2 && x0 < 12.5 && z0 > -16 && z0 < 10.5) return; // the target complex (yard, depot, factory)
       pv.set(x0, 0, z0); scl.set(len, 0.8 + rnd() * 0.7, wid); rq.setFromAxisAngle(up, rot);
       m4.compose(pv, rq, scl); walls.setMatrixAt(n, m4); roofs.setMatrixAt(n, m4); TL.houses.push([x0, z0, len / 2, wid / 2, rot]); TS.houseM.push(m4.clone());
       const rc = new THREE.Color(roofPal[(rnd() * roofPal.length) | 0]).multiplyScalar(0.85 + rnd() * 0.3);
@@ -2571,10 +2649,10 @@ export function createWorld3D(canvas) {
       n++;
     };
     // old town: dense blocks between the streets, west of the yard
-    for (let bx = -3; bx < 3; bx++) for (let bz = -3; bz < 3; bz++) {
-      const cx = bx * 7.5 - 16 + 3.75, cz = bz * 6.5 + 3.25;
+    for (let bx = -4; bx < 3; bx++) for (let bz = -4; bz < 4; bz++) {
+      const cx = bx * 7.5 - 12 + 3.75, cz = bz * 6.5 + 3.25;
       const dcen = Math.hypot(cx + 14, cz);
-      if (dcen > 24 && rnd() < 0.6) continue;
+      if (dcen > 24 && rnd() < 0.45) continue;
       for (let k = 0; k < 14; k++) {
         const side = k % 4, t = rnd() * 5.4 - 2.7;
         const ox = side === 0 ? t : side === 1 ? t : side === 2 ? -2.9 : 2.9;
@@ -2584,16 +2662,44 @@ export function createWorld3D(canvas) {
     }
     // villas / outskirts scattered along the roads
     while (n < N) {
-      const a = rnd() * Math.PI * 2, r = 20 + rnd() * 26;
+      const a = rnd() * Math.PI * 2, r = 16 + rnd() * 44;
       place(Math.cos(a) * r - 12, Math.sin(a) * r, rnd() * Math.PI, 0.8 + rnd() * 0.5, 0.7 + rnd() * 0.3);
     }
     walls.instanceMatrix.needsUpdate = true; roofs.instanceMatrix.needsUpdate = true;
+    walls.renderOrder = 1; // 1.6.0 perf: roofs draw first, so the (hidden) wall tops under them fail the depth test instead of being shaded then overdrawn
     town.add(walls); town.add(roofs); TS.walls = walls; TS.roofs = roofs;
-    { // church: nave + tall spire in the market square
-      const nave = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.9, 2.6), stone); nave.position.set(-14, 0.45, 0.5); town.add(nave);
-      const tw = new THREE.Mesh(new THREE.BoxGeometry(0.6, 2.0, 0.6), stone); tw.position.set(-14, 1.0, -1.1); town.add(tw);
-      const sp = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.6, 4), lam(0x3e4c46)); sp.position.set(-14, 2.8, -1.1); sp.rotation.y = Math.PI / 4; town.add(sp);
+    { // 1.6.0 CATHEDRAL (not a target): cruciform stone church with two west towers, a crossing tower and a tall spire, standing in a cleared market square — the landmark of the town
+      const slate = lam(0x4a5560), cx0 = -14, cz0 = 0.5;
+      const add = (geo, mat, x, y, z, ry) => { const m = new THREE.Mesh(geo, mat); m.position.set(cx0 + x, y, cz0 + z); if (ry) m.rotation.y = ry; town.add(m); return m; };
+      add(new THREE.BoxGeometry(1.5, 1.3, 5.2), stone, 0, 0.65, 0); add(new THREE.BoxGeometry(4.0, 1.1, 1.5), stone, 0, 0.55, 0.4); // nave + transept
+      add(new THREE.BoxGeometry(1.3, 0.35, 5.0), slate, 0, 1.45, 0); add(new THREE.BoxGeometry(3.8, 0.3, 1.3), slate, 0, 1.2, 0.4);   // roofs
+      add(new THREE.BoxGeometry(0.9, 2.6, 0.9), stone, 0, 1.3, 0.4); add(new THREE.ConeGeometry(0.7, 3.6, 4), slate, 0, 4.4, 0.4, Math.PI / 4); // crossing tower + spire
+      for (const sx of [-0.55, 0.55]) { add(new THREE.BoxGeometry(0.7, 2.4, 0.7), stone, sx, 1.2, -2.7); add(new THREE.ConeGeometry(0.5, 1.2, 4), slate, sx, 3.0, -2.7, Math.PI / 4); } // west towers
     }
+    { // 1.6.0 TRAIN DEPOT (target): a long arched train shed over the yard's throat with the station hall in front of it — in yard-aligned coordinates, at the north end of the tracks
+      const shedM = lam(0x6a6862), hallM = lam(0xa8a296), roofM = lam(0x35383a);
+      const shed = box(5.8, 1.0, 11, 6.2, -24, shedM); keyB("train depot shed", 5.8, 11, 6.2, -24, shed, "d");
+      { const [px, pz] = ax(6.2, -24); const arch = new THREE.Mesh(new THREE.CylinderGeometry(2.9, 2.9, 11, 14, 1, false, 0, Math.PI), roofM); arch.rotation.set(0, YARD_A + Math.PI / 2, Math.PI / 2); arch.position.set(px, 1.0, pz); arch.rotation.order = "YZX"; CXG.add(arch); }
+      const hall = box(7.2, 1.4, 2.6, 6.2, -35.1, hallM); keyB("train depot hall", 7.2, 2.6, 6.2, -35.1, hall, "d");
+      { const [px, pz] = ax(8.6, -35.1); const clock = new THREE.Mesh(new THREE.BoxGeometry(0.7, 2.3, 0.7), hallM); clock.position.set(px, 1.15, pz); clock.rotation.y = YARD_A; CXG.add(clock); const cap = new THREE.Mesh(new THREE.ConeGeometry(0.55, 0.9, 4), roofM); cap.position.set(px, 2.75, pz); cap.rotation.y = YARD_A + Math.PI / 4; CXG.add(cap); }
+            const [ex, ez] = ax(6.2, -35.1); TS.depotC = [ex * KC, ez * KC];
+    }
+    { // 1.6.0 FACTORY (target): a works district east of the yard — three long sawtooth halls, a power house, two tall brick chimneys and storage tanks
+      const FX = 10, hallM = lam(0x7e7468), saw = lam(0x58504a), chim = lam(0x8a4a38), tankM = lam(0xb9b4a6);
+      const keyD = (name, w, d, x, z, m, kind) => { TL.keys.push([x, z, w / 2, d / 2, 0, name, kind || "f"]); TS.keyMesh.push(m); return m; };
+      const put = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); CXG.add(m); return m; };
+      for (let i = 0; i < 3; i++) {
+        const z = -8 + i * 4.6, m = put(new THREE.BoxGeometry(11, 1.05, 3.8), hallM, FX, 0.525, z); keyD("factory hall " + "ABC"[i], 11, 3.8, FX, z, m);
+        for (let k = 0; k < 5; k++) put(new THREE.BoxGeometry(1.7, 0.3, 3.6), saw, FX - 4.4 + k * 2.2, 1.2, z); // sawtooth roof lights
+      }
+      keyD("power house", 3.4, 3.4, 19.5, -6, put(new THREE.BoxGeometry(3.4, 1.5, 3.4), hallM, 19.5, 0.75, -6));
+      keyD("chimney", 0.7, 0.7, 18, 1, put(new THREE.CylinderGeometry(0.22, 0.34, 5.2, 8), chim, 18, 2.6, 1));
+      keyD("chimney", 0.7, 0.7, 20, 5, put(new THREE.CylinderGeometry(0.2, 0.3, 4.4, 8), chim, 20, 2.2, 5));
+      for (let k = 0; k < 3; k++) put(new THREE.CylinderGeometry(0.9, 0.9, 0.9, 12), tankM, 17 + k * 2.2, 0.45, 12);
+      const sidingM = bas(0x3e3a34), sid = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 40), sidingM); sid.rotation.set(-Math.PI / 2, 0, 0); sid.position.set(4.6, 0.02, 0); CXG.add(sid); // siding along the works
+      const road = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 40), streetM); road.rotation.set(-Math.PI / 2, 0, 0); road.position.set(23, 0.012, 3); CXG.add(road);
+    }
+    for (const A of [TL.wagons, TL.tracks, TL.stalls, TL.keys]) for (const e of A) { e[0] *= KC; e[1] *= KC; e[2] *= KC; e[3] *= KC; } // 1.6.0: complex coordinates → town-local
   }
   town.traverse((o) => { if (o.material && !o.material._earthFog) { o.material._earthFog = true; o.material.onBeforeCompile = earthFog; } });
 
@@ -2608,7 +2714,7 @@ export function createWorld3D(canvas) {
   let _ifI = 0, _isI = 0;
   function bombBurst(lx, lz, big) { // ground-frame local coords
     const f = impactFlash[_ifI]; _ifI = (_ifI + 1) % impactFlash.length;
-    f.sp.position.set(lx, 0.6, lz); f.life = f.max = 0.5; f.big = big ? 1.5 : 1; f.sp.visible = true;
+    f.sp.position.set(lx, 0.6, lz); f.life = f.max = 1.1; f.big = big ? 2.4 : 1.2; f.sp.visible = true; // 1.6.0: longer, bigger flashes so a stick reads as a line of explosions from 25,000 ft
     for (let k = 0; k < 3; k++) {
       const p = impactSmoke[_isI]; _isI = (_isI + 1) % impactSmoke.length;
       p.sp.position.set(lx + (Math.random() - 0.5) * 1.2, 0.4 + k * 0.6, lz + (Math.random() - 0.5) * 1.2);
@@ -2646,7 +2752,7 @@ export function createWorld3D(canvas) {
     updateImpacts(dt); updateCrashFx(dt);
   }
   const rubbleMat = new THREE.MeshLambertMaterial({ color: 0x2c2824, fog: true }); rubbleMat.onBeforeCompile = earthFog; rubbleMat._earthFog = true;
-  const craterGeo = new THREE.CircleGeometry(0.62, 14); craterGeo.rotateX(-Math.PI / 2);
+  const craterGeo = new THREE.CircleGeometry(0.34, 14); craterGeo.rotateX(-Math.PI / 2);
   const craterMat = new THREE.MeshBasicMaterial({ color: 0x2b2620, fog: true, transparent: true, opacity: 0.82, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   craterMat.onBeforeCompile = earthFog; craterMat._earthFog = true;
   TS.craters = new THREE.InstancedMesh(craterGeo, craterMat, 320); TS.craters.count = 0; TS.craters.frustumCulled = false; town.add(TS.craters);
@@ -2731,7 +2837,7 @@ export function createWorld3D(canvas) {
   }
   // ev: { u, v (town-local), houses:[ids], wagons:[ids], stalls:[ids], keys:[[id, hits]] }
   function townStrike(ev) {
-    bombBurst(TOWN_X + 1.5 * ev.u, TOWN_Z + 1.5 * ev.v, true);
+    bombBurst(TOWN_X + TOWN_S * ev.u, TOWN_Z + TOWN_S * ev.v, true);
     if (TS.nCr < 320) {
       _tp.set(ev.u, 0.07, ev.v); _tq.identity(); const sc = 0.8 + Math.random() * 0.5; _ts.set(sc, 1, sc);
       TS.craters.setMatrixAt(TS.nCr++, _tmpM.compose(_tp, _tq, _ts)); TS.craters.count = TS.nCr; TS.craters.instanceMatrix.needsUpdate = true;
@@ -5020,13 +5126,14 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   scene.add(trMesh);
   // kinds: 0 our guns, 1 other B-17 gunners, 2 Bf 109 — [core rgb, glow rgb, core px, glow px, core a, glow a, tail keep]
   // 1.5.1: the player's 1.5.0 tracer is the reference. EVERY tracer (own guns, box gunners, 109s, 190s, P-51s) uses the same look.
+  // 1.6.0: tracer looks re-measured from the DCS reference clip (ffmpeg frames; 21 streaks): thin hot streak, length/width 5-17 : 1, ~3-5 px thick on a 1430 px frame, flat brightness head-to-tail (no taper), +65 luma core over a +45 halo, near-white core in a saturated rim.
+  // Kind 0 (the PLAYER's own guns) is deliberately UNCHANGED. 1 = AI B-17 gunners: slightly more ORANGE than the 1.5.9 yellow; 2 = Bf 109 and 3 = Fw 190: RED; 4 = P-51: ORANGE.
   const TR_KIND = [
-    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // own guns
-    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // box gunners / P-51s
-    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // German fighters (1.5.0 was red)
-    [[1.0, 0.36, 0.2], [1.0, 0.1, 0.03], 1.2, 3.0, 0.95, 0.34, 0.4], // 1.5.3 (kind 3)
-    [[0.9, 1.0, 0.82], [0.28, 1.0, 0.42], 1.2, 3.2, 0.95, 0.36, 0.4], // 1.5.4 (kind 4): P-51 six-gun fire — bright white-green, unmistakable against the yellow gunners / orange 109s / red 190s
-    //: Fw 190 — clear red / red-orange core + red glow (slightly bolder so it reads at range)
+    [[1.0, 0.88, 0.46], [1.0, 0.62, 0.14], 1.0, 2.6, 0.9, 0.26, 0.4], // own guns (UNCHANGED since 1.5.1)
+    [[1.0, 0.78, 0.28], [1.0, 0.44, 0.04], 1.0, 2.7, 0.92, 0.32, 0.4], // AI box gunners: more orange than the player's yellow
+    [[1.0, 0.52, 0.44], [1.0, 0.07, 0.05], 1.1, 3.0, 0.95, 0.42, 0.4], // Bf 109: red (hot white-pink core, red rim)
+    [[1.0, 0.52, 0.44], [1.0, 0.07, 0.05], 1.25, 3.2, 0.95, 0.46, 0.4], // Fw 190: red, slightly bolder
+    [[1.0, 0.64, 0.24], [1.0, 0.30, 0.02], 1.2, 3.1, 0.95, 0.40, 0.4], // P-51: orange
   ];
   let trBuf = null, trN = 0;
   const _tf = new THREE.Vector3(), _tc = new THREE.Vector3();
@@ -5192,6 +5299,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     decalInfo: (which) => { const g = shipGroup(which); if (!g) return []; g.updateMatrixWorld(true); return (g.userData.decals || []).map((m) => { const p = new THREE.Vector3(); m.getWorldPosition(p); const n = new THREE.Vector3(0, 0, 1).applyQuaternion(m.getWorldQuaternion(new THREE.Quaternion())); return { x: p.x, y: p.y, z: p.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x }; }); },
     get flakStats() { return Object.assign({}, flakStats); },
     _ownShip: ownShip,
+    _perfDbg: { macroTex, farmTex, ground, town, get walls() { return TS.walls; }, get roofs() { return TS.roofs; } },
     get speckStats() { return speckStats.slice(); },
     dropBombs,
     trailDump: (k) => { const c = conAnchors[k]; return c ? c.pts.map((p) => [+p.x.toFixed(1), +p.y.toFixed(1), +p.z.toFixed(1), +p.age.toFixed(1)]) : null; },
@@ -5202,7 +5310,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     crashFx: (x, z, size) => { crashImpact(new THREE.Vector3(x, groundWY(), z), size || 1, "hull"); detStats.crashed.hull++; },
     get decalStats() { return decalStats; }, decalDump() { const o = []; for (const g of [ownShip, ...friendlyPool]) { const L = (g.userData.decals || []).concat(g.userData.tears || []); if (!L.length) continue; g.updateMatrixWorld(true);
       o.push({ vis: g.visible, n: L.length, items: L.map((m) => { const bb = new THREE.Box3().setFromObject(m); const c = bb.getCenter(new THREE.Vector3()); return { v: m.visible, vc: m.geometry.attributes.position.count, x: +c.x.toFixed(2), y: +c.y.toFixed(2), z: +c.z.toFixed(2), sz: +bb.getSize(new THREE.Vector3()).length().toFixed(2) }; }) }); } return o; }, get detStats() { return JSON.parse(JSON.stringify(detStats)); }, get crashStats() { return Object.assign({ decals: Math.min(CR.nSc, CR.SC_N), sites: CR.sites.length, fire: CR.fire.filter((f) => f.life > 0).length, smoke: CR.smoke.filter((p) => p.life > 0).length }, CR.stats); }, groundWY,
-    townGeom: { X: TOWN_X, Z: TOWN_Z, K: K_LAND, S: 1.5, wy: CAM.y * (1 - EARTH_K) + EARTH_K * (GROUND_Y + 0.05) },
+    groundBurst: (u, v) => { bombBurst(TOWN_X + TOWN_S * u, TOWN_Z + TOWN_S * v, true); if (TS.nCr < 320) { _tp.set(u, 0.07, v); _tq.identity(); _ts.set(1.2, 1, 1.2); TS.craters.setMatrixAt(TS.nCr++, _tmpM.compose(_tp, _tq, _ts)); TS.craters.count = TS.nCr; TS.craters.instanceMatrix.needsUpdate = true; } },
+    townGeom: { X: TOWN_X, Z: TOWN_Z, K: K_LAND, S: TOWN_S, g: BOMB_G, spacing: BOMB_SPACING, wy: CAM.y * (1 - EARTH_K) + EARTH_K * (GROUND_Y + 0.05) },
     townLayout: () => TL,
     townStrike,
     townReset,

@@ -19,6 +19,7 @@
       <div id="wavebox"><span id="tgtlabel">TGT</span> <span id="wave">2:00</span></div>
       <div id="fpsbox"><span id="fps">--</span> FPS</div>
       <div id="boxbox">B-17s <span id="boxcount">19/19</span></div>
+      <div id="escbox">ESC <span id="esccount">20/20</span></div>
       <div id="killbox">AXIS <span id="bandits">36/36</span><span id="youk"> · YOU <span id="kills">0</span></span></div>
     </div>
     <div id="missionbar">
@@ -37,6 +38,7 @@
     <div id="callout"></div>
   </div>
   <button id="endMissionBtn" type="button" class="hidden">END MISSION</button>
+  <button id="tryAgainBtn" type="button" class="hidden">TRY AGAIN</button>
   <div id="lockHint" class="hidden">CLICK TO PLAY<small>mouse aims · hold left button to fire · Esc releases · [ ] sensitivity</small></div>
   <div id="title" class="overlay">
     <div class="panel">
@@ -55,7 +57,13 @@
         <button type="button" class="diffBtn" data-diff="easy" role="radio" aria-checked="true">EASY<small>lead markers on 109s</small></button>
         <button type="button" class="diffBtn" data-diff="medium" role="radio" aria-checked="false">MEDIUM<small>no markers</small></button>
       </div>
+      <div id="voiceRow" role="radiogroup" aria-label="Crew voices">
+        <span class="diffLabel">CREW VOICES</span>
+        <button type="button" class="diffBtn" data-voice="on" role="radio" aria-checked="true">ON<small>intercom &amp; radio calls</small></button>
+        <button type="button" class="diffBtn" data-voice="off" role="radio" aria-checked="false">OFF<small>text callouts only</small></button>
+      </div>
       <button id="startBtn" type="button">MAN THE GUNS</button>
+      <p class="credit">Crew voices synthesised with Kokoro-82M (Apache-2.0) &middot; radio processing in-house</p>
     </div>
   </div>
   <div id="gameover" class="overlay hidden">
@@ -119,6 +127,7 @@
     })();
   </script>
   <script src="audio.js"></script>
+  <script src="voice.js"></script>
   <script src="combat.js"></script>
   <script src="game.js"></script>
 </body>
