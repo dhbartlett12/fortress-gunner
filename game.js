@@ -30,6 +30,18 @@
   // Cycle 127: allow look-down so plane-aim tracks diving fighters (was 0.04 → glued to lead pip)
   const PITCH_MIN = -1.55; // 1.3.5: ~−89°, straight down past our own wings/fuselage (no cap)
   const PITCH_MAX = 1.54;  // ~88°, straight overhead
+  // 1.6.1 TAIL GUNNER (B-17G Cheyenne): look AFT, ±30° traverse, −40°/+30° elevation
+  const TAIL_YAW = 30 * Math.PI / 180;
+  const TAIL_PITCH_MAX = 30 * Math.PI / 180;
+  const TAIL_PITCH_MIN = -40 * Math.PI / 180;
+  const TAIL_BASE_YAW = Math.PI; // looking aft (−Z)
+  const STATIONS = {
+    top: { id: "top", label: "TOP", eye: { x: 0, y: 0, z: 0 }, yawBase: null, yawLim: null, pitchMin: PITCH_MIN, pitchMax: PITCH_MAX,
+      muzzle: { x: 0.3, y: -0.5, z: 1.6 }, sx: [0.44, 0.56], sy: 0.80 },
+    // eye at Cheyenne opening: aft tip of ownShip cone (local to top-turret CAM origin)
+    tail: { id: "tail", label: "TAIL", eye: { x: 0, y: -1.20, z: -14.35 }, yawBase: TAIL_BASE_YAW, yawLim: TAIL_YAW, pitchMin: TAIL_PITCH_MIN, pitchMax: TAIL_PITCH_MAX,
+      muzzle: { x: 0.07, y: -0.12, z: 1.8 }, sx: [0.47, 0.53], sy: 0.48 },
+  };
 
   // --- Flight model (see FLIGHT_MODEL.md) ---
   // 1 world unit = 100 feet. Bomber-relative: +Z north (nose), +Y up, +X starboard.
@@ -2557,13 +2569,19 @@
       // goes; the rack clunks + thump, and our own ship lurches up (gunner.lift) — the bombs are 3D sticks in world3d
       if (window.FGAudio && window.FGAudio.bombsAway && !downSeq) window.FGAudio.bombsAway();
       const sticks = [];
+      // 1.6.1: when the player is a straggler the box is drawn +pk·1500 z / +pk·240 y ahead of the camera.
+      // Bombs must be released on the GEO/town track (as if from the box), not at the camera-relative offset —
+      // otherwise they fall straight down under the displaced formation and never reach the target.
+      const pkDrop = playerStragK();
       for (const f of friendlies) {
         if (!friendlyOk(f) || f.jett) continue;
         const lead = f.sq === "lead" && f.el === 0;
         const delay = lead ? 0 : rand(0.35, 1.6) + rand(-0.5, 0.9); // 1.6.0: + per-ship release scatter (±) so the pattern is a ragged column, not one stick
         // 1.5.2: ships stacked behind the lead (trailing squadrons) pickle when the town passes under THEM, not at the lead's call — their sticks landed ~1.5 km short
-        const behind = clamp((CAM.z - f.z) / VF, 0, 14);
-        sticks.push({ x: f.x, y: f.y - 1.6, z: f.z + 0.6, n: lead ? 12 : f.sq === "lead" ? 8 : 6, delay: delay + behind, lead, f });
+        // Use slot-relative depth (undo pk slide) so trailing pickle timing stays correct from a straggler view too
+        const fzTrack = f.z - pkDrop * 1500, fyTrack = f.y - pkDrop * 240;
+        const behind = clamp((CAM.z - fzTrack) / VF, 0, 14);
+        sticks.push({ x: f.x, y: fyTrack - 1.6, z: fzTrack + 0.6, n: lead ? 12 : f.sq === "lead" ? 8 : 6, delay: delay + behind, lead, f });
         f.liftAt = mission.t + delay; f.bayCloseAt = mission.t + delay + behind + (lead ? 12 : f.sq === "lead" ? 8 : 6) * 0.12 + 1.0;
       }
       if (bomber && !bomber.dead && !downSeq && !bomber.jett) { sticks.push({ own: true, x: CAM.x, y: CAM.y - 5.2, z: CAM.z - 3.5, n: 6, delay: 0.5 }); gunner.liftAt = mission.t + 0.5; }
@@ -2580,6 +2598,8 @@
       }
     }
     jettisonStep(dt); jbStep(dt);
+    // 1.6.1: keep world3d bomb meshes on the sim clock (draw/sync may not run between advance() steps)
+    if (World3D && World3D.testBombAdvance && ((mission && mission.bombsAway) || (mission && mission.jb && mission.jb.length))) World3D.testBombAdvance(dt, mission.geo);
     if (mission.bombsAway) {
       mission.post += dt;
       tgtStep(dt);
@@ -2624,7 +2644,7 @@
     if (!downSeq) {
       viewRoll = lerp(viewRoll, (bomber ? bomber.list * 0.5 : 0) + turnRoll, 1 - Math.pow(0.3, dt));
       if (forcedRoll != null) viewRoll = forcedRoll; // test hook
-      EYE.x = CAM.x; EYE.y = CAM.y; EYE.z = CAM.z;
+      syncEye();
     }
   }
 
@@ -2845,6 +2865,8 @@
   const endBtn = document.getElementById("endMissionBtn"), tryBtn = document.getElementById("tryAgainBtn");
   if (endBtn) endBtn.addEventListener("click", (ev) => { ev.stopPropagation(); if (downSeq && !downSeq.finished) finishDownSeq(); });
   if (tryBtn) tryBtn.addEventListener("click", (ev) => { ev.stopPropagation(); if (downSeq && !downSeq.finished) { tryBtn.classList.add("hidden"); if (endBtn) endBtn.classList.add("hidden"); restartGame(); } }); // 1.6.0: TRY AGAIN from the chute: straight into a fresh mission
+  const stationBtn = document.getElementById("stationBtn");
+  if (stationBtn) stationBtn.addEventListener("click", (ev) => { ev.stopPropagation(); ev.preventDefault(); if (state === "PLAYING" && !downSeq) toggleStation(); });
   const gunner = {
     yaw: 0.15,
     pitch: 0.08,
@@ -2852,6 +2874,7 @@
     pitchV: 0,
     shake: 0,
     recoil: 0,
+    station: "top",
   };
 
   const guns = {
@@ -2966,11 +2989,14 @@
           rockets,
           fall: downSeq ? { phase: downSeq.phase === "done" ? "chute" : downSeq.phase, eye: { x: EYE.x, y: EYE.y, z: EYE.z }, ship: downSeq.ship, sway: downSeq.sway || 0, chuteT: downSeq.chute ? downSeq.chute.t : 0 } : null,
           chutes,
+          station: gunner.station || "top",
+          stationEye: gunStation().eye,
         });
       },
       render() { api.render(); },
       setTracers: api.setTracers ? (b, n) => api.setTracers(b, n) : null,
       dropBombs: api.dropBombs ? (l) => api.dropBombs(l) : null,
+      testBombAdvance: api.testBombAdvance ? (dt, geo) => api.testBombAdvance(dt, geo) : null,
       crashFx: api.crashFx ? (x, z, sz) => api.crashFx(x, z, sz) : null, groundWY: api.groundWY ? () => api.groundWY() : null,
       townGeom: api.townGeom || null, townLayout: api.townLayout ? () => api.townLayout() : null, townStrike: api.townStrike ? (e) => api.townStrike(e) : null, groundBurst: api.groundBurst ? (u, v) => api.groundBurst(u, v) : null, townReset: api.townReset ? () => api.townReset() : null, // 1.5.3: real bomb landings on the town
       rayShip: api.rayShip ? (w, a, b, c, d, e, f, p) => api.rayShip(w, a, b, c, d, e, f, p) : null,
@@ -3132,6 +3158,8 @@
     gunner.pitch = 0.10;
     gunner.yawV = 0;
     gunner.pitchV = 0;
+    gunner.station = "top";
+    setStationUI();
     gunner.shake = 0;
     gunner.recoil = 0;
     guns.heat = 0;
@@ -3145,10 +3173,12 @@
     guns.flashLR = [0, 0];
     cpuKills = 0;
     downSeq = null; chutes = []; flakBursts = []; rockets = []; stragNow = null; BOX_C.x = BOX_C0.x; BOX_C.y = BOX_C0.y; BOX_C.z = BOX_C0.z;
-    if (World3D && World3D.clearDamage) World3D.clearDamage(); // 1.3.8: holes / decals from the last mission EYE.x = CAM.x; EYE.y = CAM.y; EYE.z = CAM.z; viewRoll = 0;
+    if (World3D && World3D.clearDamage) World3D.clearDamage(); // 1.3.8: holes / decals from the last mission
+    syncEye(); viewRoll = 0;
     if (window.FGAudio && window.FGAudio.reset) window.FGAudio.reset();
     injuryReset();
     setDownHud(false);
+    setStationUI();
     bomber = {
       health: 100,
       flash: 0,
@@ -3745,6 +3775,48 @@
   }
 
   // ----- 3D -----
+
+  function gunStation() { return STATIONS[gunner.station === "tail" ? "tail" : "top"]; }
+  function syncEye() {
+    const st = gunStation(), e = st.eye;
+    EYE.x = CAM.x + e.x; EYE.y = CAM.y + e.y; EYE.z = CAM.z + e.z;
+  }
+  function clampStationAim() {
+    const st = gunStation();
+    if (st.yawLim != null && st.yawBase != null) {
+      let d = gunner.yaw - st.yawBase;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      d = clamp(d, -st.yawLim, st.yawLim);
+      gunner.yaw = wrapYaw(st.yawBase + d);
+    } else {
+      gunner.yaw = wrapYaw(gunner.yaw);
+    }
+    gunner.pitch = clamp(gunner.pitch, st.pitchMin, st.pitchMax);
+  }
+  function setStation(id) {
+    const next = id === "tail" ? "tail" : "top";
+    if (gunner.station === next) return;
+    const prev = gunner.station;
+    gunner.station = next;
+    // snap aim into the new station's natural look (keep mission state; aim within station arcs)
+    if (next === "tail") { gunner.yaw = TAIL_BASE_YAW; gunner.pitch = clamp(-0.02, TAIL_PITCH_MIN, TAIL_PITCH_MAX); }
+    else if (prev === "tail") { gunner.yaw = 0.12; gunner.pitch = clamp(gunner.pitch, PITCH_MIN, PITCH_MAX); }
+    gunner.yawV = 0; gunner.pitchV = 0;
+    clampStationAim();
+    syncEye();
+    setStationUI();
+  }
+  function toggleStation() { setStation(gunner.station === "tail" ? "top" : "tail"); }
+  function setStationUI() {
+    const btn = document.getElementById("stationBtn");
+    if (!btn) return;
+    const st = gunStation();
+    btn.textContent = st.label;
+    btn.classList.toggle("tail", st.id === "tail");
+    btn.classList.remove("chin");
+    btn.classList.toggle("hidden", state !== "PLAYING" || !!(downSeq));
+  }
+
   function lookBasis() {
     const cy = Math.cos(gunner.yaw), sy = Math.sin(gunner.yaw);
     const cp = Math.cos(gunner.pitch), sp = Math.sin(gunner.pitch);
@@ -3928,16 +4000,18 @@
   }
 
   function muzzleWorld(side) {
+    const st = gunStation();
     const m = World3D && World3D.muzzles && World3D.muzzles[side];
-    // 1.3.8: only trust the renderer's muzzle if it's at our turret (it's stale for a frame after a bail-out → restart)
-    if (m && (m.x || m.y || m.z) && Math.abs(m.x - CAM.x) + Math.abs(m.y - CAM.y) + Math.abs(m.z - CAM.z) < 4) return m;
+    // 1.3.8/1.6.1: trust renderer muzzles near the active station eye (top turret or chin)
+    const ex = EYE.x, ey = EYE.y, ez = EYE.z;
+    if (m && (m.x || m.y || m.z) && Math.abs(m.x - ex) + Math.abs(m.y - ey) + Math.abs(m.z - ez) < 5) return m;
     const b = lookBasis();
-    const x = side ? 0.3 : -0.3, y = -0.5, z = 1.6;
+    const x = side ? st.muzzle.x : -st.muzzle.x, y = st.muzzle.y, z = st.muzzle.z;
     return {
-      x: CAM.x + b.rx * x + b.ux * y + b.fx * z,
-      y: CAM.y + b.ry * x + b.uy * y + b.fy * z,
-      z: CAM.z + b.rz * x + b.uz * y + b.fz * z,
-      sx: W * (side ? 0.56 : 0.44), sy: H * 0.8,
+      x: ex + b.rx * x + b.ux * y + b.fx * z,
+      y: ey + b.ry * x + b.uy * y + b.fy * z,
+      z: ez + b.rz * x + b.uz * y + b.fz * z,
+      sx: W * (side ? st.sx[1] : st.sx[0]), sy: H * st.sy,
     };
   }
 
@@ -4109,9 +4183,9 @@
     const oy = (Math.random() + Math.random() - 1) * spread;
     // converge on the sight line at ~320u (harmonised guns)
     const R = 320;
-    const cx = CAM.x + (b.fx + b.rx * ox + b.ux * oy) * R;
-    const cy = CAM.y + (b.fy + b.ry * ox + b.uy * oy) * R;
-    const cz = CAM.z + (b.fz + b.rz * ox + b.uz * oy) * R;
+    const cx = EYE.x + (b.fx + b.rx * ox + b.ux * oy) * R;
+    const cy = EYE.y + (b.fy + b.ry * ox + b.uy * oy) * R;
+    const cz = EYE.z + (b.fz + b.rz * ox + b.uz * oy) * R;
     // 1.3.9: + the precomputed gravity/drag correction for this look direction
     const cc = aimCorr(b.fx, b.fy, b.fz);
     const ax = cx + cc[0], ay = cy + cc[1], az = cz + cc[2];
@@ -4606,6 +4680,7 @@
     input.fire = false;
     callouts = []; // the intercom is gone
     setDownHud(true);
+    setStationUI();
     if (window.FGAudio && window.FGAudio.bail) window.FGAudio.bail();
     pushCallout("YOU'RE OUT — PULL THE RIPCORD", 1.6, true);
     VX.bailed = true; // 1.6.0: the crew's last words are out; under the canopy the intercom is gone (voices go silent ~3 s after the jump)
@@ -4783,7 +4858,7 @@
     if (a < 0) a += TAU;
     return a - Math.PI;
   }
-  function clampPitch(p) { return clamp(p, PITCH_MIN, PITCH_MAX); }
+  function clampPitch(p) { const st = gunStation(); return clamp(p, st.pitchMin, st.pitchMax); }
   function lookRadPerPx() {
     // finger across the full screen width ≈ 2.2× the horizontal field of view
     const hfov = 2 * Math.atan(Math.tan(FOV * 0.5) * (W / Math.max(1, H)));
@@ -4794,6 +4869,7 @@
     // lookXSign = -1: drag right → look right (3D camera-right = world -X)
     gunner.yaw = wrapYaw(gunner.yaw - dxPx * k);
     gunner.pitch = clampPitch(gunner.pitch - dyPx * k);
+    clampStationAim();
   }
   function applyAim(dt) {
     // keyboard (desktop) only: constant rate while held, stops dead on release
@@ -4806,6 +4882,7 @@
     if (ax || ay) {
       gunner.yaw = wrapYaw(gunner.yaw + ax * 1.4 * dt);
       gunner.pitch = clampPitch(gunner.pitch + ay * 1.0 * dt);
+      clampStationAim();
     }
   }
 
@@ -5969,7 +6046,117 @@
     }
     ctx.restore();
   }
+
+  function drawTailOverlay() {
+    // 1.6.1: ONE olive/khaki welded Cheyenne frame + SOLID opaque bottom (ref_tail_bottom).
+    // Twin .50s are 3D (world3d tailGuns) — track aim, flash, tracers. 2D draws frame + ring sight only.
+    ctx.save();
+    const u = Math.min(W, H) / 412;
+    const topY = H * 0.02, botY = H * 0.80;
+    const topL = W * 0.34, topR = W * 0.66;
+    const botL = W * 0.10, botR = W * 0.90;
+    const barT = W * 0.026;
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const edgeX = (side, t) => side < 0 ? lerp(topL, botL, t) : lerp(topR, botR, t);
+    const edgeY = (t) => lerp(topY, botY, t);
+    const tSill = 0.50;
+    const sillY = edgeY(tSill), sillL = edgeX(-1, tSill), sillR = edgeX(1, tSill);
+    const winL = W * 0.22, winR = W * 0.78, winT = sillY, winB = H * 0.72;
+
+    // Soft vignette OUTSIDE trapezoid only (above sill) — do NOT darken ground below window (solid mass will cover)
+    ctx.beginPath(); ctx.rect(0, 0, W, winB);
+    ctx.moveTo(topL, topY); ctx.lineTo(topR, topY); ctx.lineTo(botR, botY); ctx.lineTo(botL, botY); ctx.closePath();
+    ctx.fillStyle = "rgba(8, 10, 8, 0.22)"; ctx.fill("evenodd");
+
+    // Upper glass tint
+    ctx.beginPath();
+    ctx.moveTo(topL + barT * 0.4, topY + barT * 0.5);
+    ctx.lineTo(topR - barT * 0.4, topY + barT * 0.5);
+    ctx.lineTo(sillR - barT * 0.3, sillY); ctx.lineTo(sillL + barT * 0.3, sillY); ctx.closePath();
+    ctx.fillStyle = "rgba(155, 180, 200, 0.06)"; ctx.fill();
+    ctx.save(); ctx.clip();
+    const rg = ctx.createLinearGradient(W * 0.25, topY, W * 0.6, sillY);
+    rg.addColorStop(0, "rgba(255,255,255,0)"); rg.addColorStop(0.42, "rgba(220,235,250,0.09)");
+    rg.addColorStop(0.55, "rgba(220,235,250,0)"); rg.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = rg; ctx.fillRect(0, 0, W, sillY + 2);
+    ctx.restore();
+
+    const solidBar = (x0, y0, x1, y1, thick) => {
+      const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      const hx = nx * thick * 0.5, hy = ny * thick * 0.5;
+      const g = ctx.createLinearGradient(x0 - hx, y0 - hy, x0 + hx, y0 + hy);
+      g.addColorStop(0, "#6e6a48"); g.addColorStop(0.15, "#565234"); g.addColorStop(0.5, "#3a3824");
+      g.addColorStop(0.85, "#4a4630"); g.addColorStop(1, "#2a2818");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(x0 - hx, y0 - hy); ctx.lineTo(x1 - hx, y1 - hy);
+      ctx.lineTo(x1 + hx, y1 + hy); ctx.lineTo(x0 + hx, y0 + hy); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = "rgba(200, 195, 150, 0.32)"; ctx.lineWidth = Math.max(1, thick * 0.07);
+      ctx.beginPath(); ctx.moveTo(x0 - hx * 0.75, y0 - hy * 0.75); ctx.lineTo(x1 - hx * 0.75, y1 - hy * 0.75); ctx.stroke();
+      const n = Math.max(3, Math.floor(len / (thick * 1.05)));
+      for (let i = 1; i < n; i++) {
+        const t = i / n, px = x0 + dx * t, py = y0 + dy * t, rr = Math.max(1.4, thick * 0.11);
+        const rg2 = ctx.createRadialGradient(px - rr * 0.3, py - rr * 0.3, 0, px, py, rr);
+        rg2.addColorStop(0, "#e8d070"); rg2.addColorStop(0.55, "#c4a030"); rg2.addColorStop(1, "#6a5010");
+        ctx.fillStyle = rg2; ctx.beginPath(); ctx.arc(px, py, rr, 0, 6.28); ctx.fill();
+      }
+    };
+
+    // Trapezoid + sill + window (same olive) — vertical posts continue INTO solid bottom mass
+    solidBar(topL, topY, botL, botY, barT);
+    solidBar(topR, topY, botR, botY, barT);
+    solidBar(topL, topY, topR, topY, barT);
+    const t1 = 0.30;
+    solidBar(edgeX(-1, t1), edgeY(t1), edgeX(1, t1), edgeY(t1), barT);
+    solidBar(sillL, sillY, sillR, sillY, barT);
+    // Window sides continue down past winB into the solid mass
+    const massBot = H;
+    solidBar(winL, winT, winL, massBot, barT);
+    solidBar(winR, winT, winR, massBot, barT);
+    solidBar(winL, winB, winR, winB, barT);
+
+    // SOLID opaque bottom (ref_tail_bottom): everything below sight window — no ground bleed
+    ctx.fillStyle = "#0c0e0a";
+    ctx.fillRect(0, winB, W, H - winB);
+    // faint panel edges + olive brown variation
+    const pg = ctx.createLinearGradient(0, winB, 0, H);
+    pg.addColorStop(0, "rgba(28, 30, 22, 0.95)"); pg.addColorStop(0.35, "rgba(18, 20, 14, 0.98)"); pg.addColorStop(1, "#080a06");
+    ctx.fillStyle = pg; ctx.fillRect(0, winB, W, H - winB);
+    ctx.strokeStyle = "rgba(50, 54, 38, 0.45)"; ctx.lineWidth = 1.2 * u;
+    for (const yy of [winB + H * 0.06, winB + H * 0.14, winB + H * 0.22]) {
+      ctx.beginPath(); ctx.moveTo(W * 0.05, yy); ctx.lineTo(W * 0.95, yy); ctx.stroke();
+    }
+    // rivets on dark mass
+    ctx.fillStyle = "#8a7028";
+    for (let row = 0; row < 3; row++) for (let i = 0; i < 18; i++) {
+      ctx.beginPath();
+      ctx.arc(W * (0.06 + i * 0.05), winB + (8 + row * 14) * u, 1.5 * u, 0, 6.28); ctx.fill();
+    }
+    // re-draw vertical posts over the mass so they read continuous
+    solidBar(winL, winT, winL, massBot, barT);
+    solidBar(winR, winT, winR, massBot, barT);
+    solidBar(winL, winB, winR, winB, barT);
+
+    // Ring-and-post (2D silhouette low in window; barrels are 3D behind/through)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(winL + barT * 0.55, winT + barT * 0.55, (winR - winL) - barT * 1.1, (winB - winT) - barT * 1.1);
+    ctx.clip();
+    const rx = W * 0.5, ry = winT + (winB - winT) * 0.58, rr = 13 * u;
+    ctx.strokeStyle = "rgba(8, 10, 8, 0.9)"; ctx.lineWidth = 2.0 * u;
+    ctx.beginPath(); ctx.arc(rx, ry, rr, 0, 6.28); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(rx - rr * 0.9, ry); ctx.lineTo(rx + rr * 0.9, ry);
+    ctx.moveTo(rx, ry - rr * 0.9); ctx.lineTo(rx, ry + rr * 0.45); ctx.stroke();
+    ctx.fillStyle = "rgba(10, 12, 10, 0.92)";
+    ctx.fillRect(rx - 2 * u, ry + rr * 0.08, 4 * u, Math.max(8 * u, winB - ry - rr - 4 * u));
+    ctx.fillRect(rx - 10 * u, ry + rr, 20 * u, 2.5 * u);
+    ctx.restore();
+    ctx.restore();
+  }
+
   function drawPlexiOverlay() {
+    if (gunner.station === "tail") { drawTailOverlay(); return; }
     // 1.3.2: thin, non-obstructive Sperry dome facsimile — a slim frame arc that only shows in
     // the corners, a hair-thin ring rail on the very bottom edge, faint plexiglass glints and
     // smudges. Nothing solid over the sky.
@@ -6742,8 +6929,9 @@
   function mouseLook(dx, dy) {
     if (!dx && !dy) return;
     const k = mouseRadPerPx();
-    gunner.yaw = wrapYaw(gunner.yaw - dx * k); // continuous yaw, wraps forever
+    gunner.yaw = wrapYaw(gunner.yaw - dx * k); // continuous yaw, wraps forever (tail clamps via clampStationAim)
     gunner.pitch = clampPitch(gunner.pitch - dy * k);
+    clampStationAim();
     gunner.yawV = 0; gunner.pitchV = 0;
   }
   function becomeDesktop() { if (!mouse.desktop) { mouse.desktop = true; document.body.classList.add("desktop"); } }
@@ -6920,12 +7108,14 @@
     gameoverEl.classList.add("hidden");
     resetRun();
     state = "PLAYING";
+    setStationUI();
     pushCallout(mouse.desktop ? "BOX OF 19 — MOUSE AIMS · HOLD LEFT BUTTON TO FIRE" : MISSION_MODE ? "BOX OF 19 — LEFT FIRE · RIGHT AIM" : "LEFT FIRE · RIGHT LOOK", 1.4); // 1.4.0-web
   }
   function restartGame() {
     gameoverEl.classList.add("hidden"); if (endBtn) endBtn.classList.add("hidden"); if (tryBtn) tryBtn.classList.add("hidden");
     resetRun();
     state = "PLAYING";
+    setStationUI();
     pushCallout("NEW CREW — SAME SKY", 2.0);
   }
 
@@ -6978,16 +7168,18 @@
     }),
     aim: (yaw, pitch) => {
       if (yaw != null) gunner.yaw = wrapYaw(yaw);
-      if (pitch != null) gunner.pitch = clamp(pitch, PITCH_MIN, PITCH_MAX);
+      if (pitch != null) gunner.pitch = pitch;
+      clampStationAim();
       gunner.yawV = 0; gunner.pitchV = 0;
       input.swipeAimX = 0; input.swipeAimY = 0;
       input.stickVX = 0; input.stickVY = 0; input.stickActive = false;
     },
     lookAt: (x, y, z) => {
-      const dx = x - CAM.x, dy = y - CAM.y, dz = z - CAM.z;
+      const dx = x - EYE.x, dy = y - EYE.y, dz = z - EYE.z;
       gunner.yaw = wrapYaw(Math.atan2(dx, dz));
       const horiz = Math.hypot(dx, dz);
-      gunner.pitch = clamp(Math.atan2(dy, horiz), PITCH_MIN, PITCH_MAX);
+      gunner.pitch = Math.atan2(dy, horiz);
+      clampStationAim();
       gunner.yawV = 0; gunner.pitchV = 0;
       input.swipeAimX = 0; input.swipeAimY = 0;
       input.stickVX = 0; input.stickVY = 0; input.stickActive = false;
@@ -7008,7 +7200,8 @@
       const dx = lp.x - CAM.x, dy = lp.y - CAM.y, dz = lp.z - CAM.z;
       gunner.yaw = wrapYaw(Math.atan2(dx, dz));
       const horiz = Math.hypot(dx, dz);
-      gunner.pitch = clamp(Math.atan2(dy, horiz), PITCH_MIN, PITCH_MAX);
+      gunner.pitch = Math.atan2(dy, horiz);
+      clampStationAim();
       gunner.yawV = 0; gunner.pitchV = 0;
       input.swipeAimX = 0; input.swipeAimY = 0;
       input.stickVX = 0; input.stickVY = 0; input.stickActive = false;
@@ -7193,13 +7386,16 @@
     p51Tracers: () => tracers.filter((t) => t.p51 && t.life > 0).map((t) => ({ x: t.x, y: t.y, z: t.z, vx: t.vx, vy: t.vy, vz: t.vz })), // 1.5.4 test hook
     // 1.4.0 harness: look in the SHIP frame (deg; yaw 0 = nose, 180 = tail) and set our ship's health (drives the damage look)
     lookFromEye: (x, y, z) => { const dx = x - EYE.x, dy = y - EYE.y, dz = z - EYE.z; gunner.yaw = wrapYaw(Math.atan2(dx, dz)); gunner.pitch = clamp(Math.atan2(dy, Math.hypot(dx, dz)), PITCH_MIN, PITCH_MAX); gunner.yawV = 0; gunner.pitchV = 0; return [gunner.yaw, gunner.pitch]; },
-    look: (ywDeg, ptDeg) => { gunner.yaw = wrapYaw(ywDeg * Math.PI / 180); gunner.pitch = clamp(ptDeg * Math.PI / 180, PITCH_MIN, PITCH_MAX); gunner.yawV = 0; gunner.pitchV = 0; input.swipeAimX = 0; input.swipeAimY = 0; input.stickVX = 0; input.stickVY = 0; input.stickActive = false; },
+    station: () => gunner.station || "top",
+    setStation,
+    toggleStation,
+    look: (ywDeg, ptDeg) => { gunner.yaw = wrapYaw(ywDeg * Math.PI / 180); gunner.pitch = ptDeg * Math.PI / 180; clampStationAim(); gunner.yawV = 0; gunner.pitchV = 0; input.swipeAimX = 0; input.swipeAimY = 0; input.stickVX = 0; input.stickVY = 0; input.stickActive = false; },
     setHealth: (h) => { if (bomber) { bomber.health = h; healthEngineCheck(); } },
     forceRoll: (r) => { forcedRoll = r == null ? null : +r; if (forcedRoll != null) viewRoll = forcedRoll; },
     // aim at a WORLD point through the (rolled / spinning) airframe: yaw/pitch are in the ship's frame
     lookAtWorld: (x, y, z) => {
       const O = ownPose().o === CAM ? EYE : EYE; const l = toOwnLocal(ownPose(), x - O.x, y - O.y, z - O.z);
-      gunner.yaw = wrapYaw(Math.atan2(l.x, l.z)); gunner.pitch = clamp(Math.atan2(l.y, Math.hypot(l.x, l.z)), PITCH_MIN, PITCH_MAX);
+      gunner.yaw = wrapYaw(Math.atan2(l.x, l.z)); gunner.pitch = Math.atan2(l.y, Math.hypot(l.x, l.z)); clampStationAim();
       gunner.yawV = 0; gunner.pitchV = 0; input.swipeAimX = 0; input.swipeAimY = 0; input.stickVX = 0; input.stickVY = 0; input.stickActive = false;
     },
     ownLocalToWorld: (x, y, z) => { // own frame → world (forward rotation Rz → Rx → Ry)

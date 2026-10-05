@@ -238,14 +238,17 @@ export function createWorld3D(canvas) {
   })();
   const smokeTex = (() => {
     const c = document.createElement("canvas");
-    c.width = c.height = 64;
+    c.width = c.height = 128;
     const x = c.getContext("2d");
-    const g = x.createRadialGradient(32, 32, 2, 32, 32, 31);
-    g.addColorStop(0, "rgba(255,255,255,0.9)");
-    g.addColorStop(0.55, "rgba(255,255,255,0.45)");
-    g.addColorStop(1, "rgba(255,255,255,0)");
-    x.fillStyle = g;
-    x.fillRect(0, 0, 64, 64);
+    // 1.6.1: softer, more irregular puff (no hard disc edge when seen from above)
+    for (let i = 0; i < 5; i++) {
+      const cx = 64 + (i - 2) * 8, cy = 64 + ((i % 3) - 1) * 6, rr = 48 - i * 4;
+      const g = x.createRadialGradient(cx, cy, 2, cx, cy, rr);
+      g.addColorStop(0, "rgba(255,255,255," + (0.55 - i * 0.06) + ")");
+      g.addColorStop(0.45, "rgba(255,255,255," + (0.28 - i * 0.03) + ")");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      x.fillStyle = g; x.fillRect(0, 0, 128, 128);
+    }
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     return t;
@@ -1358,7 +1361,7 @@ export function createWorld3D(canvas) {
   const bombMesh = new THREE.InstancedMesh(bombGeo, new THREE.MeshStandardMaterial({ color: 0x2a2c22, roughness: 0.65, metalness: 0.25 }), BOMB_N);
   bombMesh.count = 0; bombMesh.frustumCulled = false; scene.add(bombMesh);
   // 1.5.3: faint vertical streak above each falling bomb (slight motion blur once it is moving fast) — one instanced mesh, one draw
-  const bombStreak = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.12, 1, 5, 1, true), new THREE.MeshBasicMaterial({ color: 0x9a9d96, transparent: true, opacity: 0.17, depthWrite: false, side: THREE.DoubleSide }), BOMB_N);
+  const bombStreak = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.08, 0.18, 1, 5, 1, true), new THREE.MeshBasicMaterial({ color: 0xc8c4b8, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide }), BOMB_N); // 1.6.1: more visible fall streak
   bombStreak.count = 0; bombStreak.frustumCulled = false; scene.add(bombStreak);
   const BOMB_G = 5.013, BOMB_AZ = 0.18, BOMB_CZ = 0.0016, BOMB_SPACING = 0.34; // 1.6.0: g 6.54 → 5.013 (drag-slowed fall: ~45 s from 25,000 ft instead of 39 s), 0.34 s between bombs of a stick (was 0.12) so a stick is a visible LINE of explosions; // 1.5.8: g = 9.81 m/s² at 1.5 m/u; from 25,000 ft (5,080 u) a stick reaches the ground ~39 s after release (was ~24 s from 1,400 u); it trails the airframe (drag) by BOMB_AZ·t² + BOMB_CZ·t³
   const _tw = new THREE.Vector3();
@@ -1376,25 +1379,28 @@ export function createWorld3D(canvas) {
   }
   function updateBombs(dt) {
     let n = 0;
-    for (let i = bombs.length - 1; i >= 0; i--) { const b = bombs[i]; b.t += dt; if (b.t > 60 || b.landed) bombs.splice(i, 1); }
+    for (let i = bombs.length - 1; i >= 0; i--) { const b = bombs[i]; b.t += dt; if (b.t > 90 || (b.landed && (b.landAge = (b.landAge || 0) + dt) > 2.5)) bombs.splice(i, 1); }
     for (const b of bombs) {
       if (b.t < 0 || n >= BOMB_N) continue;
+      if (b.landed) continue; // keep in array briefly for stats; not drawn
       const t = b.t;
-      { // 1.5.8: fixed in the GROUND frame (it keeps its forward speed along the original track) — same model as game.js tgtStep, so the sticks land where the verdict says
+      { // 1.5.8/1.6.1: fixed in the GROUND frame — same model as game.js tgtStep. Release x0/y0/z0 must already be on the geo track (game.js undoes straggler camera offset).
         const G0 = _geoNow, ca = Math.cos(G0.rot || 0), sa = Math.sin(G0.rot || 0), lagf = (q) => BOMB_AZ * q * q + BOMB_CZ * q * q * q;
-        if (b.gx == null) { const dx = b.x0 - G0.x, dz = b.z0 - G0.z; b.gx = dx * ca - dz * sa; b.gz = dx * sa + dz * ca; b.t0 = t; }
+        if (b.gx == null) { const dx = b.x0 - G0.x, dz = b.z0 - G0.z; b.gx = dx * ca - dz * sa; b.gz = dx * sa + dz * ca; b.t0 = t; b.yaw0 = G0.rot || 0; }
         const gz = b.gz + AIR_DRIFT * (t - b.t0) - lagf(t) + lagf(b.t0);
         _bp.set(G0.x + b.gx * ca + gz * sa, b.y0 - 0.5 * BOMB_G * t * t, G0.z - b.gx * sa + gz * ca); }
       town.getWorldPosition(_tw);
-      if (_bp.y <= _tw.y + 0.5) { b.landed = true; (bombStats.land || (bombStats.land = [])).push({ dx: Math.round(_bp.x - _tw.x), dz: Math.round(_bp.z - _tw.z), t: +t.toFixed(1), own: !!b.own, lead: !!b.lead }); continue; }
+      if (_bp.y <= _tw.y + 0.5) { b.landed = true; b.landAge = 0; (bombStats.land || (bombStats.land = [])).push({ x: +_bp.x.toFixed(1), z: +_bp.z.toFixed(1), dx: Math.round(_bp.x - _tw.x), dz: Math.round(_bp.z - _tw.z), t: +t.toFixed(1), own: !!b.own, lead: !!b.lead, y0: +b.y0.toFixed(1) }); continue; }
       const vy = -BOMB_G * t, vz = -2 * BOMB_AZ * t - 3 * BOMB_CZ * t * t;
-      const pitch = Math.atan2(-vy, 53.6 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05; // nose down as the fall steepens
-      const wob = Math.min(1, t / 1.2) * 0.07; // slight tumble/precession as they drop
-      _be.set(pitch + Math.sin(t * 2.7 + b.ph) * wob, (_geoNow.rot || 0) + b.yawJ + Math.cos(t * 2.1 + b.ph) * wob, b.rollS * t * 0.3, "YXZ"); _bq.setFromEuler(_be); // 1.6.0: the nose follows the bomb's own ground track (its release heading), not the airframe that turns away
-      { const dd = camera.position.distanceTo(_bp), sc = Math.max(1.3, dd / 450); _bs.set(sc, sc, sc); } _bm.compose(_bp, _bq, _bs); bombMesh.setMatrixAt(n, _bm);
-      const sl = Math.min(7, Math.max(0, (-vy - 6) * 0.2)); // streak length grows with fall speed
-      if (sl > 0.4) { _bsq.identity(); _bss.set(1, sl, 1); _bsp.set(_bp.x, _bp.y + sl * 0.5, _bp.z + 0.25 * sl * 0.2); _bm.compose(_bsp, _bsq, _bss); } else { _bss.set(0.0001, 0.0001, 0.0001); _bm.compose(_bp, _bsq.identity(), _bss); }
+      const pitch = Math.atan2(-vy, 53.6 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05;
+      const wob = Math.min(1, t / 1.2) * 0.07;
+      _be.set(pitch + Math.sin(t * 2.7 + b.ph) * wob, (b.yaw0 != null ? b.yaw0 : (_geoNow.rot || 0)) + b.yawJ + Math.cos(t * 2.1 + b.ph) * wob, b.rollS * t * 0.3, "YXZ"); _bq.setFromEuler(_be);
+      // 1.6.1: scale more aggressively so sticks stay readable from a straggler several km back / looking down
+      { const dd = camera.position.distanceTo(_bp), sc = Math.max(2.0, dd / 280); _bs.set(sc, sc, sc); } _bm.compose(_bp, _bq, _bs); bombMesh.setMatrixAt(n, _bm);
+      const sl = Math.min(22, Math.max(0, (-vy - 4) * 0.35)); // longer streak
+      if (sl > 0.4) { _bsq.identity(); _bss.set(1.6, sl, 1.6); _bsp.set(_bp.x, _bp.y + sl * 0.5, _bp.z); _bm.compose(_bsp, _bsq, _bss); } else { _bss.set(0.0001, 0.0001, 0.0001); _bm.compose(_bp, _bsq.identity(), _bss); }
       bombStreak.setMatrixAt(n, _bm); n++;
+      b._wx = _bp.x; b._wy = _bp.y; b._wz = _bp.z;
     }
     bombMesh.count = n; bombMesh.instanceMatrix.needsUpdate = true; bombStats.live = n;
     bombStreak.count = n; bombStreak.instanceMatrix.needsUpdate = true;
@@ -1565,7 +1571,7 @@ export function createWorld3D(canvas) {
       ownShip.position.set(CAM.x, CAM.y + _lift, CAM.z);
       ownShip.rotation.set(-_liftP, 0, -(opts.roll || 0));
     }
-    ownShip.visible = !(FALL && FALL.ship && FALL.ship.crashed); // 1.6.0: she has hit the ground (the crash fx stay)
+    ownShip.visible = !(FALL && FALL.ship && FALL.ship.crashed) && !window.__FG_FREECAM; // 1.6.0/1.6.1: hide in freecam so altitude stills see the town
     ownShip.updateMatrixWorld(true);
     updateOwnWreck(FALL, rdt);
     const engs = (opts.own && opts.own.engines) || [];
@@ -2092,7 +2098,9 @@ export function createWorld3D(canvas) {
     if (rb.last) rb.v += rb.last.distanceTo(pos) / 9; else rb.last = new THREE.Vector3();
     rb.last.copy(pos); rb.lastT = pnow();
     if (rb.pts.length >= RIB_P) rb.pts.shift();
-    rb.pts.push({ x: pos.x, y: pos.y, z: pos.z, age: 0, life: o.life || 2.5, w0: o.w0 || 0.4, w1: o.w1 || 4, a: o.a || 0.5, c: o.col || [0.2, 0.2, 0.2], v: rb.v, dz: o.drift == null ? 55 : o.drift });
+    let w0 = o.w0 || 0.4, w1 = o.w1 || 4, a = o.a || 0.5;
+    if (CR.tailDim && typeof key === "string" && key.indexOf("own") === 0) { w0 *= 0.2; w1 *= 0.25; a *= 0.15; } // almost hide own trails looking aft // 1.6.1: aft view along own trails — keep readable, not a white wall
+    rb.pts.push({ x: pos.x, y: pos.y, z: pos.z, age: 0, life: o.life || 2.5, w0, w1, a, c: o.col || [0.2, 0.2, 0.2], v: rb.v, dz: o.drift == null ? 55 : o.drift });
     ribStats.emits++;
   }
   const _rbA = new THREE.Vector3(), _rbT = new THREE.Vector3(), _rbS = new THREE.Vector3();
@@ -2505,10 +2513,29 @@ export function createWorld3D(canvas) {
   const TOWN_Z = 1238;          // ground-frame local z (1.5.7: 1653 → 1048 for the 180 mph box): ~24 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
   const TOWN_X = -15.3;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
   const town = new THREE.Group();
-  town.position.set(TOWN_X, 0.05, TOWN_Z);
+  town.position.set(TOWN_X, 3.2, TOWN_Z); // 1.6.1: ~22 world-u above the farm plane (was 0.05→0.35u) so depth precision at 25,000 ft does not z-fight the town away
   const TOWN_S = 1.5 * Math.sqrt(15); // 1.6.0: the town is 15x larger BY AREA (x3.873 linear on the 1.5.9 footprint, ≈ 6 km across, readable from 25,000 ft)
   town.scale.set(TOWN_S, TOWN_S, TOWN_S);
   landG.add(town);
+  // 1.6.1: city blotch on landG (not inside town scale) — a dark disc + street grid that always reads from 25,000 ft
+  {
+    const N = 256, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
+    x.fillStyle = "#2e2a26"; x.beginPath(); x.arc(N/2, N/2, N*0.48, 0, Math.PI*2); x.fill();
+    x.fillStyle = "#252220"; x.beginPath(); x.arc(N/2-10, N/2, N*0.22, 0, Math.PI*2); x.fill();
+    x.strokeStyle = "rgba(170,160,150,0.45)"; x.lineWidth = 2;
+    for (let i = -5; i <= 5; i++) {
+      x.beginPath(); x.moveTo(20, N/2 + i*18); x.lineTo(N-20, N/2 + i*18); x.stroke();
+      x.beginPath(); x.moveTo(N/2 + i*18, 20); x.lineTo(N/2 + i*18, N-20); x.stroke();
+    }
+    x.fillStyle = "rgba(40,70,90,0.55)"; // river through city
+    x.fillRect(N*0.42, 10, N*0.08, N-20);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.92, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -12, polygonOffsetUnits: -12 });
+    // size in landG units: town is ~TOWN_S*60 across; use ~90 so blotch ≈ town footprint in world
+    const blot = new THREE.Mesh(new THREE.CircleGeometry(TOWN_S * 55, 48), mat);
+    blot.rotation.x = -Math.PI / 2; blot.position.set(TOWN_X, 0.35, TOWN_Z); blot.renderOrder = 4; blot.frustumCulled = false;
+    landG.add(blot);
+  }
   const townMats = [];
   // 1.5.3: the town's structures as data (town-local x, z, half-width, half-depth, yaw) so game.js can resolve real bomb landings against them
   const TL = { houses: [], keys: [], stalls: [], wagons: [], tracks: [] };
@@ -2516,8 +2543,8 @@ export function createWorld3D(canvas) {
   {
     let seed = 1936;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    const lam = (c) => { const m = new THREE.MeshLambertMaterial({ color: c, fog: true }); townMats.push(m); return m; };
-    const bas = (c, o) => { const m = new THREE.MeshBasicMaterial(Object.assign({ color: c, fog: true }, o || {})); townMats.push(m); return m; };
+    const lam = (c) => { const m = new THREE.MeshLambertMaterial({ color: c, fog: true, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8 }); townMats.push(m); return m; };
+    const bas = (c, o) => { const m = new THREE.MeshBasicMaterial(Object.assign({ color: c, fog: true, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8 }, o || {})); townMats.push(m); return m; };
     const YD_X = -13.3, YD_Z = -36.5; // the depot hall (yard-aligned (0,-39) in town-local coords): no houses on it
     const YARD_A = 0.0; // 1.6.0: the yard / depot / factory complex lies ALONG the bomb track (was tilted 0.35 rad)
     const KC = 0.4, VS = 0.7; // 1.6.0: the target complex keeps ~its 1.5.9 physical size (x0.28 of the x3.87 town), yard 30 % shorter, so a real stick of bombs can still catch depot AND factory
@@ -2635,16 +2662,16 @@ export function createWorld3D(canvas) {
     })();
     const walls = new THREE.InstancedMesh(wallG, lam(0xb4ada0), N);
     const roofs = new THREE.InstancedMesh(roofG, lam(0xffffff), N);
-    const roofPal = [0x94543f, 0x7e4a3a, 0xa0624a, 0x6e6660, 0x7a7268, 0x8a4e3c];
+    const roofPal = [0xb85438, 0xa04430, 0xc46840, 0x8a3c2c, 0x9a5038, 0x6e6660] // 1.6.1: hotter reds so roof mass reads from altitude;
     let n = 0;
     const scl = new THREE.Vector3(), rq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
     const place = (x0, z0, rot, len, wid) => {
       if (n >= N) return;
       if (Math.hypot(x0 + 14, z0 - 0.5) < 5.2) return; // the cathedral close
       if (x0 > -3.2 && x0 < 12.5 && z0 > -16 && z0 < 10.5) return; // the target complex (yard, depot, factory)
-      pv.set(x0, 0, z0); scl.set(len, 0.8 + rnd() * 0.7, wid); rq.setFromAxisAngle(up, rot);
+      pv.set(x0, 0, z0); scl.set(len, 1.0 + rnd() * 0.9, wid); rq.setFromAxisAngle(up, rot); // 1.6.1 taller mass
       m4.compose(pv, rq, scl); walls.setMatrixAt(n, m4); roofs.setMatrixAt(n, m4); TL.houses.push([x0, z0, len / 2, wid / 2, rot]); TS.houseM.push(m4.clone());
-      const rc = new THREE.Color(roofPal[(rnd() * roofPal.length) | 0]).multiplyScalar(0.85 + rnd() * 0.3);
+      const rc = new THREE.Color(roofPal[(rnd() * roofPal.length) | 0]).multiplyScalar(0.95 + rnd() * 0.25);
       roofs.setColorAt(n, rc); walls.setColorAt(n, new THREE.Color(1, 1, 1).multiplyScalar(0.85 + rnd() * 0.2));
       n++;
     };
@@ -2657,24 +2684,24 @@ export function createWorld3D(canvas) {
         const side = k % 4, t = rnd() * 5.4 - 2.7;
         const ox = side === 0 ? t : side === 1 ? t : side === 2 ? -2.9 : 2.9;
         const oz = side === 0 ? -2.3 : side === 1 ? 2.3 : t * 0.8;
-        place(cx + ox, cz + oz, side < 2 ? 0 : Math.PI / 2, 0.9 + rnd() * 0.9, 0.7 + rnd() * 0.3);
+        place(cx + ox, cz + oz, side < 2 ? 0 : Math.PI / 2, 1.5 + rnd() * 1.4, 1.15 + rnd() * 0.55); // 1.6.1 larger roofs
       }
     }
     // villas / outskirts scattered along the roads
     while (n < N) {
       const a = rnd() * Math.PI * 2, r = 16 + rnd() * 44;
-      place(Math.cos(a) * r - 12, Math.sin(a) * r, rnd() * Math.PI, 0.8 + rnd() * 0.5, 0.7 + rnd() * 0.3);
+      place(Math.cos(a) * r - 12, Math.sin(a) * r, rnd() * Math.PI, 1.0 + rnd() * 0.7, 0.85 + rnd() * 0.4);
     }
     walls.instanceMatrix.needsUpdate = true; roofs.instanceMatrix.needsUpdate = true;
     walls.renderOrder = 1; // 1.6.0 perf: roofs draw first, so the (hidden) wall tops under them fail the depth test instead of being shaded then overdrawn
     town.add(walls); town.add(roofs); TS.walls = walls; TS.roofs = roofs;
-    { // 1.6.0 CATHEDRAL (not a target): cruciform stone church with two west towers, a crossing tower and a tall spire, standing in a cleared market square — the landmark of the town
+    { // 1.6.0/1.6.1 CATHEDRAL: landmark scaled up so the spire reads from altitude
       const slate = lam(0x4a5560), cx0 = -14, cz0 = 0.5;
       const add = (geo, mat, x, y, z, ry) => { const m = new THREE.Mesh(geo, mat); m.position.set(cx0 + x, y, cz0 + z); if (ry) m.rotation.y = ry; town.add(m); return m; };
-      add(new THREE.BoxGeometry(1.5, 1.3, 5.2), stone, 0, 0.65, 0); add(new THREE.BoxGeometry(4.0, 1.1, 1.5), stone, 0, 0.55, 0.4); // nave + transept
-      add(new THREE.BoxGeometry(1.3, 0.35, 5.0), slate, 0, 1.45, 0); add(new THREE.BoxGeometry(3.8, 0.3, 1.3), slate, 0, 1.2, 0.4);   // roofs
-      add(new THREE.BoxGeometry(0.9, 2.6, 0.9), stone, 0, 1.3, 0.4); add(new THREE.ConeGeometry(0.7, 3.6, 4), slate, 0, 4.4, 0.4, Math.PI / 4); // crossing tower + spire
-      for (const sx of [-0.55, 0.55]) { add(new THREE.BoxGeometry(0.7, 2.4, 0.7), stone, sx, 1.2, -2.7); add(new THREE.ConeGeometry(0.5, 1.2, 4), slate, sx, 3.0, -2.7, Math.PI / 4); } // west towers
+      add(new THREE.BoxGeometry(1.8, 1.6, 6.2), stone, 0, 0.8, 0); add(new THREE.BoxGeometry(4.8, 1.35, 1.8), stone, 0, 0.68, 0.45); // nave + transept
+      add(new THREE.BoxGeometry(1.55, 0.42, 6.0), slate, 0, 1.75, 0); add(new THREE.BoxGeometry(4.6, 0.36, 1.55), slate, 0, 1.45, 0.45);   // roofs
+      add(new THREE.BoxGeometry(1.15, 3.4, 1.15), stone, 0, 1.7, 0.45); add(new THREE.ConeGeometry(0.95, 5.2, 4), slate, 0, 5.9, 0.45, Math.PI / 4); // crossing tower + spire (taller)
+      for (const sx of [-0.7, 0.7]) { add(new THREE.BoxGeometry(0.85, 3.1, 0.85), stone, sx, 1.55, -3.2); add(new THREE.ConeGeometry(0.65, 1.8, 4), slate, sx, 3.9, -3.2, Math.PI / 4); } // west towers
     }
     { // 1.6.0 TRAIN DEPOT (target): a long arched train shed over the yard's throat with the station hall in front of it — in yard-aligned coordinates, at the north end of the tracks
       const shedM = lam(0x6a6862), hallM = lam(0xa8a296), roofM = lam(0x35383a);
@@ -2699,9 +2726,76 @@ export function createWorld3D(canvas) {
       const sidingM = bas(0x3e3a34), sid = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 40), sidingM); sid.rotation.set(-Math.PI / 2, 0, 0); sid.position.set(4.6, 0.02, 0); CXG.add(sid); // siding along the works
       const road = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 40), streetM); road.rotation.set(-Math.PI / 2, 0, 0); road.position.set(23, 0.012, 3); CXG.add(road);
     }
+
+    { // 1.6.1 ALTITUDE LANDMARKS: a few very large masses (not targets) so the town reads as a city from 25,000 ft
+      const big = lam(0xb8a090), bigR = lam(0xa04028), dark = lam(0x4a4540);
+      const put = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); town.add(m); return m; };
+      for (let i = 0; i < 3; i++) { put(new THREE.BoxGeometry(4.5, 2.2, 3.2), big, -22 - i * 5.5, 1.1, -6 + i * 2); put(new THREE.BoxGeometry(4.6, 0.5, 3.3), bigR, -22 - i * 5.5, 2.35, -6 + i * 2); }
+      put(new THREE.BoxGeometry(14, 2.8, 4.0), dark, -6, 1.4, 22); put(new THREE.BoxGeometry(14.2, 0.55, 4.2), bigR, -6, 2.95, 22);
+      for (let i = 0; i < 5; i++) { put(new THREE.BoxGeometry(2.2, 3.4, 2.0), big, 8 + i * 2.6, 1.7, 14); put(new THREE.BoxGeometry(2.3, 0.4, 2.1), bigR, 8 + i * 2.6, 3.5, 14); }
+    }
     for (const A of [TL.wagons, TL.tracks, TL.stalls, TL.keys]) for (const e of A) { e[0] *= KC; e[1] *= KC; e[2] *= KC; e[3] *= KC; } // 1.6.0: complex coordinates → town-local
   }
+
+  // ===== 1.6.1 TOWN FROM ALTITUDE: a dark built-up footprint + street grid so the town reads from 25,000 ft
+  // as a real city mass (roofs alone were ~2 px at 20 km and vanished into farmland). No sky sprites — ground only.
+  {
+    const N = 512, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
+    x.fillStyle = "#0000"; x.clearRect(0, 0, N, N);
+    // irregular urban blotch (darker paved / built-up)
+    x.fillStyle = "rgba(42, 38, 34, 1)";
+    x.beginPath();
+    let sd = 77; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    const cx = N * 0.48, cy = N * 0.52, rad = N * 0.46;
+    x.moveTo(cx + rad, cy);
+    for (let i = 1; i <= 24; i++) {
+      const a = i / 24 * Math.PI * 2, rr = rad * (0.72 + R() * 0.4);
+      x.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+    }
+    x.closePath(); x.fill();
+    // denser core
+    x.fillStyle = "rgba(32, 28, 26, 1)";
+    x.beginPath(); x.arc(cx - N * 0.04, cy, rad * 0.45, 0, Math.PI * 2); x.fill();
+    // street grid (light)
+    x.strokeStyle = "rgba(180, 170, 160, 0.5)"; x.lineWidth = 2.5;
+    for (let i = -6; i <= 6; i++) {
+      const o = i * (N * 0.055);
+      x.beginPath(); x.moveTo(cx - rad * 0.85, cy + o); x.lineTo(cx + rad * 0.85, cy + o); x.stroke();
+      x.beginPath(); x.moveTo(cx + o, cy - rad * 0.85); x.lineTo(cx + o, cy + rad * 0.85); x.stroke();
+    }
+    // diagonal boulevards
+    x.strokeStyle = "rgba(200, 195, 185, 0.4)"; x.lineWidth = 3;
+    x.beginPath(); x.moveTo(cx - rad * 0.7, cy - rad * 0.5); x.lineTo(cx + rad * 0.75, cy + rad * 0.55); x.stroke();
+    x.beginPath(); x.moveTo(cx - rad * 0.6, cy + rad * 0.65); x.lineTo(cx + rad * 0.55, cy - rad * 0.4); x.stroke();
+    // rail yard dark strip (reads from altitude)
+    x.fillStyle = "rgba(35, 33, 30, 0.75)";
+    x.save(); x.translate(cx + N * 0.08, cy - N * 0.08); x.rotate(-0.35);
+    x.fillRect(-N * 0.06, -N * 0.22, N * 0.12, N * 0.44); x.restore();
+    // river glint through town
+    x.strokeStyle = "rgba(90, 130, 150, 0.55)"; x.lineWidth = 5;
+    x.beginPath(); x.moveTo(cx - rad * 0.9, cy + rad * 0.2);
+    x.quadraticCurveTo(cx, cy + rad * 0.35, cx + rad * 0.85, cy - rad * 0.1); x.stroke();
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    const fpMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }); // 1.6.1: no earth-fog washout at 20 km
+    townMats.push(fpMat);
+    // town-local: cover the built-up area (~±50 units outskirts). World size ≈ 50*TOWN_S*K_LAND ≈ 2 km radius blotch.
+    const under = new THREE.Mesh(new THREE.CircleGeometry(72, 32), new THREE.MeshBasicMaterial({ color: 0x3a3530, fog: false, depthWrite: false, transparent: true, opacity: 0.85, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 }));
+    under.rotation.x = -Math.PI / 2; under.position.set(-8, 0.06, 2); under.renderOrder = 2; under.frustumCulled = false; town.add(under); townMats.push(under.material);
+    const fp = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), fpMat);
+    fp.rotation.x = -Math.PI / 2; fp.position.set(-8, 0.12, 2); fp.renderOrder = 3; fp.frustumCulled = false;
+    town.add(fp);
+    // industrial / depot darker pad (extra contrast near targets)
+    const padMat = new THREE.MeshBasicMaterial({ color: 0x2a2824, transparent: true, opacity: 0.75, fog: false, depthWrite: false });
+    townMats.push(padMat);
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(28, 36), padMat);
+    pad.rotation.x = -Math.PI / 2; pad.position.set(2, 0.025, -8); pad.frustumCulled = false; town.add(pad);
+  }
+  // 1.6.1: keep town meshes drawing at long range (instanced houses had default frustum spheres that culled early)
+  if (TS.walls) { TS.walls.frustumCulled = false; TS.roofs.frustumCulled = false; }
+  town.traverse((o) => { if (o.isMesh || o.isInstancedMesh) o.frustumCulled = false; });
+
   town.traverse((o) => { if (o.material && !o.material._earthFog) { o.material._earthFog = true; o.material.onBeforeCompile = earthFog; } });
+  town.traverse((o) => { if (o.isMesh || o.isInstancedMesh) { o.renderOrder = Math.max(o.renderOrder || 0, 2); if (o.material && !o.material.polygonOffset) { o.material.polygonOffset = true; o.material.polygonOffsetFactor = -8; o.material.polygonOffsetUnits = -8; } } });
 
   // bomb bursts + smoke columns on the target (children of the ground frame → move with the ground)
   const impactFlash = [], impactSmoke = [];
@@ -2712,15 +2806,19 @@ export function createWorld3D(canvas) {
     sp.visible = false; landG.add(sp); impactSmoke.push({ sp, life: 0, max: 1, vy: 0, s0: 1, s1: 4, a: 0.6 });
   }
   let _ifI = 0, _isI = 0;
-  function bombBurst(lx, lz, big) { // ground-frame local coords
+  function bombBurst(lx, lz, big) { // ground-frame local coords (landG). 1.6.1: much bigger so a stick reads from a straggler several km back
+    const mul = big ? 3.6 : 2.0;
     const f = impactFlash[_ifI]; _ifI = (_ifI + 1) % impactFlash.length;
-    f.sp.position.set(lx, 0.6, lz); f.life = f.max = 1.1; f.big = big ? 2.4 : 1.2; f.sp.visible = true; // 1.6.0: longer, bigger flashes so a stick reads as a line of explosions from 25,000 ft
-    for (let k = 0; k < 3; k++) {
+    f.sp.position.set(lx, 0.8, lz); f.life = f.max = 1.6; f.big = mul; f.sp.visible = true;
+    // second flash slightly offset for volume
+    { const f2 = impactFlash[_ifI]; _ifI = (_ifI + 1) % impactFlash.length;
+      f2.sp.position.set(lx + (Math.random() - 0.5) * 0.8, 1.2, lz + (Math.random() - 0.5) * 0.8); f2.life = f2.max = 1.1; f2.big = mul * 0.7; f2.sp.visible = true; }
+    for (let k = 0; k < 5; k++) {
       const p = impactSmoke[_isI]; _isI = (_isI + 1) % impactSmoke.length;
-      p.sp.position.set(lx + (Math.random() - 0.5) * 1.2, 0.4 + k * 0.6, lz + (Math.random() - 0.5) * 1.2);
-      p.life = p.max = 50 + Math.random() * 30; p.vy = 0.5 + Math.random() * 0.5 + k * 0.15;
-      p.s0 = 1.6 + k * 0.4; p.s1 = 10 + Math.random() * 9; p.a = k === 0 ? 0.85 : 0.6;
-      p.sp.material.color.setHex(k === 0 ? 0x5a5048 : 0x2e2b28);
+      p.sp.position.set(lx + (Math.random() - 0.5) * 2.0, 0.5 + k * 0.7, lz + (Math.random() - 0.5) * 2.0);
+      p.life = p.max = 55 + Math.random() * 35; p.vy = 0.7 + Math.random() * 0.7 + k * 0.2;
+      p.s0 = (2.2 + k * 0.55) * (big ? 1.3 : 1); p.s1 = (14 + Math.random() * 12) * (big ? 1.4 : 1); p.a = k === 0 ? 0.9 : 0.65;
+      p.sp.material.color.setHex(k === 0 ? 0x6a5e50 : 0x2a2724);
       p.sp.visible = true;
     }
   }
@@ -2759,13 +2857,33 @@ export function createWorld3D(canvas) {
   // ===== 1.5.8 CRASH SITES: where a hull / tail / wing hits the ground: fireball + flicker flames, a smoke column that climbs for ~30 s, a persistent scorch + debris-field decals (instanced, ground-fixed so they stream aft
   // with the farmland), and a distance-delayed boom. All of it lives in landG (local units = world / 7); a B-17 hull is a ~300 m fireball seen from 7.6 km, a tail ~40 %, a wing ~60 %. =====
   const CR = { fire: [], smoke: [], sites: [], nSc: 0, SC_N: 520, sm: 0, fi: 0, stats: { n: 0, hull: 0, tail: 0, wing: 0, puffs: 0 } };
-  for (let i = 0; i < 72; i++) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); sp.visible = false; landG.add(sp); CR.fire.push({ sp, life: 0, max: 1, s: 1, fl: 0 }); }
-  for (let i = 0; i < 260; i++) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x2a2724, transparent: true, depthWrite: false, fog: true })); sp.visible = false; landG.add(sp); CR.smoke.push({ sp, life: 0, max: 1, vy: 0, s0: 1, s1: 4, a: 0.6, vx: 0 }); }
-  const scGeo = new THREE.CircleGeometry(1, 14); scGeo.rotateX(-Math.PI / 2);
-  const scMat = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: true, transparent: true, opacity: 0.88, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+  // 1.6.1: larger pools — parachute view is uncapped ("go big"); turret still only sees distant sites
+  for (let i = 0; i < 140; i++) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); sp.visible = false; landG.add(sp); CR.fire.push({ sp, life: 0, max: 1, s: 1, fl: 0 }); }
+  for (let i = 0; i < 480; i++) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x2a2724, transparent: true, depthWrite: false, fog: true })); sp.visible = false; landG.add(sp); CR.smoke.push({ sp, life: 0, max: 1, vy: 0, s0: 1, s1: 4, a: 0.6, vx: 0 }); }
+  CR.chuteRich = false; // set true while the player is in parachute view
+  CR.tailDim = false; // 1.6.1: looking aft along own trails — dim so they do not wash out the Cheyenne view
+  // 1.6.1: soft radial scorch (no hard CircleGeometry discs — those read as flat grey/white plates from the chute)
+  const scTex = (() => {
+    const N = 128, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
+    const g = x.createRadialGradient(N/2, N/2, 2, N/2, N/2, N/2 - 1);
+    g.addColorStop(0, "rgba(18,16,14,1)"); g.addColorStop(0.35, "rgba(28,24,20,0.92)");
+    g.addColorStop(0.65, "rgba(40,34,28,0.55)"); g.addColorStop(1, "rgba(40,34,28,0)");
+    x.fillStyle = g; x.fillRect(0, 0, N, N);
+    // irregular soot flecks
+    let sd = 19; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+    for (let i = 0; i < 40; i++) {
+      const a = R() * 6.28, rr = R() * 48, px = N/2 + Math.cos(a) * rr, py = N/2 + Math.sin(a) * rr;
+      const gg = x.createRadialGradient(px, py, 0, px, py, 4 + R() * 8);
+      gg.addColorStop(0, "rgba(10,9,8,0.7)"); gg.addColorStop(1, "rgba(10,9,8,0)");
+      x.fillStyle = gg; x.fillRect(px - 12, py - 12, 24, 24);
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  const scGeo = new THREE.PlaneGeometry(2, 2); scGeo.rotateX(-Math.PI / 2);
+  const scMat = new THREE.MeshBasicMaterial({ map: scTex, color: 0xffffff, fog: true, transparent: true, opacity: 0.95, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
   scMat.onBeforeCompile = earthFog; scMat._earthFog = true;
   CR.scorch = new THREE.InstancedMesh(scGeo, scMat, CR.SC_N); CR.scorch.count = 0; CR.scorch.frustumCulled = false; CR.scorch.renderOrder = 1; landG.add(CR.scorch);
-  CR.scorch.setColorAt(0, new THREE.Color(0.1, 0.09, 0.08));
+  CR.scorch.setColorAt(0, new THREE.Color(1, 1, 1));
   const _cq = new THREE.Vector3(), _cm = new THREE.Matrix4(), _cqq = new THREE.Quaternion(), _cs = new THREE.Vector3(), _cc = new THREE.Color(), _cy = new THREE.Vector3(0, 1, 0);
   function crashDecal(lx, lz, rx, rz, yaw, r, g, b) { // world radii (u) → landG units
     const i = CR.nSc % CR.SC_N; CR.nSc++;
@@ -2777,17 +2895,51 @@ export function createWorld3D(canvas) {
     landG.updateWorldMatrix(true, false);
     const L = landG.worldToLocal(_cq.copy(P)), lx = L.x, lz = L.z, K = K_LAND;
     CR.stats.n++; CR.stats[kind] = (CR.stats[kind] || 0) + 1;
-    const fire = (dx, dz, wr, life, delay) => { const f = CR.fire[CR.fi]; CR.fi = (CR.fi + 1) % CR.fire.length; f.sp.position.set(lx + dx / K, 0.9 * wr / K, lz + dz / K); f.s = wr * 2 / K; f.max = life; f.life = life + delay; f.delay = delay; f.fl = Math.random() * 6; f.sp.visible = false; };
-    fire(0, 0, 150 * size, 4.2 + 2 * size, 0);                                  // main fireball
-    for (let k = 0; k < 4; k++) fire((Math.random() - 0.5) * 120 * size, (Math.random() - 0.5) * 120 * size, (50 + Math.random() * 50) * size, 7 + Math.random() * 6, 0.1 + k * 0.25); // burning wreckage
-    CR.sites.push({ lx, lz, t: 0, size, acc: 0, dur: 12 + 12 * size, kind });
-    // scorch + debris field (persistent)
+    const rich = CR.chuteRich ? 2.2 : 1; // 1.6.1: parachute view goes big
+    const fire = (dx, dz, wr, life, delay, col) => {
+      const f = CR.fire[CR.fi]; CR.fi = (CR.fi + 1) % CR.fire.length;
+      f.sp.position.set(lx + dx / K, Math.max(0.4, 0.55 * wr / K), lz + dz / K);
+      f.s = wr * 2.4 / K * (0.85 + Math.random() * 0.3); f.max = life; f.life = life + delay; f.delay = delay; f.fl = Math.random() * 6;
+      f.sp.material.color.setHex(col || 0xffcc66); f.sp.visible = false;
+    };
+    // layered fireball: white core → yellow → orange (additive soft sprites, not hard discs)
+    fire(0, 0, 220 * size * rich, 1.4 + 0.6 * size, 0, 0xfff2c8);
+    fire(0, 0, 180 * size * rich, 3.2 + 1.5 * size, 0.05, 0xffb040);
+    fire(0, 0, 140 * size * rich, 5.5 + 2 * size, 0.12, 0xff6a20);
+    const nSec = Math.round((CR.chuteRich ? 10 : 5) * (kind === "hull" ? 1 : 0.7));
+    for (let k = 0; k < nSec; k++) fire((Math.random() - 0.5) * 160 * size, (Math.random() - 0.5) * 160 * size, (40 + Math.random() * 70) * size * rich, 8 + Math.random() * 10, 0.15 + k * 0.18, Math.random() < 0.4 ? 0xff9030 : 0xff5010);
+    CR.sites.push({ lx, lz, t: 0, size: size * rich, acc: 0, dur: (CR.chuteRich ? 48 : 22) + 14 * size, kind, rich });
+    // soft scorch (textured) + debris field
     const yaw = Math.random() * 6.28;
-    crashDecal(lx, lz, 62 * size, 62 * size, yaw, 0.1, 0.09, 0.08);
-    crashDecal(lx, lz, 105 * size, 70 * size, yaw + 0.5, 0.2, 0.18, 0.15);      // outer burn
-    crashDecal(lx + 70 * size * Math.cos(yaw) / K, lz + 70 * size * Math.sin(yaw) / K, 130 * size, 22 * size, -yaw, 0.15, 0.13, 0.11); // the skid / debris streak
-    const nd = kind === "hull" ? 12 : 6;
-    for (let k = 0; k < nd; k++) { const a = Math.random() * 6.28, d = (40 + Math.random() * 170) * size, q = 0.22 + Math.random() * 0.35; crashDecal(lx + Math.cos(a) * d / K, lz + Math.sin(a) * d / K, (6 + Math.random() * 14) * size, (6 + Math.random() * 14) * size, Math.random() * 3, q, q * 0.97, q * 0.9); }
+    crashDecal(lx, lz, 80 * size, 80 * size, yaw, 1, 1, 1);
+    crashDecal(lx, lz, 130 * size, 95 * size, yaw + 0.4, 0.85, 0.82, 0.78);
+    crashDecal(lx + 80 * size * Math.cos(yaw) / K, lz + 80 * size * Math.sin(yaw) / K, 150 * size, 28 * size, -yaw, 0.7, 0.65, 0.6);
+    const nd = (kind === "hull" ? 14 : 7) * (CR.chuteRich ? 2 : 1);
+    for (let k = 0; k < nd; k++) {
+      const a = Math.random() * 6.28, d = (50 + Math.random() * 200) * size;
+      crashDecal(lx + Math.cos(a) * d / K, lz + Math.sin(a) * d / K, (8 + Math.random() * 18) * size, (8 + Math.random() * 18) * size, Math.random() * 3, 0.9, 0.88, 0.85);
+    }
+    // initial smoke bloom — many overlapping soft puffs at staggered heights (reads 3D from nadir)
+    for (let k = 0; k < (CR.chuteRich ? 36 : 14); k++) {
+      const p = CR.smoke[CR.sm]; CR.sm = (CR.sm + 1) % CR.smoke.length; CR.stats.puffs++;
+      const ang = Math.random() * 6.28, rad = Math.random() * 55 * size;
+      const h0 = (0.4 + Math.random() * 8 + (k % 6) * 1.8) * rich;
+      p.sp.position.set(lx + Math.cos(ang) * rad / K, h0 / K, lz + Math.sin(ang) * rad / K);
+      p.life = p.max = 20 + Math.random() * 18; p.vy = (55 + Math.random() * 50) / K; p.vx = (6 + Math.random() * 16) / K;
+      p.s0 = (28 + Math.random() * 30) * size / K; p.s1 = (200 + Math.random() * 220) * size * rich / K; p.a = 0.55 + Math.random() * 0.35;
+      p.sp.material.rotation = Math.random() * 6.28;
+      p.sp.material.color.setHex(Math.random() < 0.35 ? 0x5a5248 : 0x1a1816); p.sp.visible = true;
+    }
+    // vertical column seed: stack of smaller puffs up the axis
+    for (let k = 0; k < (CR.chuteRich ? 22 : 8); k++) {
+      const p = CR.smoke[CR.sm]; CR.sm = (CR.sm + 1) % CR.smoke.length; CR.stats.puffs++;
+      const h0 = (2 + k * (CR.chuteRich ? 3.2 : 2.4)) * rich;
+      p.sp.position.set(lx + (Math.random() - 0.5) * 18 * size / K, h0 / K, lz + (Math.random() - 0.5) * 18 * size / K);
+      p.life = p.max = 24 + Math.random() * 20; p.vy = (70 + Math.random() * 40) / K; p.vx = (4 + Math.random() * 8) / K;
+      p.s0 = (18 + Math.random() * 16) * size / K; p.s1 = (140 + Math.random() * 120) * size * rich / K; p.a = 0.5 + Math.random() * 0.3;
+      p.sp.material.rotation = Math.random() * 6.28;
+      p.sp.material.color.setHex(0x22201c); p.sp.visible = true;
+    }
     if (window.FGAudio && window.FGAudio.crash) window.FGAudio.crash(P.x, P.y, P.z, size);
   }
   function updateCrashFx(dt) {
@@ -2796,27 +2948,49 @@ export function createWorld3D(canvas) {
       f.life -= dt;
       if (f.life <= 0) { f.sp.visible = false; continue; }
       if (f.life > f.max) { f.sp.visible = false; continue; }
-      f.sp.visible = true; const k = 1 - f.life / f.max, grow = Math.min(1, k * 7) * 0.65 + 0.35, fl = 0.85 + 0.3 * Math.sin(f.fl + pnow() * 0.02);
-      const s = f.s * grow * (k < 0.12 ? 1 : 1 - (k - 0.12) * 0.45) * fl; f.sp.scale.set(s, s * (1 + 0.5 * k), 1); f.sp.material.opacity = Math.min(1, 1.4 * Math.pow(1 - k, 1.4));
+      f.sp.visible = true;
+      const k = 1 - f.life / f.max, grow = Math.min(1, k * 8) * 0.7 + 0.3, fl = 0.8 + 0.35 * Math.sin(f.fl + pnow() * 0.025);
+      // vertical stretch so the fireball reads as a rising flash, not a flat disc from above
+      const s = f.s * grow * (k < 0.15 ? 1 : 1 - (k - 0.15) * 0.5) * fl;
+      f.sp.scale.set(s * (1 - 0.15 * k), s * (1.15 + 0.9 * k), 1);
+      f.sp.material.opacity = Math.min(1, 1.5 * Math.pow(1 - k, 1.25));
+      f.sp.position.y += 0.8 * dt * (1 - k); // climb a little
     }
     for (let q = CR.sites.length - 1; q >= 0; q--) {
       const c = CR.sites[q]; c.t += dt;
       if (c.t > c.dur) { CR.sites.splice(q, 1); continue; }
-      c.acc += dt * (c.kind === "hull" ? 3.6 : 2.2);
+      const rate = (c.kind === "hull" ? 4.5 : 2.6) * (c.rich ? 1.6 : 1) * (c.t < 4 ? 1.4 : 1);
+      c.acc += dt * rate;
       while (c.acc >= 1) {
         c.acc -= 1; const p = CR.smoke[CR.sm]; CR.sm = (CR.sm + 1) % CR.smoke.length; CR.stats.puffs++;
-        const sz = c.size; p.sp.position.set(c.lx + (Math.random() - 0.5) * 50 * sz / K_LAND, 0.3, c.lz + (Math.random() - 0.5) * 50 * sz / K_LAND);
-        p.life = p.max = 26 + Math.random() * 12; p.vy = (38 + Math.random() * 22) / K_LAND; p.vx = (10 + Math.random() * 5) / K_LAND; p.s0 = 55 * sz / K_LAND; p.s1 = (230 + Math.random() * 110) * sz / K_LAND; p.a = 0.78;
-        p.sp.material.color.setHex(Math.random() < 0.3 ? 0x4a443e : 0x24211f); p.sp.visible = true;
+        const sz = c.size;
+        // prefer a rising column of varied soft puffs (not one flat disc)
+        const col = Math.random() < 0.55;
+        const h0 = col ? (1.5 + Math.random() * 14) * (c.rich || 1) : (0.4 + Math.random() * 1.5);
+        p.sp.position.set(c.lx + (Math.random() - 0.5) * (col ? 28 : 55) * sz / K_LAND, h0 / K_LAND, c.lz + (Math.random() - 0.5) * (col ? 28 : 55) * sz / K_LAND);
+        p.life = p.max = 28 + Math.random() * 24; p.vy = (50 + Math.random() * 45) / K_LAND; p.vx = (8 + Math.random() * 14) / K_LAND;
+        p.s0 = (22 + Math.random() * 30) * sz / K_LAND; p.s1 = (180 + Math.random() * 200) * sz / K_LAND; p.a = 0.5 + Math.random() * 0.35;
+        p.sp.material.rotation = Math.random() * 6.28;
+        p.sp.material.color.setHex(Math.random() < 0.25 ? 0x5a5048 : 0x1c1a18); p.sp.visible = true;
+      }
+      // secondary pops early on
+      if (c.rich && c.t < 6 && Math.random() < 0.04) {
+        const f = CR.fire[CR.fi]; CR.fi = (CR.fi + 1) % CR.fire.length;
+        f.sp.position.set(c.lx + (Math.random() - 0.5) * 30 * c.size / K_LAND, 1.5, c.lz + (Math.random() - 0.5) * 30 * c.size / K_LAND);
+        f.s = 40 * c.size / K_LAND; f.max = 2.2; f.life = 2.2; f.fl = Math.random() * 6; f.sp.material.color.setHex(0xffa030); f.sp.visible = true;
       }
     }
     for (const p of CR.smoke) {
       if (p.life <= 0) continue;
       p.life -= dt; if (p.life <= 0) { p.sp.visible = false; continue; }
       const k = 1 - p.life / p.max;
-      p.sp.position.y += p.vy * dt * (1 - k * 0.55); p.sp.position.x += p.vx * dt;
-      const sc = p.s0 + (p.s1 - p.s0) * Math.sqrt(k); p.sp.scale.set(sc, sc * 0.9, 1);
-      p.sp.material.opacity = p.a * Math.min(1, k * 14) * (1 - k * k);
+      p.sp.position.y += p.vy * dt * (1 - k * 0.5); p.sp.position.x += p.vx * dt; p.sp.position.z += p.vx * 0.35 * dt;
+      const sc = p.s0 + (p.s1 - p.s0) * Math.sqrt(k);
+      // 1.6.1: tall soft columns + slow spin so overlapping puffs do not read as one disc from nadir
+      const tall = 1.55 + 2.1 * k;
+      p.sp.scale.set(sc * (0.7 + 0.25 * Math.sin(p.life * 1.7)), sc * tall, 1);
+      if (p.sp.material) p.sp.material.rotation += dt * (0.15 + (p.vx || 0) * 0.02);
+      p.sp.material.opacity = p.a * Math.min(1, k * 10) * (1 - k * k) * 0.88;
     }
   }
   function crashReset() {
@@ -3356,8 +3530,13 @@ export function createWorld3D(canvas) {
   let _odo = null, _hd = 0;
   function syncMission(opts) {
     const now = pnow();
-    const dt = Math.min(0.05, (now - _lastT) / 1000);
+    let dt = Math.min(0.05, (now - _lastT) / 1000);
     _lastT = now;
+    // 1.6.1: under freeze / harness advance, drive ground FX + bombs from __FG_SIMT so they match game.js
+    if (window.__FG_FREEZE && window.__FG_SIMT != null) {
+      const prev = syncMission._simT; syncMission._simT = window.__FG_SIMT;
+      if (prev != null) dt = Math.min(0.25, Math.max(0, window.__FG_SIMT - prev));
+    }
     // --- ground frame from the game's odometer (world units): moves at the box's true ground speed ---
     const geo = opts.geo || { x: 0, z: 0, rot: 0 }; _geoNow = geo;
     groundFrame.position.set(CAM.x + (geo.x - CAM.x) / EARTH_K, GROUND_Y, CAM.z + (geo.z - CAM.z) / EARTH_K);
@@ -3477,7 +3656,7 @@ export function createWorld3D(canvas) {
         }
       }
     }
-    updateSmoke(dt); updateFlames(dt); updateWreckPuffs(dt); updateBombs(dt);
+    updateSmoke(dt); updateFlames(dt); updateWreckPuffs(dt); if (!window.__FG_FREEZE) updateBombs(dt); // 1.6.1: under freeze, game.js testBombAdvance owns the sim-clock step
     updateRibbons(dt);
     updateContrails();
   }
@@ -3886,6 +4065,46 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     sightBox.position.set(0.29, -0.228, -0.5); sightBox.rotation.set(0.2, -0.42, 0.02);
     camera.add(sightBox); toOverlay(sightBox);
   }
+  // 1.6.1 Cheyenne twin .50s (camera-locked): perforated jackets + red tips, track aim; muzzleOut/flash/tracers from tips.
+  const tailFrame = new THREE.Group(); // kept name for visibility toggle
+  camera.add(tailFrame); tailFrame.visible = false;
+  const tailGuns = [];
+  {
+    const steel = new THREE.MeshStandardMaterial({ color: 0x1a1c18, roughness: 0.45, metalness: 0.7 });
+    const red = new THREE.MeshStandardMaterial({ color: 0xc4281e, roughness: 0.4, metalness: 0.35, emissive: 0x4a0808, emissiveIntensity: 0.25 });
+    const flashTex = (() => {
+      const c = document.createElement("canvas"); c.width = 64; c.height = 64; const x = c.getContext("2d");
+      const g = x.createRadialGradient(32, 32, 0, 32, 32, 30); g.addColorStop(0, "rgba(255,240,180,1)"); g.addColorStop(0.35, "rgba(255,140,40,0.7)"); g.addColorStop(1, "rgba(255,80,0,0)");
+      x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+      return new THREE.CanvasTexture(c);
+    })();
+    for (const side of [-1, 1]) {
+      const g = new THREE.Group();
+      // jacket (perforated look via dark rings)
+      const jacket = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.024, 0.55, 10), steel);
+      jacket.rotation.x = Math.PI / 2; jacket.position.set(0, 0, -0.35); g.add(jacket);
+      for (let k = 0; k < 8; k++) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.025, 0.003, 6, 12), new THREE.MeshStandardMaterial({ color: 0x0c0e0a, roughness: 0.8, metalness: 0.4 }));
+        ring.position.set(0, 0, -0.12 - k * 0.055); g.add(ring);
+      }
+      // barrel tip + red jacket end
+      const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, 0.12, 8), red);
+      tip.rotation.x = Math.PI / 2; tip.position.set(0, 0, -0.68); g.add(tip);
+      const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0, -0.75); g.add(muzzle);
+      const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 }));
+      flash.position.set(0, 0, -0.78); flash.scale.set(0.12, 0.12, 1); flash.visible = false; g.add(flash);
+      // rest pose: low-center in view, side by side, running aft (cam −Z)
+      g.position.set(side * 0.055, -0.16, -0.55);
+      g.rotation.set(0.04, 0, 0);
+      tailFrame.add(g);
+      tailGuns.push({ group: g, muzzle, flash, rest: g.position.clone(), lastRec: 0 });
+    }
+    // small housing under sill
+    const house = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.14), new THREE.MeshStandardMaterial({ color: 0x2a2e22, roughness: 0.7, metalness: 0.25 }));
+    house.position.set(0, -0.22, -0.48); tailFrame.add(house);
+    toOverlay(tailFrame);
+  }
+
   const _mw = new THREE.Vector3();
   const muzzleOut = [{ x: 0, y: 0, z: 0, sx: 0, sy: 0 }, { x: 0, y: 0, z: 0, sx: 0, sy: 0 }];
   function updateGuns(opts) {
@@ -3922,15 +4141,31 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     updateEject();
     camera.updateMatrixWorld(true);
     let strobeI = fl[1] > fl[0] ? 1 : 0;
-    for (let i = 0; i < gunGroups.length && i < 2; i++) {
-      const gg = gunGroups[i];
-      _mw.copy(gg.tipLocal);
-      gg.group.localToWorld(_mw);
-      muzzleOut[i].x = _mw.x; muzzleOut[i].y = _mw.y; muzzleOut[i].z = _mw.z;
-      if (i === strobeI) { muzzleStrobe.position.copy(_mw); camera.worldToLocal(muzzleStrobe.position); muzzleStrobe.position.z += 0.15; } // 1.4.0: the flash light sits AT the firing muzzle
-      _mw.project(camera);
-      muzzleOut[i].sx = (_mw.x + 1) * 0.5 * window.innerWidth;
-      muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
+    const atTail = (opts.station === "tail");
+    if (atTail && tailGuns.length) {
+      for (let i = 0; i < 2; i++) {
+        const tg = tailGuns[i], rec = (opts.recoilLR || [0, 0])[i] || 0, fl = (opts.flashLR || [0, 0])[i] || 0;
+        tg.group.position.set(tg.rest.x, tg.rest.y + rec * 0.003, tg.rest.z + rec * 0.04);
+        tg.flash.visible = fl > 0.3;
+        if (tg.flash.visible) { const s = (0.14 + Math.random() * 0.06) * (0.55 + 0.45 * fl); tg.flash.scale.set(s, s, 1); tg.flash.material.opacity = 0.4 + 0.45 * fl; }
+        tg.muzzle.getWorldPosition(_mw);
+        muzzleOut[i].x = _mw.x; muzzleOut[i].y = _mw.y; muzzleOut[i].z = _mw.z;
+        if (i === strobeI) { muzzleStrobe.position.copy(_mw); camera.worldToLocal(muzzleStrobe.position); muzzleStrobe.position.z += 0.1; }
+        _mw.project(camera);
+        muzzleOut[i].sx = (_mw.x + 1) * 0.5 * window.innerWidth;
+        muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
+      }
+    } else {
+      for (let i = 0; i < gunGroups.length && i < 2; i++) {
+        const gg = gunGroups[i];
+        _mw.copy(gg.tipLocal);
+        gg.group.localToWorld(_mw);
+        muzzleOut[i].x = _mw.x; muzzleOut[i].y = _mw.y; muzzleOut[i].z = _mw.z;
+        if (i === strobeI) { muzzleStrobe.position.copy(_mw); camera.worldToLocal(muzzleStrobe.position); muzzleStrobe.position.z += 0.15; }
+        _mw.project(camera);
+        muzzleOut[i].sx = (_mw.x + 1) * 0.5 * window.innerWidth;
+        muzzleOut[i].sy = (1 - _mw.y) * 0.5 * window.innerHeight;
+      }
     }
   }
 
@@ -4900,7 +5135,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const sy = (Math.cos(pnow() * 0.113) * 0.072 + Math.sin(pnow() * 0.203) * 0.038) * shake;
     const FALL = opts.fall;
     if (FALL && FALL.eye) camera.position.set(FALL.eye.x + sx, FALL.eye.y + sy, FALL.eye.z);
-    else camera.position.set(CAM.x + sx + (gunnerState.kx || 0), CAM.y + sy + (gunnerState.ky || 0) + recoil * 0.07 + (gunnerState.lift || 0), CAM.z); // 1.5.4: + shaped kicks
+    else {
+      const se = opts.stationEye || { x: 0, y: 0, z: 0 };
+      camera.position.set(CAM.x + se.x + sx + (gunnerState.kx || 0), CAM.y + se.y + sy + (gunnerState.ky || 0) + recoil * 0.07 + (gunnerState.lift || 0), CAM.z + se.z); // 1.6.1: station eye (top / tail)
+    }
     _lift = FALL ? 0 : (gunnerState.lift || 0); _liftP = FALL ? 0 : (gunnerState.liftP || 0);
     const FC = window.__FG_FREECAM; // test hook only: {x,y,z,yaw,pitch} free camera for stills
     if (FC) camera.position.set(FC.x, FC.y, FC.z);
@@ -4928,8 +5166,27 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     if (ownShip) updateOwnShip(opts);
     { // 1.3.8: under our own canopy
       const inChute = !!(FALL && FALL.phase === "chute");
-      turretAnchor.visible = !inChute && !window.__FG_FREECAM;
-      updateCage(pitch, inChute || !!window.__FG_FREECAM); if (window.__FG_FREECAM) arch.visible = false; sightBox.visible = !inChute && !window.__FG_FREECAM;
+      CR.chuteRich = inChute; // 1.6.1: richer crash/ground FX only in parachute view
+      const atTail = (opts.station === "tail");
+      CR.tailDim = atTail;
+      // 1.6.1 MASTER: Cheyenne look is the 2D overlay; hide Sperry mount + old 3D tunnel frame at tail
+      turretAnchor.visible = !inChute && !window.__FG_FREECAM && !atTail;
+      updateCage(pitch, inChute || !!window.__FG_FREECAM || atTail); if (window.__FG_FREECAM) arch.visible = false;
+      sightBox.visible = !inChute && !window.__FG_FREECAM && !atTail;
+      if (tailFrame) tailFrame.visible = atTail && !inChute && !window.__FG_FREECAM; // 3D twin .50s
+      // 1.6.1: at the Cheyenne opening, hide extreme aft tip skin once tagged so we look OUT (not into a tunnel)
+      if (ownShip) {
+        if (!ownShip.userData._tailTagged) {
+          ownShip.userData._tailTagged = true;
+          ownShip.traverse((o) => {
+            if (!o.isMesh || !o.geometry || o.userData.part || o.userData.noHit) return;
+            if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+            const cz = o.geometry.boundingSphere.center.z + o.position.z;
+            if (cz < -12.9) o.userData._tailHide = true; // clear Cheyenne opening (eye aft of rudder)
+          });
+        }
+        ownShip.traverse((o) => { if (o.userData._tailHide) o.visible = !atTail; });
+      }
       ownChute.visible = inChute;
       if (inChute) {
         ownChute.position.copy(camera.position);
@@ -5316,6 +5573,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     townStrike,
     townReset,
     get bombStats() { return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) }); },
+    bombPositions: () => bombs.filter((b) => b.t >= 0 && !b.landed).slice(0, 40).map((b) => ({ x: +(b._wx || 0).toFixed(1), y: +(b._wy || 0).toFixed(1), z: +(b._wz || 0).toFixed(1), t: +b.t.toFixed(2), y0: +b.y0.toFixed(1) })),
+
     get glintStats() { return { n: glStats.n, max: glStats.max }; },
     get aiAnchors() { // test hook (1.5.9): per AI ship that has detached pieces: owner (hull / piece key) + world position of every engine fire anchor
       const out = [];
@@ -5346,7 +5605,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     // debug: tint OUR tracers (kind 0) for identification stills; null restores
     tracerTint: (rgb) => { if (!TR_KIND._k0) TR_KIND._k0 = [TR_KIND[0][0], TR_KIND[0][1]]; if (rgb) { TR_KIND[0][0] = rgb; TR_KIND[0][1] = rgb.map((v) => v * 0.7); } else { TR_KIND[0][0] = TR_KIND._k0[0]; TR_KIND[0][1] = TR_KIND._k0[1]; } return true; },
     get b17Stats() { const g = friendlyPool[0]; let meshes = 0, tris = 0; g.traverse((o) => { if (o.isMesh) { meshes++; const gg = o.geometry; tris += (gg.index ? gg.index.count : gg.attributes.position.count) / 3; } }); return { children: g.children.length, meshes, tris: Math.round(tris) }; },
-    testBombAdvance(dt) { updateBombs(dt); }, // test hook
+    testBombAdvance(dt, geo) { if (geo) _geoNow = geo; updateBombs(dt); }, // test hook — pass mission.geo so sticks track under advance()
     get flameStats() { return flameStats; },
     get flakStats() { return flakStats; },
     tearInfo(which) { const g = shipGroup(which); if (!g) return []; g.updateMatrixWorld(true); return (g.userData.tears || []).map((m) => { const v = new THREE.Vector3(), n = new THREE.Vector3(0, 0, 1); m.getWorldPosition(v); const q = new THREE.Quaternion(); m.getWorldQuaternion(q); n.applyQuaternion(q); return { x: v.x, y: v.y, z: v.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x }; }); },
