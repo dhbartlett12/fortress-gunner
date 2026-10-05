@@ -37346,8 +37346,11 @@
     farmTex.repeat.set(92 * FARM_REP, 92 * FARM_REP);
     const townBakeU = {
       uTown: { value: null },
-      uTownXZ: { value: new Vector2(0, 0) },
-      uTownR: { value: 1 }
+      // 1.6.3b: town centre/radius in *vMapUv* space (already includes farmTex.repeat) — avoids UV undo bugs
+      uTownMap: { value: new Vector2(0, 0) },
+      uTownMapR: { value: 1 },
+      uTownDebug: { value: 0 }
+      // 1=magenta town, 2=magenta EVERYWHERE (shader path proof)
     };
     const ground = new Mesh(
       new PlaneGeometry(6e4, 6e4),
@@ -37357,9 +37360,10 @@
           sh.uniforms.uShadow = { value: cloudShadowTex };
           sh.uniforms.uMacro = { value: macroTex };
           sh.uniforms.uTown = townBakeU.uTown;
-          sh.uniforms.uTownXZ = townBakeU.uTownXZ;
-          sh.uniforms.uTownR = townBakeU.uTownR;
-          sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;\nuniform sampler2D uMacro;\nuniform sampler2D uTown;\nuniform vec2 uTownXZ;\nuniform float uTownR;").replace("#include <map_fragment>", `
+          sh.uniforms.uTownMap = townBakeU.uTownMap;
+          sh.uniforms.uTownMapR = townBakeU.uTownMapR;
+          sh.uniforms.uTownDebug = townBakeU.uTownDebug;
+          sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nuniform sampler2D uShadow;\nuniform sampler2D uMacro;\nuniform sampler2D uTown;\nuniform vec2 uTownMap;\nuniform float uTownMapR;\nuniform float uTownDebug;").replace("#include <map_fragment>", `
 #ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv );
   vec2 muv = mat2(${Math.cos(MACRO_ROT).toFixed(5)}, ${Math.sin(MACRO_ROT).toFixed(5)}, ${(-Math.sin(MACRO_ROT)).toFixed(5)}, ${Math.cos(MACRO_ROT).toFixed(5)}) * vMapUv * ${(1 / MACRO_REP).toFixed(5)} + vec2(0.31, 0.17);
@@ -37377,20 +37381,38 @@
   float shd = texture2D(uShadow, vMapUv * 0.9 + vec2(0.13, 0.41)).r * 0.65 + texture2D(uShadow, vMapUv * 0.37 + vec2(0.7, 0.2)).r * 0.35;
   col *= 1.0 - 0.34 * smoothstep(0.35, 0.75, shd);
   col = mix(col, vec3(0.45, 0.58, 0.76), 0.04);
-  // 1.6.3: CITY baked into ground albedo (depth-safe). Soft irregular edge via texture alpha.
-  {
-    vec2 gxz = vec2((vMapUv.x - 0.5) * 60000.0, (0.5 - vMapUv.y) * 60000.0);
-    vec2 tuv = (gxz - uTownXZ) / max(uTownR, 1.0) * 0.5 + 0.5;
-    if (tuv.x > -0.02 && tuv.x < 1.02 && tuv.y > -0.02 && tuv.y < 1.02) {
-      vec4 tw = texture2D(uTown, clamp(tuv, 0.0, 1.0));
-      float w = tw.a * 1.0;
-      col = mix(col, tw.rgb, w);
-    }
-  }
+  // 1.6.3b: town applied POST-fog (see earthFogGround) so altitude fog cannot erase the city.
   diffuseColor.rgb *= col;
 #endif
 `);
-          earthFog(sh);
+          sh.fragmentShader = sh.fragmentShader.replace(
+            "#include <fog_fragment>",
+            `#ifdef USE_FOG
+  float fogFactor = smoothstep( fogNear, fogFar, vFogDepth / ` + (EARTH_K * 1.35).toFixed(1) + ` );
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );
+#endif
+{
+  if (uTownDebug > 1.5) {
+    gl_FragColor.rgb = vec3(1.0, 0.0, 1.0);
+  } else {
+    vec2 dlt = (vMapUv - uTownMap) / max(uTownMapR, 0.0001);
+    float rd = length(dlt);
+    // soft fade; bake alpha already 0 well inside texture \u2014 never invent a sandy square
+    float edge = 1.0 - smoothstep(0.42, 0.88, rd);
+    vec2 tuv = dlt * 0.5 + 0.5;
+    if (edge > 0.004 && tuv.x > 0.0 && tuv.x < 1.0 && tuv.y > 0.0 && tuv.y < 1.0) {
+      vec4 tw = texture2D(uTown, tuv);
+      float ta = min(1.0, tw.a * 1.25) * edge;
+      if (ta > 0.01) {
+        vec3 townCol = (uTownDebug > 0.5) ? vec3(1.0, 0.0, 1.0) : min(vec3(1.0), tw.rgb * 1.35 + vec3(0.07, 0.055, 0.035));
+        float keep = (uTownDebug > 0.5) ? ta : ta * 0.98;
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, townCol, keep);
+      }
+    }
+  }
+}
+`
+          );
         };
         return m;
       })()
@@ -37404,8 +37426,28 @@
     const TOWN_S = 1.5 * Math.sqrt(15);
     town.scale.set(TOWN_S, TOWN_S, TOWN_S);
     landG.add(town);
+    const TOWN_STREETS = (() => {
+      const st = [];
+      for (let k = -3; k <= 2; k++) {
+        st.push([k * 8 - 10, -14, 12, 0]);
+        st.push([k * 8 - 10, 12, 11, 0]);
+      }
+      for (let k = -3; k <= 3; k++) {
+        st.push([-8, k * 7 - 2, 14, Math.PI / 2]);
+        st.push([10, k * 7 - 2, 12, Math.PI / 2]);
+      }
+      st.push([-14, 0, 9, 0]);
+      st.push([-14, 0, 8, Math.PI / 2]);
+      st.push([-18, -4, 7, 0]);
+      st.push([-10, 5, 6, Math.PI / 2]);
+      st.push([-16, 6, 7, Math.PI / 2]);
+      st.push([-12, -7, 6, 0]);
+      st.push([-8, 2, 5, 0]);
+      st.push([-20, 1, 5, Math.PI / 2]);
+      return st;
+    })();
     {
-      const N = 1024, c = document.createElement("canvas");
+      const N = 2048, c = document.createElement("canvas");
       c.width = c.height = N;
       const x = c.getContext("2d");
       x.clearRect(0, 0, N, N);
@@ -37414,168 +37456,186 @@
         sd = sd * 16807 % 2147483647;
         return sd / 2147483647;
       };
-      const cx = N * 0.5, cy = N * 0.52, rad = N * 0.46;
+      const cx = N * 0.5, cy = N * 0.5, rad = N * 0.36;
+      const tlToPx = (lx, lz) => [cx + lx * (rad / 42), cy + lz * (rad / 42)];
       const mask = document.createElement("canvas");
       mask.width = mask.height = N;
       const mx = mask.getContext("2d");
       mx.fillStyle = "#fff";
       mx.beginPath();
-      for (let i = 0; i <= 48; i++) {
-        const a = i / 48 * Math.PI * 2, rr = rad * (0.62 + R() * 0.48 + 0.08 * Math.sin(i * 1.7));
+      for (let i = 0; i <= 80; i++) {
+        const a = i / 80 * Math.PI * 2, rr = rad * (0.82 + 0.1 * Math.sin(i * 1.9) + 0.06 * Math.cos(i * 3.4) + R() * 0.08);
         if (i === 0) mx.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
         else mx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
       }
       mx.closePath();
       mx.fill();
+      for (let k = 0; k < 100; k++) {
+        const a = R() * Math.PI * 2, rr = rad * (0.7 + R() * 0.38);
+        mx.globalAlpha = 0.25 + R() * 0.4;
+        mx.beginPath();
+        mx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 10 + R() * 32, 0, Math.PI * 2);
+        mx.fill();
+      }
+      mx.globalAlpha = 1;
       try {
-        mx.filter = "blur(22px)";
+        mx.filter = "blur(96px)";
       } catch (e) {
       }
       const m2 = document.createElement("canvas");
       m2.width = m2.height = N;
-      const m2x = m2.getContext("2d");
-      m2x.drawImage(mask, 0, 0);
+      m2.getContext("2d").drawImage(mask, 0, 0);
       try {
         mx.filter = "none";
       } catch (e) {
       }
-      x.globalCompositeOperation = "source-over";
-      x.fillStyle = "#3f3c36";
-      x.beginPath();
-      for (let i = 0; i <= 48; i++) {
-        const a = i / 48 * Math.PI * 2, rr = rad * (0.62 + i * 37 % 17 / 40);
-        if (i === 0) x.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
-        else x.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
-      }
-      x.closePath();
-      x.fill();
-      x.fillStyle = "#35322c";
-      x.beginPath();
-      x.arc(cx - N * 0.06, cy - N * 0.02, rad * 0.28, 0, Math.PI * 2);
-      x.fill();
-      x.fillStyle = "#2c2a26";
-      x.beginPath();
-      x.arc(cx - N * 0.06, cy - N * 0.02, rad * 0.12, 0, Math.PI * 2);
-      x.fill();
-      for (let k = 0; k < 18; k++) {
-        const a = R() * Math.PI * 2, rr = rad * (0.2 + R() * 0.7);
-        x.fillStyle = "rgba(62,78,48," + (0.35 + R() * 0.35).toFixed(2) + ")";
+      const softBlob = (col, px2, py2, r0) => {
+        const g = x.createRadialGradient(px2, py2, 0, px2, py2, r0);
+        g.addColorStop(0, col);
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        x.fillStyle = g;
         x.beginPath();
-        x.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 6 + R() * 18, 0, Math.PI * 2);
+        x.arc(px2, py2, r0, 0, Math.PI * 2);
+        x.fill();
+      };
+      {
+        const g = x.createRadialGradient(cx, cy, 0, cx, cy, rad * 0.95);
+        g.addColorStop(0, "rgba(178,168,155,0.95)");
+        g.addColorStop(0.5, "rgba(168,158,146,0.82)");
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        x.fillStyle = g;
+        x.beginPath();
+        x.arc(cx, cy, rad * 0.95, 0, Math.PI * 2);
         x.fill();
       }
-      const roofCols = ["#6e4a38", "#5a4034", "#4a4844", "#7a5a40", "#3e3c38", "#8a6a50", "#58544c"];
-      for (let k = 0; k < 7200; k++) {
-        const a = R() * Math.PI * 2, rr = Math.pow(R(), 0.65) * rad * 0.95;
+      for (let k = 0; k < 110; k++) {
+        const a = R() * Math.PI * 2, rr = Math.pow(R(), 0.55) * rad * 0.96;
         const px2 = cx + Math.cos(a) * rr, py2 = cy + Math.sin(a) * rr;
-        const dens = rr < rad * 0.28 ? 1 : rr < rad * 0.55 ? 0.7 : 0.35;
-        if (R() > dens) continue;
-        x.fillStyle = roofCols[R() * roofCols.length | 0];
-        const w = 1.5 + R() * (rr < rad * 0.3 ? 4 : 2.5), h = 1.2 + R() * 2.5;
-        x.save();
-        x.translate(px2, py2);
-        x.rotate(R() * 0.4);
-        x.fillRect(-w / 2, -h / 2, w, h);
-        x.restore();
+        const g0 = 148 + (R() * 22 | 0), r0 = g0 + (R() * 10 | 0), b0 = g0 - (8 + (R() * 10 | 0));
+        softBlob("rgba(" + r0 + "," + g0 + "," + b0 + ",0.88)", px2, py2, 48 + R() * 100);
       }
-      x.strokeStyle = "rgba(130,122,108,0.9)";
-      x.lineWidth = 6;
-      x.lineCap = "round";
-      for (let i = 0; i < 8; i++) {
-        const a0 = i * (Math.PI * 2 / 8) + 0.15;
+      for (let k = 0; k < 32; k++) {
+        const a = R() * Math.PI * 2, rr = R() * rad * 0.38;
+        softBlob("rgba(155,142,128,0.62)", cx - N * 0.03 + Math.cos(a) * rr, cy + Math.sin(a) * rr, 50 + R() * 70);
+      }
+      for (let k = 0; k < 16; k++) {
+        const a = R() * Math.PI * 2, rr = rad * (0.15 + R() * 0.65);
+        x.fillStyle = "rgba(95,112,80," + (0.28 + R() * 0.25).toFixed(2) + ")";
         x.beginPath();
-        let px2 = cx - N * 0.06, py2 = cy - N * 0.02;
-        x.moveTo(px2, py2);
-        for (let s = 1; s <= 14; s++) {
-          const t = s / 14, ang = a0 + Math.sin(t * 3 + i) * 0.12;
-          px2 = cx - N * 0.06 + Math.cos(ang) * rad * 0.92 * t;
-          py2 = cy - N * 0.02 + Math.sin(ang) * rad * 0.92 * t;
-          x.lineTo(px2, py2);
-        }
+        x.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 12 + R() * 28, 0, Math.PI * 2);
+        x.fill();
+      }
+      x.lineCap = "round";
+      x.lineJoin = "round";
+      for (const [scx, scz, half, yaw] of TOWN_STREETS) {
+        const ca = Math.cos(yaw), sa = Math.sin(yaw);
+        const [x0, y0] = tlToPx(scx - ca * half, scz - sa * half);
+        const [x1, y1] = tlToPx(scx + ca * half, scz + sa * half);
+        x.strokeStyle = "rgba(200,192,178,0.9)";
+        x.lineWidth = 4.4;
+        x.beginPath();
+        x.moveTo(x0, y0);
+        x.lineTo(x1, y1);
+        x.stroke();
+        x.strokeStyle = "rgba(215,208,192,0.55)";
+        x.lineWidth = 2;
+        x.beginPath();
+        x.moveTo(x0, y0);
+        x.lineTo(x1, y1);
         x.stroke();
       }
-      x.strokeStyle = "rgba(140,132,118,0.85)";
-      x.lineWidth = 5.5;
-      x.beginPath();
-      for (let i = 0; i <= 64; i++) {
-        const a = i / 64 * Math.PI * 2, rr = rad * (0.55 + 0.03 * Math.sin(i * 0.7));
-        const px2 = cx - N * 0.04 + Math.cos(a) * rr, py2 = cy + Math.sin(a) * rr * 0.92;
-        if (i === 0) x.moveTo(px2, py2);
-        else x.lineTo(px2, py2);
-      }
-      x.closePath();
-      x.stroke();
-      x.strokeStyle = "rgba(120,114,100,0.65)";
-      x.lineWidth = 2.4;
-      for (let i = 0; i < 22; i++) {
-        const a = R() * Math.PI * 2, r0 = rad * (0.15 + R() * 0.7), len = rad * (0.15 + R() * 0.35);
-        const ox = Math.cos(a + 1.2), oy = Math.sin(a + 1.2);
-        const px2 = cx + Math.cos(a) * r0, py2 = cy + Math.sin(a) * r0;
+      x.strokeStyle = "rgba(160,154,144,0.4)";
+      x.lineWidth = 1.4;
+      for (let i = 0; i < 40; i++) {
+        const a = R() * Math.PI * 2, r0 = rad * (0.08 + R() * 0.35), len = rad * (0.04 + R() * 0.1);
+        const ox = Math.cos(a + 0.9), oy = Math.sin(a + 0.9);
+        const px2 = cx - N * 0.03 + Math.cos(a) * r0, py2 = cy + Math.sin(a) * r0;
         x.beginPath();
         x.moveTo(px2 - ox * len, py2 - oy * len);
         x.lineTo(px2 + ox * len, py2 + oy * len);
         x.stroke();
       }
+      const roofCols = ["#c49888", "#b89080", "#a88878", "#9a9888", "#8a8880", "#a89888", "#b8a090", "#908880", "#c8a898", "#7a7870", "#d0a898", "#989078"];
+      for (const [scx, scz, half, yaw] of TOWN_STREETS) {
+        const ca = Math.cos(yaw), sa = Math.sin(yaw), nx = -sa, nz = ca;
+        const steps = Math.max(8, half * 2 / 0.95 | 0);
+        for (let s = 0; s < steps; s++) {
+          const t = (s / (steps - 1) - 0.5) * 2 * half;
+          const lx = scx + ca * t, lz = scz + sa * t;
+          const dcen = Math.hypot(lx + 14, lz - 0.5);
+          const dens = dcen < 14 ? 7 : dcen < 26 ? 4 : 2;
+          for (let j = 0; j < dens; j++) {
+            for (const side of [-1, 1]) {
+              if (R() < 0.18) continue;
+              const set = 1.1 + R() * 2.4;
+              const [px2, py2] = tlToPx(lx + nx * side * set + (R() - 0.5) * 0.9, lz + nz * side * set + (R() - 0.5) * 0.9);
+              x.fillStyle = roofCols[R() * roofCols.length | 0];
+              x.globalAlpha = 0.7 + R() * 0.28;
+              x.save();
+              x.translate(px2, py2);
+              x.rotate(yaw + (R() - 0.5) * 0.25);
+              x.fillRect(-1.6 - R() * 3.2, -1.1 - R() * 2.2, 3.2 + R() * 5.5, 2.2 + R() * 3.8);
+              x.restore();
+            }
+          }
+        }
+      }
+      for (let k = 0; k < 48e3; k++) {
+        const a = R() * Math.PI * 2, rr = Math.pow(R(), 0.55) * rad * 0.78;
+        const px2 = cx - N * 0.02 + Math.cos(a) * rr, py2 = cy + Math.sin(a) * rr;
+        if (rr > rad * 0.5 && R() < 0.55) continue;
+        if (rr > rad * 0.62 && R() < 0.7) continue;
+        x.fillStyle = roofCols[R() * roofCols.length | 0];
+        x.globalAlpha = 0.55 + R() * 0.4;
+        x.fillRect(px2, py2, 1.6 + R() * 4.5, 1.3 + R() * 3.2);
+      }
+      x.globalAlpha = 1;
       x.save();
-      x.translate(cx + N * 0.1, cy + N * 0.08);
-      x.rotate(-0.12);
-      x.fillStyle = "#6a6660";
-      x.fillRect(-N * 0.045, -N * 0.28, N * 0.09, N * 0.52);
-      x.strokeStyle = "rgba(55,52,48,0.9)";
+      const [rx, ry] = tlToPx(6, -2);
+      x.translate(rx, ry);
+      x.rotate(-0.14);
+      for (let k = 0; k < 18; k++) {
+        const by = -N * 0.18 + R() * N * 0.36, bx = (R() - 0.5) * N * 0.05;
+        softBlob("rgba(128,124,116,0.45)", bx, by, 18 + R() * 36);
+      }
+      x.strokeStyle = "rgba(175,170,160,0.75)";
       x.lineWidth = 1.4;
-      for (let t = -3; t <= 3; t++) {
+      x.lineCap = "round";
+      for (let t = -4; t <= 4; t++) {
         x.beginPath();
-        x.moveTo(t * 5.5, -N * 0.27);
-        x.lineTo(t * 5.5, N * 0.23);
+        x.moveTo(t * 5.5, -N * 0.18);
+        x.lineTo(t * 5.5, N * 0.16);
         x.stroke();
       }
-      x.fillStyle = "#6e6a64";
-      x.fillRect(N * 0.06, -N * 0.08, N * 0.14, N * 0.16);
-      x.fillStyle = "#5c5852";
-      for (let i = 0; i < 3; i++) x.fillRect(N * 0.07, -N * 0.06 + i * N * 0.045, N * 0.12, N * 0.032);
+      softBlob("rgba(135,130,122,0.55)", N * 0.07, 0, N * 0.055);
+      softBlob("rgba(145,140,132,0.4)", N * 0.09, N * 0.02, N * 0.04);
       x.restore();
       const riverPts = [];
       for (let k = 0; k <= 40; k++) {
         const t = k / 40;
-        riverPts.push([
-          cx - rad * 0.95 + t * rad * 1.9,
-          cy + rad * 0.22 + Math.sin(t * 3.2 + 0.5) * rad * 0.18 + t * rad * 0.08
-        ]);
+        riverPts.push([cx - rad * 0.9 + t * rad * 1.8, cy + rad * 0.18 + Math.sin(t * 3 + 0.4) * rad * 0.16]);
       }
       const strokeR = (w, col) => {
         x.strokeStyle = col;
         x.lineWidth = w;
         x.lineCap = "round";
-        x.lineJoin = "round";
         x.beginPath();
         x.moveTo(riverPts[0][0], riverPts[0][1]);
         for (let i = 1; i < riverPts.length; i++) x.lineTo(riverPts[i][0], riverPts[i][1]);
         x.stroke();
       };
-      strokeR(14, "rgba(58,82,46,0.45)");
-      strokeR(9, "rgba(78,96,70,0.7)");
-      strokeR(5.5, "rgba(100,122,132,0.92)");
-      for (const t of [0.28, 0.55, 0.72]) {
-        const i = t * (riverPts.length - 1) | 0;
-        const [px2, py2] = riverPts[i], [qx, qy] = riverPts[Math.min(riverPts.length - 1, i + 1)];
-        const dx = qx - px2, dy = qy - py2, L = Math.hypot(dx, dy) || 1;
-        x.strokeStyle = "rgba(70,66,60,0.9)";
-        x.lineWidth = 3.5;
-        x.beginPath();
-        x.moveTo(px2 - dy / L * 10, py2 + dx / L * 10);
-        x.lineTo(px2 + dy / L * 10, py2 - dx / L * 10);
-        x.stroke();
-      }
-      x.globalCompositeOperation = "source-atop";
-      for (let k = 0; k < 40; k++) {
-        const a = R() * Math.PI * 2, rr = rad * (0.65 + R() * 0.35);
-        x.fillStyle = "rgba(90,100,70," + (0.08 + R() * 0.12).toFixed(2) + ")";
-        x.beginPath();
-        x.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 10 + R() * 28, 0, Math.PI * 2);
-        x.fill();
-      }
+      strokeR(12, "rgba(90,110,95,0.35)");
+      strokeR(7, "rgba(105,125,130,0.55)");
+      strokeR(4, "rgba(115,135,145,0.7)");
       x.globalCompositeOperation = "destination-in";
       x.drawImage(m2, 0, 0);
+      x.globalCompositeOperation = "source-over";
+      const grd = x.createRadialGradient(cx, cy, rad * 0.92, cx, cy, rad * 1.08);
+      x.globalCompositeOperation = "destination-in";
+      x.fillStyle = "#fff";
+      x.beginPath();
+      x.arc(cx, cy, rad * 1.05, 0, Math.PI * 2);
+      x.fill();
       x.globalCompositeOperation = "source-over";
       const tex = new CanvasTexture(c);
       tex.colorSpace = SRGBColorSpace;
@@ -37584,8 +37644,15 @@
       tex.generateMipmaps = true;
       tex.minFilter = LinearMipmapLinearFilter;
       townBakeU.uTown.value = tex;
-      townBakeU.uTownXZ.value.set(TOWN_X * KR, TOWN_Z * KR);
-      townBakeU.uTownR.value = TOWN_S * 62 * KR;
+      {
+        const rep = 92 * FARM_REP;
+        const gfX = TOWN_X * KR, gfZ = TOWN_Z * KR;
+        const uvX = gfX / 6e4 + 0.5;
+        const uvY = 0.5 - gfZ / 6e4;
+        const radUV = TOWN_S * 155 * KR / 6e4;
+        townBakeU.uTownMap.value.set(uvX * rep, uvY * rep);
+        townBakeU.uTownMapR.value = radUV * rep;
+      }
     }
     const townMats = [];
     const TL = { houses: [], keys: [], stalls: [], wagons: [], tracks: [] };
@@ -37612,6 +37679,7 @@
       const CXG = new Group();
       CXG.scale.set(KC, KC, KC);
       town.add(CXG);
+      TS.cxg = CXG;
       const yardTex = (() => {
         const c = document.createElement("canvas");
         c.width = 128;
@@ -37652,6 +37720,7 @@
       })();
       const yard = new Mesh(new PlaneGeometry(6.2, 58 * VS), bas(16777215, { map: yardTex }));
       yard.rotation.set(-Math.PI / 2, 0, YARD_A);
+      yard.visible = false;
       CXG.add(yard);
       const line = new Mesh(new PlaneGeometry(0.28, 900), bas(4078132));
       line.rotation.set(-Math.PI / 2, 0, YARD_A);
@@ -37714,6 +37783,7 @@
         const tt = new Mesh(new CircleGeometry(0.8, 20), bas(4867648));
         tt.rotation.x = -Math.PI / 2;
         tt.position.set(cx, 0.02, cz);
+        tt.visible = false;
         CXG.add(tt);
         for (let k = 0; k < 14; k++) {
           const a = -0.6 + k * (4.2 / 13);
@@ -37726,15 +37796,7 @@
         }
       }
       const streetM = bas(8025708);
-      const streets = [];
-      for (let k = -4; k <= 3; k++) streets.push([k * 7.5 - 12, 0, 28, 0]);
-      for (let k = -4; k <= 4; k++) streets.push([-16, k * 6.5, 31, Math.PI / 2]);
-      streets.push([-8, -4, 30, 0.55]);
-      streets.push([-20, 10, 25, -0.8]);
-      for (let i = 0; i < 8; i++) {
-        const a = i * (Math.PI * 2 / 8) + 0.15;
-        streets.push([-14 + Math.cos(a) * 12, 0.5 + Math.sin(a) * 12, 18, a]);
-      }
+      const streets = TOWN_STREETS.slice();
       const N = 1100;
       const wallG = new BoxGeometry(1, 0.55, 1);
       wallG.translate(0, 0.275, 0);
@@ -37749,7 +37811,7 @@
       })();
       const walls = new InstancedMesh(wallG, lam(11051672), N);
       const roofs = new InstancedMesh(roofG, lam(16777215), N);
-      const roofPal = [7227960, 5914676, 4868164, 5920852, 8018496, 5788748, 4078648];
+      const roofPal = [12884104, 12095616, 11044984, 10131592, 9078912, 11049096, 12099728, 13150360, 8026224, 13674648];
       let n = 0;
       const scl = new Vector3(), rq = new Quaternion(), up = new Vector3(0, 1, 0);
       const place = (x0, z0, rot, len, wid, tall) => {
@@ -37772,28 +37834,57 @@
       for (const [scx, scz, half, yaw] of streets) {
         const ca = Math.cos(yaw), sa = Math.sin(yaw);
         const nx = -sa, nz = ca;
-        const steps = Math.max(6, half * 2 / 1.35 | 0);
+        const steps = Math.max(6, half * 2 / 1.4 | 0);
         for (let s = 0; s < steps; s++) {
           const t = (s / (steps - 1) - 0.5) * 2 * half;
           const px2 = scx + ca * t, pz2 = scz + sa * t;
           const dcen = Math.hypot(px2 + 14, pz2 - 0.5);
-          if (dcen > 38 && rnd() < 0.55) continue;
-          if (dcen > 28 && rnd() < 0.3) continue;
+          if (dcen > 36 && rnd() < 0.6) continue;
+          if (dcen > 26 && rnd() < 0.35) continue;
           for (const side of [-1, 1]) {
-            if (rnd() < 0.12) continue;
-            const setback = 1.55 + rnd() * 0.55;
-            place(px2 + nx * side * setback, pz2 + nz * side * setback, yaw + (side < 0 ? Math.PI : 0), 1.15 + rnd() * 1.1, 0.95 + rnd() * 0.45, dcen < 12 ? 1.25 : 1);
+            if (rnd() < 0.14) continue;
+            const setback = 1.5 + rnd() * 0.5;
+            place(px2 + nx * side * setback, pz2 + nz * side * setback, yaw + (side < 0 ? Math.PI : 0), 1.1 + rnd() * 1, 0.9 + rnd() * 0.4, dcen < 12 ? 1.2 : 1);
+          }
+        }
+      }
+      {
+        const xs = [], zs = [];
+        for (const [scx, scz, half, yaw] of streets) {
+          if (Math.abs(yaw) < 0.2 || Math.abs(yaw - Math.PI) < 0.2) xs.push(scx);
+          else if (Math.abs(Math.abs(yaw) - Math.PI / 2) < 0.2) zs.push(scz);
+        }
+        xs.sort((a, b) => a - b);
+        zs.sort((a, b) => a - b);
+        const uniq = (a) => a.filter((v, i) => !i || Math.abs(v - a[i - 1]) > 1.5);
+        const X = uniq(xs), Z = uniq(zs);
+        for (let i = 0; i < X.length - 1; i++) for (let j = 0; j < Z.length - 1; j++) {
+          const x0 = X[i], x1 = X[i + 1], z0 = Z[j], z1 = Z[j + 1];
+          const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
+          const dcen = Math.hypot(mx + 14, mz - 0.5);
+          if (dcen > 34) continue;
+          if (mx > -3.2 && mx < 12.5 && mz > -16 && mz < 10.5) continue;
+          const dens = dcen < 12 ? 0.9 : dcen < 22 ? 0.55 : 0.25;
+          const nx = Math.max(1, (x1 - x0 - 2.8) / 1.7 | 0);
+          const nz = Math.max(1, (z1 - z0 - 2.8) / 1.7 | 0);
+          for (let ix = 0; ix < nx; ix++) for (let iz = 0; iz < nz; iz++) {
+            if (rnd() > dens) continue;
+            const px2 = x0 + 1.4 + (ix + 0.5) * (x1 - x0 - 2.8) / nx + (rnd() - 0.5) * 0.3;
+            const pz2 = z0 + 1.4 + (iz + 0.5) * (z1 - z0 - 2.8) / nz + (rnd() - 0.5) * 0.3;
+            place(px2, pz2, rnd() < 0.5 ? 0 : Math.PI / 2, 1 + rnd() * 0.9, 0.85 + rnd() * 0.35, dcen < 12 ? 1.15 : 0.95);
           }
         }
       }
       let guard = 0;
-      while (n < N * 0.92 && guard++ < 4e3) {
+      while (n < N * 0.9 && guard++ < 3e3) {
         const st = streets[rnd() * streets.length | 0];
         const [scx, scz, half, yaw] = st;
         const ca = Math.cos(yaw), sa = Math.sin(yaw), nx = -sa, nz = ca;
-        const t = (rnd() - 0.5) * 2 * half * 1.15;
+        const t = (rnd() - 0.5) * 2 * half;
         const side = rnd() < 0.5 ? -1 : 1;
-        place(scx + ca * t + nx * side * (2.2 + rnd()), scz + sa * t + nz * side * (2.2 + rnd()), yaw, 0.9 + rnd() * 0.6, 0.8 + rnd() * 0.35, 0.9);
+        const px2 = scx + ca * t + nx * side * (2 + rnd()), pz2 = scz + sa * t + nz * side * (2 + rnd());
+        if (Math.hypot(px2 + 14, pz2 - 0.5) < 22) continue;
+        place(px2, pz2, yaw, 0.85 + rnd() * 0.5, 0.75 + rnd() * 0.3, 0.9);
       }
       walls.count = n;
       roofs.count = n;
@@ -37879,10 +37970,12 @@
         const sidingM = bas(4078132), sid = new Mesh(new PlaneGeometry(0.3, 40), sidingM);
         sid.rotation.set(-Math.PI / 2, 0, 0);
         sid.position.set(4.6, 0.02, 0);
+        sid.visible = false;
         CXG.add(sid);
         const road = new Mesh(new PlaneGeometry(0.5, 40), streetM);
         road.rotation.set(-Math.PI / 2, 0, 0);
         road.position.set(23, 0.012, 3);
+        road.visible = false;
         CXG.add(road);
       }
       for (const A of [TL.wagons, TL.tracks, TL.stalls, TL.keys]) for (const e of A) {
@@ -40016,13 +40109,36 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const rec = opts.recoilLR || [0, 0];
       const fl = opts.flashLR || [0, 0];
       const atTailGuns = opts.station === "tail";
-      const TAIL_HALF = 0.09;
+      const TAIL_S = 0.36;
+      const TAIL_TIP = { x: 0.034, y: -0.06, z: -0.78 };
       for (let i = 0; i < gunGroups.length; i++) {
         const gg = gunGroups[i];
         const side = gg.rest.x < 0 ? -1 : 1;
-        const bx = atTailGuns ? side * TAIL_HALF - gg.tipLocal.x : gg.rest.x;
-        gg.group.position.set(bx, gg.rest.y + rec[i] * 4e-3, gg.rest.z + rec[i] * 0.12);
-        gg.group.rotation.set(rec[i] * 0.018, 0, (i ? -1 : 1) * rec[i] * 6e-3);
+        if (!gg._tailTagged) {
+          gg._tailTagged = true;
+          gg.group.traverse((o) => {
+            if (!o.isMesh) return;
+            const n = (o.name || "").toLowerCase();
+            o.userData._isBarrel = /^(barrel|bore|jacket|jacketcap|hider|muzzle)/.test(n);
+          });
+        }
+        gg.group.traverse((o) => {
+          if (!o.isMesh || o.userData._isBarrel == null) return;
+          o.visible = atTailGuns ? !!o.userData._isBarrel : true;
+        });
+        if (atTailGuns) {
+          gg.group.scale.setScalar(TAIL_S);
+          gg.group.position.set(
+            side * TAIL_TIP.x - gg.tipLocal.x * TAIL_S,
+            TAIL_TIP.y - gg.tipLocal.y * TAIL_S + rec[i] * 3e-3,
+            TAIL_TIP.z - gg.tipLocal.z * TAIL_S + rec[i] * 0.08
+          );
+          gg.group.rotation.set(rec[i] * 0.012, 0, (i ? -1 : 1) * rec[i] * 4e-3);
+        } else {
+          gg.group.scale.setScalar(1);
+          gg.group.position.set(gg.rest.x, gg.rest.y + rec[i] * 4e-3, gg.rest.z + rec[i] * 0.12);
+          gg.group.rotation.set(rec[i] * 0.018, 0, (i ? -1 : 1) * rec[i] * 6e-3);
+        }
         if (rec[i] > gg.lastRec + 0.4) {
           ejectFrom(gg, gg.ejectLocal.x + gg.group.position.x < 0 ? -1 : 1);
           _mw.copy(gg.tipLocal);
@@ -41217,11 +41333,13 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         CR.tailDim = atTail;
         if (TS.walls) {
           const tw = town.getWorldPosition(_mw);
-          const dTown = camera.position.distanceTo(tw);
-          const nearH = dTown < 2200;
+          const dTown = Math.hypot(camera.position.x - tw.x, camera.position.z - tw.z);
+          const agl = camera.position.y - groundWY();
+          const nearH = dTown < 2200 && agl < 2400;
           TS.walls.visible = nearH;
           TS.roofs.visible = nearH;
-          if (TS.wagons) TS.wagons.visible = dTown < 3500;
+          if (TS.wagons) TS.wagons.visible = nearH && dTown < 1800;
+          if (TS.cxg) TS.cxg.visible = nearH && agl < 1100;
         }
         turretAnchor.visible = !inChute && !window.__FG_FREECAM;
         updateCage(pitch, inChute || !!window.__FG_FREECAM || atTail);
@@ -41695,6 +41813,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       camera,
       muzzles: muzzleOut,
       _gunGroups: gunGroups,
+      _townBakeU: townBakeU,
       b17Ortho,
       rayShip,
       addHole,
