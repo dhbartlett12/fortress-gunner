@@ -29,7 +29,21 @@
     </div>
     <div id="healthwrap">
       <div id="healthlabel">FORTRESS</div>
-      <div id="healthbar"><div id="healthfill"></div></div>
+      <svg id="dmgsil" viewBox="0 0 120 44" aria-label="B-17 damage">
+        <!-- planform: nose up = +Y in SVG flipped via rotate; drawn nose to the right -->
+        <g transform="translate(8,22)">
+          <ellipse data-part="cockpit" cx="78" cy="0" rx="10" ry="5.5" fill="#6fbf4a"/>
+          <rect data-part="wingL" x="28" y="-18" width="42" height="7" rx="1.5" fill="#6fbf4a"/>
+          <rect data-part="wingR" x="28" y="11" width="42" height="7" rx="1.5" fill="#6fbf4a"/>
+          <rect data-part="eng0" x="34" y="-20.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
+          <rect data-part="eng1" x="48" y="-20.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
+          <rect data-part="eng2" x="48" y="16.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
+          <rect data-part="eng3" x="34" y="16.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
+          <rect data-part="fuselage" x="18" y="-3.2" width="72" height="6.4" rx="2.2" fill="#5a7a48" opacity="0.85"/>
+          <rect data-part="tail" x="4" y="-9" width="16" height="18" rx="1.5" fill="#6fbf4a"/>
+        </g>
+      </svg>
+      <div id="healthbar" class="hidden" aria-hidden="true"><div id="healthfill"></div></div>
     </div>
     <div id="heatwrap">
       <div id="heatlabel">GUNS</div>

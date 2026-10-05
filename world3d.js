@@ -1363,7 +1363,7 @@ export function createWorld3D(canvas) {
   // 1.5.3: faint vertical streak above each falling bomb (slight motion blur once it is moving fast) — one instanced mesh, one draw
   const bombStreak = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.08, 0.18, 1, 5, 1, true), new THREE.MeshBasicMaterial({ color: 0xc8c4b8, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide }), BOMB_N); // 1.6.1: more visible fall streak
   bombStreak.count = 0; bombStreak.frustumCulled = false; scene.add(bombStreak);
-  const BOMB_G = 5.013, BOMB_AZ = 0.18, BOMB_CZ = 0.0016, BOMB_SPACING = 0.34; // 1.6.0: g 6.54 → 5.013 (drag-slowed fall: ~45 s from 25,000 ft instead of 39 s), 0.34 s between bombs of a stick (was 0.12) so a stick is a visible LINE of explosions; // 1.5.8: g = 9.81 m/s² at 1.5 m/u; from 25,000 ft (5,080 u) a stick reaches the ground ~39 s after release (was ~24 s from 1,400 u); it trails the airframe (drag) by BOMB_AZ·t² + BOMB_CZ·t³
+  const BOMB_G = 6.54, BOMB_AZ = 0.222, BOMB_CZ = 0.0, BOMB_SPACING = 0.34; // 1.6.4: g=9.81 m/s² (6.54 u/s²) → ~39 s from 25k ft; AZ≈0.222 so horiz slows 200→142 mph; impact vy≈g·39 ≈ 864 mph
   const _tw = new THREE.Vector3();
   let _geoNow = { x: 0, z: 0, rot: 0 };
   const bombs = []; const bombStats = { live: 0, dropped: 0 };
@@ -1392,7 +1392,7 @@ export function createWorld3D(canvas) {
       town.getWorldPosition(_tw);
       if (_bp.y <= _tw.y + 0.5) { b.landed = true; b.landAge = 0; (bombStats.land || (bombStats.land = [])).push({ x: +_bp.x.toFixed(1), z: +_bp.z.toFixed(1), dx: Math.round(_bp.x - _tw.x), dz: Math.round(_bp.z - _tw.z), t: +t.toFixed(1), own: !!b.own, lead: !!b.lead, y0: +b.y0.toFixed(1) }); continue; }
       const vy = -BOMB_G * t, vz = -2 * BOMB_AZ * t - 3 * BOMB_CZ * t * t;
-      const pitch = Math.atan2(-vy, 53.6 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05;
+      const pitch = Math.atan2(-vy, AIR_DRIFT + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05;
       const wob = Math.min(1, t / 1.2) * 0.07;
       _be.set(pitch + Math.sin(t * 2.7 + b.ph) * wob, (b.yaw0 != null ? b.yaw0 : (_geoNow.rot || 0)) + b.yawJ + Math.cos(t * 2.1 + b.ph) * wob, b.rollS * t * 0.3, "YXZ"); _bq.setFromEuler(_be);
       // 1.6.1: scale more aggressively so sticks stay readable from a straggler several km back / looking down
@@ -2549,7 +2549,7 @@ export function createWorld3D(canvas) {
   // 1.3.6 TARGET: a small German town with a railway depot (local units: 1 = 10 world u ≈ 15 m).
   // Rail yard (12 tracks, wagons), engine shed, roundhouse + turntable, station, a river with a
   // bridge, streets with gabled roofs, a church, a few sheds/works along the yard.
-  const TOWN_Z = 1238;          // ground-frame local z (1.5.7: 1653 → 1048 for the 180 mph box): ~24 s of ground travel ahead at release = where the sticks land (world z = geo.z + K·TOWN_Z)
+  const TOWN_Z = 1180;          // 1.6.4: retuned for 200 mph + 39 s bomb fall (was 1238 @ 180 mph / ~45 s)
   const TOWN_X = -15.3;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
   const town = new THREE.Group();
   town.position.set(TOWN_X, 6.5, TOWN_Z); // 1.6.3: ~45 world-u up for 3D roofs on 24-bit GPUs; altitude city mass is ground-baked (16-bit safe)
@@ -2711,6 +2711,27 @@ export function createWorld3D(canvas) {
     softBlob("rgba(135,130,122,0.55)", N * 0.07, 0, N * 0.055);
     softBlob("rgba(145,140,132,0.4)", N * 0.09, N * 0.02, N * 0.04);
     x.restore();
+
+    // 1.6.4 Airfield on factory/depot outskirts (SE of yard) — visible from altitude
+    {
+      const [ax0, ay0] = tlToPx(18, 8);
+      x.save(); x.translate(ax0, ay0); x.rotate(-0.22);
+      // grass strip
+      softBlob("rgba(110,125,95,0.55)", 0, 0, N * 0.09);
+      // runway (light grey, soft ends)
+      x.strokeStyle = "rgba(175,172,165,0.85)"; x.lineWidth = 7; x.lineCap = "round";
+      x.beginPath(); x.moveTo(-N * 0.11, 0); x.lineTo(N * 0.12, 0); x.stroke();
+      x.strokeStyle = "rgba(200,198,190,0.55)"; x.lineWidth = 2.2;
+      x.beginPath(); x.moveTo(-N * 0.1, 0); x.lineTo(N * 0.11, 0); x.stroke();
+      // taxiway
+      x.strokeStyle = "rgba(160,158,150,0.5)"; x.lineWidth = 3.5;
+      x.beginPath(); x.moveTo(N * 0.02, 0); x.lineTo(N * 0.02, N * 0.05); x.stroke();
+      // hangars (dark blobs)
+      softBlob("rgba(95,90,82,0.7)", -N * 0.04, N * 0.035, N * 0.018);
+      softBlob("rgba(100,94,86,0.65)", N * 0.05, N * 0.032, N * 0.016);
+      softBlob("rgba(90,88,82,0.6)", N * 0.08, N * 0.028, N * 0.012);
+      x.restore();
+    }
 
     // River
     const riverPts = [];
@@ -2965,6 +2986,16 @@ export function createWorld3D(canvas) {
       for (let k = 0; k < 3; k++) put(new THREE.CylinderGeometry(0.9, 0.9, 0.9, 12), tankM, 17 + k * 2.2, 0.45, 12);
       const sidingM = bas(0x3e3a34), sid = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 40), sidingM); sid.rotation.set(-Math.PI / 2, 0, 0); sid.position.set(4.6, 0.02, 0); sid.visible = false; CXG.add(sid); // bake owns siding at altitude
       const road = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 40), streetM); road.rotation.set(-Math.PI / 2, 0, 0); road.position.set(23, 0.012, 3); road.visible = false; CXG.add(road);
+      // 1.6.4 airfield runway + two hangars east of factory (town-local via CXG)
+      {
+        const rwyM = bas(0xb0aca0), hangM = lam(0x6a6860);
+        const rwy = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 28), rwyM);
+        rwy.rotation.set(-Math.PI / 2, 0, -0.22); rwy.position.set(28, 0.03, 10); CXG.add(rwy);
+        for (const [hx, hz] of [[24, 18], [30, 16]]) {
+          const h = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.7, 2.2), hangM);
+          h.position.set(hx, 0.35, hz); CXG.add(h);
+        }
+      }
     }
 
     // 1.6.3: altitude landmarks (red slabs) removed — city mass is ground-baked
@@ -2989,6 +3020,37 @@ export function createWorld3D(canvas) {
     sp.visible = false; landG.add(sp); impactSmoke.push({ sp, life: 0, max: 1, vy: 0, s0: 1, s1: 4, a: 0.6 });
   }
   let _ifI = 0, _isI = 0;
+  // 1.6.4: 88 mm muzzle flashes on the ground (tied to sky flak TOF)
+  const flakMuz = [];
+  for (let i = 0; i < 48; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, color: 0xffc060, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    sp.visible = false; sp.scale.set(18, 18, 1); landG.add(sp);
+    flakMuz.push({ sp, life: 0 });
+  }
+  let _fmI = 0;
+  function flakMuzzle(wx, wz) {
+    // wx,wz are box-frame; convert approx into landG local via town center offset
+    landG.updateWorldMatrix(true, false);
+    const P = new THREE.Vector3(wx, groundWY(), wz);
+    const L = landG.worldToLocal(P.clone());
+    const f = flakMuz[_fmI]; _fmI = (_fmI + 1) % flakMuz.length;
+    f.sp.position.set(L.x, 0.8, L.z);
+    f.life = f.max = 0.45 + Math.random() * 0.25;
+    f.sp.visible = true;
+    f.sp.material.opacity = 1;
+    const sc = 22 + Math.random() * 18; f.sp.scale.set(sc, sc, 1);
+  }
+  function updateFlakMuzzles(dt) {
+    for (const f of flakMuz) {
+      if (!f.sp.visible) continue;
+      f.life -= dt;
+      if (f.life <= 0) { f.sp.visible = false; continue; }
+      const k = f.life / f.max;
+      f.sp.material.opacity = Math.min(1, k * 1.4);
+      const sc = 12 + (1 - k) * 40; f.sp.scale.set(sc, sc * 0.7, 1);
+      f.sp.position.y += 8 * dt;
+    }
+  }
   function bombBurst(lx, lz, big) { // ground-frame local coords (landG). 1.6.1: much bigger so a stick reads from a straggler several km back
     const mul = big ? 3.6 : 2.0;
     const f = impactFlash[_ifI]; _ifI = (_ifI + 1) % impactFlash.length;
@@ -3549,7 +3611,7 @@ export function createWorld3D(canvas) {
   // real path (P-51 brighter/bolder, Germans subtler; it thickens on hard pulls). Three merged ribbon meshes = 3 draw calls, bounded vertex pools,
   // vertex alpha fades them out near the lens so they never smear across the guns/reticle.
   const _yAxis = new THREE.Vector3(0, 1, 0); let _detT = null;
-  const AIR_DRIFT = 53.6; // the air mass streams aft at the formation speed (1.5.7: 180 mph = 53.6 u/s; was 83.4 at 280 mph) in the box frame
+  const AIR_DRIFT = 59.605; // 1.6.4: 200 mph = 59.605 u/s (was 53.6 at 180 mph)
   const conTex = (() => {
     const W = 64, H = 128, c = document.createElement("canvas"); c.width = W; c.height = H;
     const x = c.getContext("2d"); const img = x.createImageData(W, H);
@@ -5810,6 +5872,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     crashFx: (x, z, size) => { crashImpact(new THREE.Vector3(x, groundWY(), z), size || 1, "hull"); detStats.crashed.hull++; },
     get decalStats() { return decalStats; }, decalDump() { const o = []; for (const g of [ownShip, ...friendlyPool]) { const L = (g.userData.decals || []).concat(g.userData.tears || []); if (!L.length) continue; g.updateMatrixWorld(true);
       o.push({ vis: g.visible, n: L.length, items: L.map((m) => { const bb = new THREE.Box3().setFromObject(m); const c = bb.getCenter(new THREE.Vector3()); return { v: m.visible, vc: m.geometry.attributes.position.count, x: +c.x.toFixed(2), y: +c.y.toFixed(2), z: +c.z.toFixed(2), sz: +bb.getSize(new THREE.Vector3()).length().toFixed(2) }; }) }); } return o; }, get detStats() { return JSON.parse(JSON.stringify(detStats)); }, get crashStats() { return Object.assign({ decals: Math.min(CR.nSc, CR.SC_N), sites: CR.sites.length, fire: CR.fire.filter((f) => f.life > 0).length, smoke: CR.smoke.filter((p) => p.life > 0).length }, CR.stats); }, groundWY,
+    flakMuzzle: (wx, wz) => flakMuzzle(wx, wz),
     groundBurst: (u, v) => { bombBurst(TOWN_X + TOWN_S * u, TOWN_Z + TOWN_S * v, true); if (TS.nCr < 320) { _tp.set(u, 0.07, v); _tq.identity(); _ts.set(1.2, 1, 1.2); TS.craters.setMatrixAt(TS.nCr++, _tmpM.compose(_tp, _tq, _ts)); TS.craters.count = TS.nCr; TS.craters.instanceMatrix.needsUpdate = true; } },
     townGeom: { X: TOWN_X, Z: TOWN_Z, K: K_LAND, S: TOWN_S, g: BOMB_G, spacing: BOMB_SPACING, wy: CAM.y * (1 - EARTH_K) + EARTH_K * (GROUND_Y + 0.05) },
     townLayout: () => TL,

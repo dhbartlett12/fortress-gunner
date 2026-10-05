@@ -355,3 +355,9 @@ body.desktop canvas { cursor: crosshair; }
 @media (max-width: 520px) {
   #stationBtn { right: 8px; bottom: 64px; min-width: 64px; height: 36px; font-size: 12px; line-height: 36px; padding: 0 10px; }
 }
+
+/* 1.6.4 damage silhouette */
+#healthwrap { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }
+#dmgsil { width: 132px; height: 50px; display: block; background: rgba(8,16,12,0.55); border-radius: 3px; padding: 2px 3px; filter: drop-shadow(0 0 2px rgba(0,0,0,0.55)); }
+#dmgsil [data-part] { stroke: rgba(0,0,0,0.35); stroke-width: 0.4; transition: fill 0.25s; }
+#healthbar.hidden { display: none !important; }

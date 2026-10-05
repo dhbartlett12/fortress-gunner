@@ -35550,7 +35550,7 @@
     bombStreak.count = 0;
     bombStreak.frustumCulled = false;
     scene.add(bombStreak);
-    const BOMB_G = 5.013, BOMB_AZ = 0.18, BOMB_CZ = 16e-4, BOMB_SPACING = 0.34;
+    const BOMB_G = 6.54, BOMB_AZ = 0.222, BOMB_CZ = 0, BOMB_SPACING = 0.34;
     const _tw = new Vector3();
     let _geoNow = { x: 0, z: 0, rot: 0 };
     const bombs = [];
@@ -35596,7 +35596,7 @@
           continue;
         }
         const vy = -BOMB_G * t, vz = -2 * BOMB_AZ * t - 3 * BOMB_CZ * t * t;
-        const pitch = Math.atan2(-vy, 53.6 + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05;
+        const pitch = Math.atan2(-vy, AIR_DRIFT + Math.max(0, -vz) * 0.2) * Math.min(1, t / 2.5) + 0.05;
         const wob = Math.min(1, t / 1.2) * 0.07;
         _be.set(pitch + Math.sin(t * 2.7 + b.ph) * wob, (b.yaw0 != null ? b.yaw0 : _geoNow.rot || 0) + b.yawJ + Math.cos(t * 2.1 + b.ph) * wob, b.rollS * t * 0.3, "YXZ");
         _bq.setFromEuler(_be);
@@ -37419,7 +37419,7 @@
     );
     ground.rotation.x = -Math.PI / 2;
     groundFrame.add(ground);
-    const TOWN_Z = 1238;
+    const TOWN_Z = 1180;
     const TOWN_X = -15.3;
     const town = new Group();
     town.position.set(TOWN_X, 6.5, TOWN_Z);
@@ -37610,6 +37610,36 @@
       softBlob("rgba(135,130,122,0.55)", N * 0.07, 0, N * 0.055);
       softBlob("rgba(145,140,132,0.4)", N * 0.09, N * 0.02, N * 0.04);
       x.restore();
+      {
+        const [ax0, ay0] = tlToPx(18, 8);
+        x.save();
+        x.translate(ax0, ay0);
+        x.rotate(-0.22);
+        softBlob("rgba(110,125,95,0.55)", 0, 0, N * 0.09);
+        x.strokeStyle = "rgba(175,172,165,0.85)";
+        x.lineWidth = 7;
+        x.lineCap = "round";
+        x.beginPath();
+        x.moveTo(-N * 0.11, 0);
+        x.lineTo(N * 0.12, 0);
+        x.stroke();
+        x.strokeStyle = "rgba(200,198,190,0.55)";
+        x.lineWidth = 2.2;
+        x.beginPath();
+        x.moveTo(-N * 0.1, 0);
+        x.lineTo(N * 0.11, 0);
+        x.stroke();
+        x.strokeStyle = "rgba(160,158,150,0.5)";
+        x.lineWidth = 3.5;
+        x.beginPath();
+        x.moveTo(N * 0.02, 0);
+        x.lineTo(N * 0.02, N * 0.05);
+        x.stroke();
+        softBlob("rgba(95,90,82,0.7)", -N * 0.04, N * 0.035, N * 0.018);
+        softBlob("rgba(100,94,86,0.65)", N * 0.05, N * 0.032, N * 0.016);
+        softBlob("rgba(90,88,82,0.6)", N * 0.08, N * 0.028, N * 0.012);
+        x.restore();
+      }
       const riverPts = [];
       for (let k = 0; k <= 40; k++) {
         const t = k / 40;
@@ -37977,6 +38007,18 @@
         road.position.set(23, 0.012, 3);
         road.visible = false;
         CXG.add(road);
+        {
+          const rwyM = bas(11578528), hangM = lam(6973536);
+          const rwy = new Mesh(new PlaneGeometry(3.2, 28), rwyM);
+          rwy.rotation.set(-Math.PI / 2, 0, -0.22);
+          rwy.position.set(28, 0.03, 10);
+          CXG.add(rwy);
+          for (const [hx, hz] of [[24, 18], [30, 16]]) {
+            const h = new Mesh(new BoxGeometry(3.5, 0.7, 2.2), hangM);
+            h.position.set(hx, 0.35, hz);
+            CXG.add(h);
+          }
+        }
       }
       for (const A of [TL.wagons, TL.tracks, TL.stalls, TL.keys]) for (const e of A) {
         e[0] *= KC;
@@ -38023,6 +38065,43 @@
       impactSmoke.push({ sp, life: 0, max: 1, vy: 0, s0: 1, s1: 4, a: 0.6 });
     }
     let _ifI = 0, _isI = 0;
+    const flakMuz = [];
+    for (let i = 0; i < 48; i++) {
+      const sp = new Sprite(new SpriteMaterial({ map: fireTex, color: 16760928, transparent: true, depthWrite: false, blending: AdditiveBlending, fog: false }));
+      sp.visible = false;
+      sp.scale.set(18, 18, 1);
+      landG.add(sp);
+      flakMuz.push({ sp, life: 0 });
+    }
+    let _fmI = 0;
+    function flakMuzzle(wx, wz) {
+      landG.updateWorldMatrix(true, false);
+      const P = new Vector3(wx, groundWY(), wz);
+      const L = landG.worldToLocal(P.clone());
+      const f = flakMuz[_fmI];
+      _fmI = (_fmI + 1) % flakMuz.length;
+      f.sp.position.set(L.x, 0.8, L.z);
+      f.life = f.max = 0.45 + Math.random() * 0.25;
+      f.sp.visible = true;
+      f.sp.material.opacity = 1;
+      const sc = 22 + Math.random() * 18;
+      f.sp.scale.set(sc, sc, 1);
+    }
+    function updateFlakMuzzles(dt) {
+      for (const f of flakMuz) {
+        if (!f.sp.visible) continue;
+        f.life -= dt;
+        if (f.life <= 0) {
+          f.sp.visible = false;
+          continue;
+        }
+        const k = f.life / f.max;
+        f.sp.material.opacity = Math.min(1, k * 1.4);
+        const sc = 12 + (1 - k) * 40;
+        f.sp.scale.set(sc, sc * 0.7, 1);
+        f.sp.position.y += 8 * dt;
+      }
+    }
     function bombBurst(lx, lz, big) {
       const mul = big ? 3.6 : 2;
       const f = impactFlash[_ifI];
@@ -38890,7 +38969,7 @@
     }
     const _yAxis2 = new Vector3(0, 1, 0);
     let _detT = null;
-    const AIR_DRIFT = 53.6;
+    const AIR_DRIFT = 59.605;
     const conTex = (() => {
       const W = 64, H = 128, c = document.createElement("canvas");
       c.width = W;
@@ -41905,6 +41984,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         return Object.assign({ decals: Math.min(CR.nSc, CR.SC_N), sites: CR.sites.length, fire: CR.fire.filter((f) => f.life > 0).length, smoke: CR.smoke.filter((p) => p.life > 0).length }, CR.stats);
       },
       groundWY,
+      flakMuzzle: (wx, wz) => flakMuzzle(wx, wz),
       groundBurst: (u, v) => {
         bombBurst(TOWN_X + TOWN_S * u, TOWN_Z + TOWN_S * v, true);
         if (TS.nCr < 320) {
