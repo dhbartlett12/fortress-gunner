@@ -39267,6 +39267,11 @@
       if (dz < 0 || dz > 400) {
         dz = 0;
         _cReset = true;
+        if (_odo == null || odo < _odo) {
+          bombs.length = 0;
+          bombMesh.count = 0;
+          bombStreak.count = 0;
+        }
         if (typeof crashReset === "function" && CR.nSc + CR.sites.length) crashReset();
       }
       _odo = odo;
@@ -39431,7 +39436,6 @@
       updateSmoke(dt);
       updateFlames(dt);
       updateWreckPuffs(dt);
-      if (!window.__FG_FREEZE) updateBombs(dt);
       updateRibbons(dt);
       updateContrails();
     }
@@ -42003,7 +42007,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       get bombStats() {
         return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) });
       },
-      bombPositions: () => bombs.filter((b) => b.t >= 0 && !b.landed).slice(0, 40).map((b) => ({ x: +(b._wx || 0).toFixed(1), y: +(b._wy || 0).toFixed(1), z: +(b._wz || 0).toFixed(1), t: +b.t.toFixed(2), y0: +b.y0.toFixed(1) })),
+      bombPositions: () => bombs.filter((b) => b.t >= 0 && !b.landed).sort((p, q) => (q.own ? 1 : 0) - (p.own ? 1 : 0)).slice(0, 40).map((b) => ({ x: +(b._wx || 0).toFixed(1), y: +(b._wy || 0).toFixed(1), z: +(b._wz || 0).toFixed(1), t: +b.t.toFixed(2), y0: +b.y0.toFixed(1), own: !!b.own })),
+      // 1.6.5: own-ship sticks first (test hook)
       get glintStats() {
         return { n: glStats.n, max: glStats.max };
       },

@@ -677,7 +677,7 @@
           f.bank = (f.bank || 0) + dt * (dkW ? Math.min(2.6, 1.0 + 0.5 * f.spiralT) : dkT ? 1.2 : f.deathKind === "break" ? 1.6 : 0.9) * (f.spinDir || 1);
           f.yaw = (f.yaw || 0) + dt * (dkW ? 0.7 : 0.35) * (f.spinDir || 1);
           f.vy = Math.max(-WRECK_VT, (f.vy || -2) - (dkW ? 11 : dkT ? 10 : 9) * dt); // 1.5.8: falls on to the ground 5,080 u down at a terminal speed of ~200 u/s (≈ 36 s)
-          f.vz = (f.vz || 0) + (-VF - (f.vz || 0)) * Math.min(1, 0.12 * dt); f.vx = (f.vx || 0) * Math.pow(0.97, dt); } // the wreck's forward speed bleeds off: the air mass streams aft past the box
+          f.vz = (f.vz || 0) + (-(VF - WRECK_FWD) - (f.vz || 0)) * Math.min(1, 0.12 * dt); f.vx = (f.vx || 0) * Math.pow(0.97, dt); } // the wreck's forward speed bleeds off: the air mass streams aft past the box
         f.x += (f.vx || 0) * dt + Math.sin(f.spiralT * 1.3) * 6 * dt;
         f.y += f.vy * dt;
         f.z += (f.vz || 0) * dt;
@@ -701,19 +701,26 @@
           f.escT = near ? (f.escT || 0) + dt : Math.max(0, (f.escT || 0) - dt * 0.5);
           if (f.escT > 4) { f.goHome = Math.random() < 0.85 ? mission.t : -1; if (f.goHome >= 0) (mission.goHomeLog || (mission.goHomeLog = [])).push({ t: +mission.t.toFixed(1), who: f.name, outFor: +(mission.t - (f.outAt || 0)).toFixed(1) }); }
         }
-        if (f.goHome > 0) gh = smooth01((mission.t - f.goHome) / 30);
+        if (f.goHome > 0) {
+          gh = smooth01((mission.t - f.goHome) / 30);
+          // 1.6.5: the peel-away is a RATE (box-relative), not a 3,600 u slide in 30 s (that was ~530 mph aft of the box once
+          // 1.6.4's escorts reached stragglers and set goHome). A crippled ship turning out drops back ~85 mph slower than the box
+          // and slides outward ~35 mph — the same slow drop-back the 1.6.3 straggler showed.
+          const r = smooth01((mission.t - f.goHome) / 20);
+          f.ghZ = (f.ghZ || 0) + dt * r * GH_AFT; f.ghX = (f.ghX || 0) + dt * r * GH_OUT;
+        }
       }
       const ghS = (f.homeX >= 0 ? 1 : -1);
-      const tx = f.homeX + Math.sin(elapsed * (0.19 + 0.03 * (sl % 4)) + sl) * 0.9 + gh * ghS * 2800;
+      const tx = f.homeX + Math.sin(elapsed * (0.19 + 0.03 * (sl % 4)) + sl) * 0.9 + ghS * (f.ghX || 0);
       const po = playerStragK(); // 1.5.2: our ship fell out — the box pulls away over ~50 s (1,500 u ahead, 240 u above)
       const fo = f.out && f.outAt != null && mission ? smooth01((mission.t - f.outAt) / 45) : 0; // an AI ship that left the box drops back and down
       const ty = f.homeY + bob * (0.5 + 0.08 * (sl % 3)) - f.straggle * (14 + (f.out ? 20 : 0)) + (f.lift || 0) + po * 240 - fo * 170;
       f.lift = (f.lift || 0) * Math.pow(0.35, dt);
-      const tz = f.homeZ - f.straggle * (38 + (f.out ? 60 : 0)) + po * 1500 - fo * 900 - gh * 3600 + Math.sin(elapsed * (0.15 + 0.02 * (sl % 5)) + sl * 0.7) * 1.1;
+      const tz = f.homeZ - f.straggle * (38 + (f.out ? 60 : 0)) + po * 1500 - fo * 900 - (f.ghZ || 0) + Math.sin(elapsed * (0.15 + 0.02 * (sl % 5)) + sl * 0.7) * 1.1;
       f.x = lerp(f.x, tx, 1 - Math.pow(0.5, dt));
       f.y = lerp(f.y, ty, 1 - Math.pow(f.out ? 0.8 : 0.5, dt));
       f.z = lerp(f.z, tz, 1 - Math.pow(f.out ? 0.85 : 0.6, dt));
-      f.yaw = -ghS * gh * 0.55;
+      f.yaw = -ghS * gh * 0.25; // 1.6.5: gentle turn-out (was 0.55 rad with the fast slide)
       const bankWant = clamp(f.listTarget || 0, -0.07, 0.07) + (turning ? (mission.turnRoll || 0) : 0) + bob * 0.008
         + 0.024 * Math.sin(elapsed * (0.33 + 0.045 * (sl % 4)) + sl * 0.9) + 0.007 * Math.sin(elapsed * 1.7 + sl);
       f.bank = lerp(f.bank || 0, bankWant, 1 - Math.pow(0.3, dt));
@@ -880,6 +887,8 @@
   const U_PER_M = 1 / 1.5;
   const MPH = 0.44704 * U_PER_M;           // u/s per mph
   const VF = 200 * MPH;                    // 1.6.4: 200 mph = 59.605 u/s (= 293 ft/s)
+  const GH_AFT = 85 * MPH, GH_OUT = 35 * MPH; // 1.6.5: go-home straggler drift rates (box-relative)
+  const WRECK_FWD = 20 * MPH; // 1.6.5: a spinning wreck keeps ~20 mph of forward way → settles ~180 mph aft of the box (1.6.3 look at 200 mph)
   const G_U = 9.81 * U_PER_M;
   const FAI = {
     // 1.6.4 Scale: Bf 109 level 390 / dive max 500; Fw 190 attack-run 405 / dive max 530; P-51 level 435 / dive 500
@@ -3707,13 +3716,13 @@
     if (M.bombsAway) {
       const p = M.post || 0;
       once("rtbp", p >= 20, () => vSay("rtb_pilot", { trg: "rtb", cd: 0, prio: 2, ttl: 10 }));
-      once("rtbc", p >= 33, () => vSay("rtb_channel", { trg: "rtb2", cd: 0, prio: 2, ttl: 10 }));
+      once("rtbc", p >= 33, () => vSay("rtb_nav1", { trg: "rtb2", cd: 0, prio: 2, ttl: 10 })); // 1.6.5: was rtb_channel ("over the Channel") — wrong deep over Germany
       const tg = M.tgt;
       if (!vf.bres && p >= 46 && tg && (!tg.bombs || tg.bombs.every((b) => b.done)) && p < 56) {
         vf.bres = 1; const r = tgtResult(); M.vBombRes = r.pct;
         vSay(r.pct >= TGT_T[2] ? "bomb_hits" : "bomb_short", { trg: "bres", cd: 0, prio: 2, ttl: 8 });
       }
-      once("rtbn", p >= 53 && vf.bres, () => vSay("rtb_coast", { trg: "rtb3", cd: 0, prio: 2, ttl: 6 }));
+      once("rtbn", p >= 53 && vf.bres, () => { if ((M.vBombRes || 0) >= TGT_T[2]) vSay("rtb_done", { trg: "rtb3", cd: 0, prio: 2, ttl: 6 }); }); // 1.6.5: was rtb_coast ("English coast dead ahead"); now "good job, boys, let's go home" only after good hits
     }
     // idle chatter: only in a real lull, never on the bomb run
     if (L > 100 && !M.bombsAway) {
@@ -4549,7 +4558,7 @@
   function updateFlakSim(dt) {
     const m = mission; if (!m) return;
     const F = m.flakStats || (m.flakStats = { bursts: 0, near: 0, hitsF: 0, lostF: 0, blown: 0, hitsP: 0, closeP: 0, dmgP: 0, dmgF: 0, in10: 0, histM: [0, 0, 0, 0, 0, 0, 0] });
-    for (const b of flakBursts) { b.t += dt; if (b.pending && b.t >= 0) flakDetonate(b); b.z -= VF * dt; b.y += 0.5 * dt; } // 1.6.2: fuse at aim point BEFORE stream-aft drift
+    for (const b of flakBursts) { b.t += dt; if (b.pending) { if (b.t >= 0) flakDetonate(b); else if (b.t < -(b.dj || 0)) continue; } b.z -= VF * dt; b.y += 0.5 * dt; } // 1.6.5: a shell in flight is aimed at the box's FUTURE point (box frame) — it must not stream aft for the whole 15 s TOF (1.6.4 bursts went off ~900 u / 1.3 km behind the box). Only the last dj s (the 1.6.3 fuse jitter) drifts, as in 1.6.3
     flakBursts = flakBursts.filter((b) => b.t < 14);
     if (state !== "PLAYING" || m.evaluated) return;
     // 1.4.1: over the target the sky fills — extra "show" salvos that burst around (never inside) the box: each burst
@@ -4562,7 +4571,7 @@
         for (let tries = 0; tries < 6; tries++) {
           const a = rand(0, TAU), rr = rand(120, 460);
           const x = BOX_C.x + Math.cos(a) * rr, y = BOX_C.y + rand(-70, 90), z = BOX_C.z + 80 + Math.sin(a) * rr * 1.2 + rand(0, 200);
-          const dl = rand(0, 0.9), zd = z - VF * dl; // where it will actually burst (it streams aft until the fuze goes)
+          const dl = rand(0, 0.9), zd = z - VF * dl; // where it will actually burst (it streams aft for the fuse jitter dl, as in 1.6.3)
           let clear = Math.hypot(CAM.x - x, CAM.y - y, CAM.z - zd) > 45;
           for (const f of friendlies) { if (!clear) break; if (friendlyOk(f) && Math.hypot(f.x - x, f.y - y, f.z - zd) < 42) clear = false; }
           if (clear) { spawnFlakBurst(x, y, z, dl, F); F.show = (F.show || 0) + 1; break; }
@@ -4592,8 +4601,8 @@
   function spawnFlakBurst(x, y, z, delay, F) {
     // 1.6.4: muzzle flash on the ground NOW; sky burst after ~FLAK_TOF (+ small fuse jitter)
     if (World3D && World3D.flakMuzzle) World3D.flakMuzzle(x, z);
-    const tof = FLAK_TOF + (delay || 0) * 0.35;
-    const b = { id: ++flakSeq, x, y, z, t: -tof, seed: Math.random() * 1000, hit: false, size: 0.6 + Math.random() * 0.85, gx: x, gz: z };
+    const tof = FLAK_TOF + (delay || 0);
+    const b = { id: ++flakSeq, x, y, z, t: -tof, dj: delay || 0, seed: Math.random() * 1000, hit: false, size: 0.6 + Math.random() * 0.85, gx: x, gz: z };
     flakBursts.push(b);
     if (flakBursts.length > 120) flakBursts.shift();
     b.pending = true;

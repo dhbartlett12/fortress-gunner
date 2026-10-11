@@ -3795,7 +3795,8 @@ export function createWorld3D(canvas) {
     // --- clouds + flak: stationary in the air → stream aft by the distance flown, swing with the turn ---
     const odo = opts.odo || 0;
     let dz = _odo == null ? 0 : odo - _odo;
-    if (dz < 0 || dz > 400) { dz = 0; _cReset = true; if (typeof crashReset === "function" && CR.nSc + CR.sites.length) crashReset(); } // new mission / big jump
+    if (dz < 0 || dz > 400) { dz = 0; _cReset = true; if (_odo == null || odo < _odo) { bombs.length = 0; bombMesh.count = 0; bombStreak.count = 0; } // 1.6.5: new mission — drop last mission's sticks (nothing else steps them now)
+      if (typeof crashReset === "function" && CR.nSc + CR.sites.length) crashReset(); } // new mission / big jump
     _odo = odo;
     const hd = opts.heading || 0;
     let dH = hd - _hd; _hd = hd;
@@ -3907,7 +3908,7 @@ export function createWorld3D(canvas) {
         }
       }
     }
-    updateSmoke(dt); updateFlames(dt); updateWreckPuffs(dt); if (!window.__FG_FREEZE) updateBombs(dt); // 1.6.1: under freeze, game.js testBombAdvance owns the sim-clock step
+    updateSmoke(dt); updateFlames(dt); updateWreckPuffs(dt); // 1.6.5: NO updateBombs here — game.js testBombAdvance (every update) is the ONLY bomb clock. Stepping here too (1.6.1–1.6.4) ran the bomb clock ~2× the ground clock in live play, so sticks raced ~200 mph AHEAD of the releasing B-17 and fell in ~20 s
     updateRibbons(dt);
     updateContrails();
   }
@@ -5879,7 +5880,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     townStrike,
     townReset,
     get bombStats() { return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) }); },
-    bombPositions: () => bombs.filter((b) => b.t >= 0 && !b.landed).slice(0, 40).map((b) => ({ x: +(b._wx || 0).toFixed(1), y: +(b._wy || 0).toFixed(1), z: +(b._wz || 0).toFixed(1), t: +b.t.toFixed(2), y0: +b.y0.toFixed(1) })),
+    bombPositions: () => bombs.filter((b) => b.t >= 0 && !b.landed).sort((p, q) => (q.own ? 1 : 0) - (p.own ? 1 : 0)).slice(0, 40).map((b) => ({ x: +(b._wx || 0).toFixed(1), y: +(b._wy || 0).toFixed(1), z: +(b._wz || 0).toFixed(1), t: +b.t.toFixed(2), y0: +b.y0.toFixed(1), own: !!b.own })), // 1.6.5: own-ship sticks first (test hook)
 
     get glintStats() { return { n: glStats.n, max: glStats.max }; },
     get aiAnchors() { // test hook (1.5.9): per AI ship that has detached pieces: owner (hull / piece key) + world position of every engine fire anchor
