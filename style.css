@@ -355,6 +355,38 @@ body.desktop canvas { cursor: crosshair; }
 @media (max-width: 520px) {
   #stationBtn { right: 8px; bottom: 64px; min-width: 64px; height: 36px; font-size: 12px; line-height: 36px; padding: 0 10px; }
 }
+/* 1.6.6 ride-along: RIDE sits left of TOP/TAIL; while riding ◀ ▶ cycle fighters and the station button reads B-17 */
+.ridebtn {
+  position: absolute; bottom: 72px; z-index: 40; height: 40px; padding: 0 12px;
+  font: 700 14px/40px system-ui, sans-serif; letter-spacing: 0.06em;
+  color: #fff0d8; background: rgba(36, 24, 8, 0.80);
+  border: 1px solid rgba(255, 196, 110, 0.6); border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.45); text-shadow: 0 1px 2px #000;
+  pointer-events: auto; -webkit-tap-highlight-color: transparent;
+}
+#rideBtn { right: 96px; min-width: 64px; }
+.ridearrow { width: 44px; padding: 0; text-align: center; font-size: 15px; }
+#ridePrev { right: 146px; }
+#rideNext { right: 96px; }
+.ridebtn.hidden { display: none; }
+.ridebtn:active { transform: translateY(1px); }
+#stationBtn.rideback { color: #d8ffe0; border-color: rgba(140, 230, 160, 0.6); background: rgba(10, 30, 18, 0.82); }
+#rideLabel {
+  position: absolute; right: 12px; bottom: 120px; z-index: 40; max-width: 70vw;
+  font: 700 13px/1.25 system-ui, sans-serif; letter-spacing: 0.04em; color: #ffe2b8;
+  background: rgba(20, 14, 6, 0.62); border-left: 3px solid rgba(255, 170, 70, 0.8); border-radius: 3px;
+  padding: 4px 9px; text-shadow: 0 1px 2px #000; pointer-events: none; white-space: nowrap;
+}
+#rideLabel.allied { color: #d8e8ff; border-left-color: rgba(120, 170, 255, 0.85); }
+#rideLabel.hidden { display: none; }
+@media (max-width: 520px) {
+  .ridebtn { bottom: 64px; height: 36px; line-height: 36px; font-size: 12px; }
+  #rideBtn { right: 80px; min-width: 56px; padding: 0 8px; }
+  .ridearrow { width: 40px; }
+  #ridePrev { right: 124px; }
+  #rideNext { right: 80px; }
+  #rideLabel { right: 8px; bottom: 108px; font-size: 12px; }
+}
 
 /* 1.6.4 damage silhouette */
 #healthwrap { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }

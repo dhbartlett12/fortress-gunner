@@ -608,13 +608,13 @@
   }
   let lastFFCall = -99;
   // one .50 round (the player's, or a box gunner's stray) striking a friendly Fortress — 1.5.0: lands in a hitbox of the per-part model
-  function friendlyFireHit(h, dmg, byPlayer) {
+  function friendlyFireHit(h, dmg, byPlayer, gun, rf) {
     const f = h.f;
     if (!friendlyOk(f)) return;
     const l = friendlyLocal(f, h.x - f.x, h.y - f.y, h.z - f.z);
     let id = FC.boxAt(l.x, l.y, l.z);
     if (typeof h.part === "number") id = FC.ENG_ID[h.part]; // struck a nacelle
-    shipHit(f, id, "m2", 1, byPlayer ? "ff" : "cpu", { scale: byPlayer ? 1 : 0.9 });
+    shipHit(f, id, gun || "m2", rf || 1, byPlayer ? "ff" : "cpu", { scale: byPlayer ? 1 : 0.9 });
     if (World3D && World3D.addHole) {
       let ray = h.ray;
       if (!ray && World3D.rayShip && h.slot != null) { const dx = h.x - CAM.x, dy = h.y - CAM.y, dz = h.z - CAM.z, dl = Math.hypot(dx, dy, dz) || 1; ray = World3D.rayShip(h.slot, h.x - dx / dl * 3, h.y - dy / dl * 3, h.z - dz / dl * 3, h.x + dx / dl * 3, h.y + dy / dl * 3, h.z + dz / dl * 3, friendlyRayPose(f)); }
@@ -1318,6 +1318,7 @@
     b.t += dt;
     if (((b.pc = (b.pc || 0) + 1) & 3) === 0) b.jit = Math.max(b.jit, pressureOn(e));
     if (!shipLive(ship) || b.t > b.dur) { e.burst = null; e.burstGap = rand(0.5, 0.8); return; }
+    if (rideHolds(e)) return; // 1.6.6: you are on this fighter's trigger — the AI keeps its burst timing (tactics unchanged) but fires no rounds
     const a = frameAngles(ship), c = FC.boxCenter(b.aimId), aw = fromShipA(a, c[0], c[1], c[2]);
     const sx = e.uy * e.hz - e.uz * e.hy, sy = e.uz * e.hx - e.ux * e.hz, sz = e.ux * e.hy - e.uy * e.hx; // port side
     const set = gunSetOf(e), isP = ship === bomber, src = e.type;
@@ -1472,6 +1473,7 @@
 
   const P51_TR = { x: [-2.2, 2.2], span: 5.4 };
   function p51Tick(e, T, range, hm) { // one 70 ms slice of a six-gun burst: a pair of tracers, a muzzle flash, and the hit roll
+    if (rideHolds(e)) return; // 1.6.6
     const hl = Math.hypot(e.hx, e.hz) || 1, sx = e.hz / hl, sz = -e.hx / hl; // right wing direction
     const dx = T.x - e.x, dy = T.y - e.y, dz = T.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
     const lead = clamp(dl / BULLET_UPS, 0, 1.0), ax = T.x + T.vx * lead * 0.5 - e.x, ay = T.y + T.vy * lead * 0.5 - e.y, az = T.z + T.vz * lead * 0.5 - e.z, al = Math.hypot(ax, ay, az) || 1;
@@ -1527,6 +1529,7 @@
     return true;
   }
   function p51Burst(e, T, range, mul) { // six .50s, ~0.25 s: connects with a probability that falls with range and bank
+    if (rideHolds(e)) return; // 1.6.6
     const rf = FC.rangeFactor(FC.GUNS.m2, FC.toYd(range));
     const bankPen = clamp(1 - Math.abs(T.gLoad || 1) * 0.06, 0.6, 1);
     const p = 0.8 * rf * bankPen * (range < 150 ? 1.15 : 1) * (mul || 1);
@@ -1727,10 +1730,10 @@
   const DF = { on: true, /* 1.6.0: duels are back, but ONLY for a Bf 109 more than 1 km (667 u) from the nearest B-17 (see p51Dogfight / dfBounced / dfPounce); near the box a Mustang just makes the 109 break off */ hold: [8, 14], hitMul: 0.5, pBurst: [0.55, 1.0], dfProb: 0.85, defendProb: 0.8, pounceProb: 0.55, pounceRange: 600 };
 
   // ===== 1.5.3 FRIENDLY FIRE ON MUSTANGS — our .50s and the box gunners' strays are real rounds against the P-51's mesh, per part =====
-  function ffMustang(e, fhit, by) {
+  function ffMustang(e, fhit, by, mul) {
     let part = "hull";
     if (fhit && fhit.lx != null && World3D && World3D.fighterBoundR) { const kk = 1.75 / Math.max(0.5, World3D.fighterBoundR("p51")); part = FC.classifyFighterHit(fhit.lx * kk, fhit.ly * kk, -fhit.lz * kk); }
-    const pd = FC.fighterRound("p51", part, by === "you" ? TUNE.fRoundDmg : TUNE.cpuHitDmg, false);
+    const pd = FC.fighterRound("p51", part, by === "you" ? TUNE.fRoundDmg : TUNE.cpuHitDmg, false) * (mul || 1);
     e.hp -= pd; e.flash = 1; e.smoke = Math.min(1, (e.smoke || 0) + 0.25); spawnHit(e, fhit);
     if (mission) { const k = by === "you" ? "p51HitYou" : "p51HitGun"; mission[k] = (mission[k] || 0) + 1; }
     if (by === "you") {
@@ -1788,6 +1791,7 @@
     for (let i = 0; i < 12; i++) particles.push({ x: e.x, y: e.y, z: e.z, vx: rand(-25, 25), vy: rand(-10, 20), vz: rand(-25, 25), life: rand(0.4, 1.1), max: 1.1, kind: i < 5 ? "fire" : "smoke", r: rand(3, 8) });
   }
   function duelBurst(e, f, R) { // German cannon / MG burst at a Mustang (tracers: 190 red, 109 yellow)
+    if (rideHolds(e)) return; // 1.6.6
     const dx = f.x - e.x, dy = f.y - e.y, dz = f.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
     for (let i = 0; i < 2; i++) tracers.push({ x: e.x + e.hx * 3, y: e.y + e.hy * 3, z: e.z + e.hz * 3, vx: dx / dl * BULLET_UPS + e.vx + rand(-6, 6), vy: dy / dl * BULLET_UPS + e.vy + rand(-6, 6), vz: dz / dl * BULLET_UPS + e.vz + rand(-6, 6), life: Math.min(1.3, dl / 400 + 0.3), maxLife: 1.3, trav: 0, team: "axis", hid: i === 1, delay: i * 0.05, k190: e.type === "190" });
     e.mf = 0.12; if (window.FGAudio && Math.random() < 0.5) window.FGAudio.enemyGun(e.x, e.y, e.z);
@@ -2910,6 +2914,15 @@
   if (tryBtn) tryBtn.addEventListener("click", (ev) => { ev.stopPropagation(); if (downSeq && !downSeq.finished) { tryBtn.classList.add("hidden"); if (endBtn) endBtn.classList.add("hidden"); restartGame(); } }); // 1.6.0: TRY AGAIN from the chute: straight into a fresh mission
   const stationBtn = document.getElementById("stationBtn");
   if (stationBtn) stationBtn.addEventListener("click", (ev) => { ev.stopPropagation(); ev.preventDefault(); if (state === "PLAYING" && !downSeq) toggleStation(); });
+  // 1.6.6 ride-along buttons: RIDE (enter, default = nearest fighter on an attack run), ◀ ▶ cycle the living fighters; the station button reads B-17 and brings you home
+  function rideBtnAct(fn) { return (ev) => { ev.stopPropagation(); ev.preventDefault(); if (state === "PLAYING" && !downSeq) fn(); }; }
+  function rideToggle() { if (ride) endRide(); else { const e = rideDefault(); if (e) startRide(e); else pushCallout("NO FIGHTERS TO RIDE WITH", 1.0); } }
+  function rideCycle(d) { if (!ride) { rideToggle(); return; } const n = rideStep(d); if (n && n !== ride.e) startRide(n); }
+  { const rb = document.getElementById("rideBtn"), rp = document.getElementById("ridePrev"), rn = document.getElementById("rideNext");
+    if (rb) rb.addEventListener("click", rideBtnAct(rideToggle));
+    if (rp) rp.addEventListener("click", rideBtnAct(() => rideCycle(-1)));
+    if (rn) rn.addEventListener("click", rideBtnAct(() => rideCycle(1)));
+    for (const el of [rb, rp, rn]) if (el) el.addEventListener("pointerdown", (ev) => ev.stopPropagation()); }
   const gunner = {
     yaw: 0.15,
     pitch: 0.08,
@@ -2935,6 +2948,7 @@
   let bomber = null;
   let enemies = [];
   let bullets = [];
+  let ride = null; // 1.6.6 ride-along seat (see RIDE-ALONG block)
   let particles = [];
   let tracers = [];
   let flak = [];
@@ -3034,6 +3048,7 @@
           chutes,
           station: gunner.station || "top",
           stationEye: gunStation().eye,
+          ride: rideOpts(), // 1.6.6: null unless riding in a fighter
         });
       },
       render() { api.render(); },
@@ -3877,7 +3892,7 @@
     syncEye();
     setStationUI();
   }
-  function toggleStation() { setStation(gunner.station === "tail" ? "top" : "tail"); }
+  function toggleStation() { if (ride) { endRide(); return; } setStation(gunner.station === "tail" ? "top" : "tail"); }
   function setStationUI() {
     const btn = document.getElementById("stationBtn");
     if (!btn) return;
@@ -3886,6 +3901,160 @@
     btn.classList.toggle("tail", st.id === "tail");
     btn.classList.remove("chin");
     btn.classList.toggle("hidden", state !== "PLAYING" || !!(downSeq));
+    if (ride) { btn.textContent = "B-17"; btn.classList.remove("tail"); btn.classList.add("rideback"); } else btn.classList.remove("rideback");
+    const rb = document.getElementById("rideBtn"), rp = document.getElementById("ridePrev"), rn = document.getElementById("rideNext");
+    const off = state !== "PLAYING" || !!(downSeq);
+    if (rb) { rb.classList.toggle("hidden", off || !!ride); }
+    if (rp) rp.classList.toggle("hidden", off || !ride);
+    if (rn) rn.classList.toggle("hidden", off || !ride);
+    if (!ride) { const rl = document.getElementById("rideLabel"); if (rl) rl.classList.add("hidden"); }
+  }
+
+  // ===== 1.6.6 RIDE-ALONG: first-person seat in a Bf 109 / Fw 190 / P-51. The AI keeps flying the fighter (flight model,
+  // tactics and mission clock untouched); the player only turns his head and pulls the trigger on that fighter's real guns.
+  // Fighter-local axes: x = right, y = up (canopy), z = nose. 1 u = 1.5 m.
+  const RIDE_EYE = { x: 0, y: 0.55, z: -0.25 };
+  const RIDE_YAW = 150 * Math.PI / 180, RIDE_PMIN = -40 * Math.PI / 180, RIDE_PMAX = 80 * Math.PI / 180;
+  const RIDE_GUNS = {
+    "109": [{ g: "mg131", rate: 15, p: [0.17, 0.42, 2.2] }, { g: "mg131", rate: 15, p: [-0.17, 0.42, 2.2] }, { g: "mg151", rate: 700 / 60, p: [0, 0, 3.3] }], // 2 cowl MG 131 + MG 151/20 Motorkanone
+    "190": [{ g: "mg131", rate: 15, p: [0.22, 0.42, 2.1] }, { g: "mg131", rate: 15, p: [-0.22, 0.42, 2.1] }, { g: "mg151", rate: 700 / 60, p: [1.05, -0.32, 1.0] }, { g: "mg151", rate: 700 / 60, p: [-1.05, -0.32, 1.0] }, { g: "mg151", rate: 700 / 60, p: [1.85, -0.26, 0.7] }, { g: "mg151", rate: 700 / 60, p: [-1.85, -0.26, 0.7] }], // A-8: cowl MG 131s, wing-root + outer MG 151/20s
+    p51: [1.65, 1.85, 2.05].flatMap((x) => [{ g: "m2", rate: 800 / 60, p: [x, -0.3, 0.75] }, { g: "m2", rate: 800 / 60, p: [-x, -0.3, 0.75] }]), // six .50s in the wings
+  };
+  const RIDE_TRK = { "109": 2, "190": 3, p51: 4 }; // tracer look (world3d TR_KIND): 109 red, 190 bold red, P-51 orange
+  const RIDE_SIMR = 15; // simulated rounds/s per gun cap: ≥ every real gun's rate here (MG 131 15/s, MG 151 11.7/s, M2 13.3/s), so every round is flown and hit-tested (dm = 1)
+  const RIDE_CONV = 250; // u (~410 yd) gun harmonisation on the sight line
+  const RIDE_FMUL = { m2: 1, mg131: 1.2, mg151: 3.0 }; // per-round damage on fighters relative to a .50 (13 mm AP ≈ .50; 20 mm mine shell ≈ 3×)
+  const RIDE_AI_HOLD = true; // the ridden fighter's own AI guns are silent while you ride (you are the trigger)
+  const RIDE_TYPE = { "109": "Bf 109", "190": "Fw 190", p51: "P-51" };
+  const GER_COL = ["Yellow", "White", "Black", "Red", "Blue", "Brown"], P51_COL = ["Red", "White", "Blue", "Yellow", "Green"];
+  let rideCsN = { "109": 0, "190": 0 }, rideCsM = null;
+  function rideCallsign(e) {
+    if (e.cs) return e.cs;
+    if (rideCsM !== mission) { rideCsM = mission; rideCsN = { "109": 0, "190": 0 }; } // numbering restarts each mission
+    if (e.type === "p51") e.cs = "Cheerio " + P51_COL[(e.fl || 0) % 5] + " " + (((e.pairIdx || 0) % 2) * 2 + (e.slot || 0) + 1);
+    else { const n = rideCsN[e.type] = (rideCsN[e.type] || 0) + 1; e.cs = GER_COL[Math.floor((n - 1) / 4) % GER_COL.length] + " " + (((n - 1) % 4) + 1); }
+    return e.cs;
+  }
+  function rideLabel(e) { return (RIDE_TYPE[e.type] || e.type) + " · " + rideCallsign(e); }
+  function rideOk(e) { return !!(e && e.alive && !e.hold && e.hx != null && (e.type === "109" || e.type === "190" || e.type === "p51")); }
+  function rideHolds(e) { return RIDE_AI_HOLD && !!ride && ride.e === e && ride.deadT == null; }
+  function rideList() {
+    const ord = { "109": 0, "190": 1, p51: 2 };
+    return enemies.filter(rideOk).map((e, i) => ({ e, i })).sort((a, b) => (ord[a.e.type] - ord[b.e.type]) || (a.i - b.i)).map((q) => (rideCallsign(q.e), q.e)); // callsigns are dealt in spawn order
+  }
+  function rideDefault() {
+    const L = rideList(); if (!L.length) return null;
+    const d = (e) => Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z);
+    const pick = (arr) => arr.length ? arr.reduce((a, q) => d(q) < d(a) ? q : a) : null;
+    return pick(L.filter((e) => e.team === "axis" && e.phase === "attack")) || pick(L.filter((e) => e.team === "axis")) || pick(L);
+  }
+  function rideStep(dir, from) {
+    const L = rideList(); if (!L.length) return null;
+    const cur = from || (ride && ride.e);
+    let i = L.indexOf(cur);
+    if (i < 0) { // the old one is gone: next in the same type order
+      return L[0];
+    }
+    return L[(i + dir + L.length) % L.length];
+  }
+  function startRide(e) {
+    if (!rideOk(e) || state !== "PLAYING" || downSeq) return false;
+    const keep = ride && ride.e !== e ? { yaw: 0, pitch: 0 } : null;
+    ride = { e, id: e.id, yaw: 0, pitch: 0, acc: [0, 0, 0, 0, 0, 0], flash: 0, trc: 0, snd: 0, deadT: null, tapT: 0, basis: null, eye: null, pf: null };
+    void keep;
+    input.fire = false; input.fireId = null; guns.cooldown = 0;
+    rideCallsign(e);
+    if (mission) { const R = mission.rideLog || (mission.rideLog = []); if (R.length < 200) R.push({ t: +mission.t.toFixed(1), id: e.id, type: e.type, cs: e.cs }); }
+    ridePose();
+    setStationUI();
+    return true;
+  }
+  function endRide() {
+    if (!ride) return;
+    ride = null; input.fire = false; input.fireId = null;
+    setStationUI();
+  }
+  function ridePose() { // eye + plane frame + head frame for the ridden fighter (also called by draw so frozen stills are exact)
+    if (!ride) return;
+    const e = ride.e;
+    let fx = e.hx, fy = e.hy, fz = e.hz;
+    if (!e.alive && (e.vx || e.vy || e.vz)) { const l = Math.hypot(e.vx, e.vy, e.vz + VF) || 1; fx = e.vx / l; fy = e.vy / l; fz = (e.vz + VF) / l; }
+    let fl = Math.hypot(fx, fy, fz) || 1; fx /= fl; fy /= fl; fz /= fl;
+    let ux = e.ux != null ? e.ux : 0, uy = e.uy != null ? e.uy : 1, uz = e.uz != null ? e.uz : 0;
+    const d = ux * fx + uy * fy + uz * fz; ux -= fx * d; uy -= fy * d; uz -= fz * d;
+    let ul = Math.hypot(ux, uy, uz); if (ul < 1e-4) { ux = 0; uy = 1; uz = 0; ul = 1; } ux /= ul; uy /= ul; uz /= ul;
+    const rx = fy * uz - fz * uy, ry = fz * ux - fx * uz, rz = fx * uy - fy * ux; // F × U = camera-right (same handedness as lookBasis)
+    ride.pf = { fx, fy, fz, ux, uy, uz, rx, ry, rz };
+    ride.eye = { x: e.x + rx * RIDE_EYE.x + ux * RIDE_EYE.y + fx * RIDE_EYE.z, y: e.y + ry * RIDE_EYE.x + uy * RIDE_EYE.y + fy * RIDE_EYE.z, z: e.z + rz * RIDE_EYE.x + uz * RIDE_EYE.y + fz * RIDE_EYE.z };
+    const cy = Math.cos(ride.yaw), sy = Math.sin(ride.yaw), cp = Math.cos(ride.pitch), sp = Math.sin(ride.pitch);
+    const hx = cy * fx + sy * rx, hy = cy * fy + sy * ry, hz = cy * fz + sy * rz; // head yaw (+ = right)
+    const bfx = cp * hx + sp * ux, bfy = cp * hy + sp * uy, bfz = cp * hz + sp * uz;
+    const brx = cy * rx - sy * fx, bry = cy * ry - sy * fy, brz = cy * rz - sy * fz;
+    const bux = bry * bfz - brz * bfy, buy = brz * bfx - brx * bfz, buz = brx * bfy - bry * bfx; // r' × f'
+    ride.basis = { fx: bfx, fy: bfy, fz: bfz, rx: brx, ry: bry, rz: brz, ux: bux, uy: buy, uz: buz };
+  }
+  function viewBasis() { return ride && ride.basis ? ride.basis : lookBasis(); }
+  function viewEye() { return ride && ride.eye ? ride.eye : EYE; }
+  function rideLook(dxPx, dyPx, k) {
+    ride.yaw = clamp(ride.yaw + dxPx * k, -RIDE_YAW, RIDE_YAW); // drag right → look right
+    ride.pitch = clamp(ride.pitch - dyPx * k, RIDE_PMIN, RIDE_PMAX);
+    ridePose();
+  }
+  function rideRecenter() { if (!ride) return; ride.yaw = 0; ride.pitch = 0; ridePose(); }
+  function rideTick(dt) { // after the sim moved everything: follow the fighter, handle its loss
+    if (!ride) return;
+    if (state !== "PLAYING" || downSeq) { endRide(); return; }
+    const e = ride.e;
+    if (!rideOk(e) || enemies.indexOf(e) < 0) {
+      if (ride.deadT == null) { ride.deadT = 0; input.fire = false; pushCallout((RIDE_TYPE[e.type] || "FIGHTER").toUpperCase() + " " + (e.cs || "").toUpperCase() + " — SHOT DOWN", 1.6, true); if (mission) mission.rideLost = (mission.rideLost || 0) + 1; }
+      ride.deadT += dt;
+      if (ride.deadT > 1.6) { const n = rideStep(1, e); if (n && n !== e) startRide(n); else { endRide(); pushCallout("NO FIGHTERS LEFT — BACK TO THE B-17", 1.4, true); } return; }
+    }
+    ride.flash = Math.max(0, ride.flash - dt * 14);
+    ridePose();
+  }
+  function rideFire(dt) {
+    if (!ride || ride.deadT != null || !input.fire || guns.overheated) return;
+    const e = ride.e, set = RIDE_GUNS[e.type]; if (!set || !ride.pf) return;
+    guns.heat = Math.min(1, guns.heat + dt * 0.40); // ~same sustained-fire budget as the turret
+    if (guns.heat >= 1) { guns.overheated = true; return; }
+    const P = ride.pf, E = ride.eye;
+    const tofC = ownTof(RIDE_CONV), drop = 0.5 * BAL_G * tofC * tofC; // guns are harmonised: the rounds cross the sight line at RIDE_CONV, drop included
+    const ax = E.x + P.fx * RIDE_CONV, ay = E.y + P.fy * RIDE_CONV + drop, az = E.z + P.fz * RIDE_CONV;
+    for (let gi = 0; gi < set.length; gi++) {
+      const G = set[gi], n = Math.min(G.rate, RIDE_SIMR);
+      ride.acc[gi] = (ride.acc[gi] || 0) + n * dt;
+      while (ride.acc[gi] >= 1) {
+        ride.acc[gi] -= 1;
+        const mx = e.x + P.rx * G.p[0] + P.ux * G.p[1] + P.fx * G.p[2], my = e.y + P.ry * G.p[0] + P.uy * G.p[1] + P.fy * G.p[2], mz = e.z + P.rz * G.p[0] + P.uz * G.p[1] + P.fz * G.p[2];
+        let dx = ax - mx, dy = ay - my, dz = az - mz; const dl = Math.hypot(dx, dy, dz) || 1;
+        const sp = 0.0045 + guns.heat * 0.006;
+        dx = dx / dl + (Math.random() + Math.random() - 1) * sp; dy = dy / dl + (Math.random() + Math.random() - 1) * sp; dz = dz / dl + (Math.random() + Math.random() - 1) * sp;
+        const vl = Math.hypot(dx, dy, dz) || 1;
+        bullets.push({ x: mx, y: my, z: mz, px: mx, py: my, pz: mz,
+          vx: dx / vl * BULLET_UPS + (e.vx || 0), vy: dy / vl * BULLET_UPS + (e.vy || 0), vz: dz / vl * BULLET_UPS + (e.vz || 0),
+          life: BULLET_LIFE, tracer: true, side: 0, trav: 0, // every simulated ride round glows (each stands for ~1.5–2 real rounds)
+          ride: true, rideId: e.id, tk: RIDE_TRK[e.type], gun: G.g, dm: G.rate / n, rsrc: e.type });
+        guns.rounds++;
+        if (mission) mission.rideRounds = (mission.rideRounds || 0) + 1;
+      }
+    }
+    ride.flash = 1;
+    ride.snd -= dt;
+    if (ride.snd <= 0 && window.FGAudio) { ride.snd = 0.11; if (e.type === "p51" && window.FGAudio.p51Gun) window.FGAudio.p51Gun(E.x, E.y, E.z); else if (window.FGAudio.enemyGun) window.FGAudio.enemyGun(E.x, E.y, E.z); }
+  }
+  function rideOpts() {
+    if (!ride || !ride.eye) return null;
+    return { id: ride.id, type: ride.e.type, eye: ride.eye, pf: ride.pf, cam: ride.basis, flash: ride.flash, dead: ride.deadT != null, eyeL: RIDE_EYE, mph: (ride.e.V || 0) / MPH, ft: 25000 + (ride.e.y - CAM.y) * FT_PER_UNIT, guns: RIDE_GUNS[ride.e.type].map((G) => [G.p[0], G.p[1], G.p[2], G.g === "mg151" ? 0.34 : G.g === "mg131" ? 0.1 : 0.22]) };
+  }
+  function rideHud() {
+    const el = document.getElementById("rideLabel"); if (!el) return;
+    if (!ride) { if (!el.classList.contains("hidden")) el.classList.add("hidden"); return; }
+    const e = ride.e, ft = Math.round((25000 + (e.y - CAM.y) * FT_PER_UNIT) / 100) * 100, mph = Math.round((e.V || Math.hypot(e.vx, e.vy, e.vz + VF)) / MPH);
+    const t = rideLabel(e) + (ride.deadT != null ? "  ·  DOWN" : "  ·  " + mph + " mph  ·  " + ft.toLocaleString("en-US") + " ft");
+    if (el.textContent !== t) el.textContent = t;
+    el.classList.remove("hidden");
+    el.classList.toggle("allied", e.team === "allied");
   }
 
   function lookBasis() {
@@ -3919,8 +4088,8 @@
   }
 
   function project(x, y, z) {
-    const b = lookBasis();
-    const dx = x - EYE.x, dy = y - EYE.y, dz = z - EYE.z;
+    const b = viewBasis(), E = viewEye(); // 1.6.6: ride-along aware
+    const dx = x - E.x, dy = y - E.y, dz = z - E.z;
     const camZ = dx * b.fx + dy * b.fy + dz * b.fz;
     const camX = dx * b.rx + dy * b.ry + dz * b.rz;
     const camY = dx * b.ux + dy * b.uy + dz * b.uz;
@@ -3933,8 +4102,8 @@
 
   // Hitscan / lead-skill checks ignore muzzle shake so recoil can't fake a lead.
   function projectStable(x, y, z) {
-    const b = lookBasis();
-    const dx = x - EYE.x, dy = y - EYE.y, dz = z - EYE.z;
+    const b = viewBasis(), E = viewEye(); // 1.6.6: ride-along aware
+    const dx = x - E.x, dy = y - E.y, dz = z - E.z;
     const camZ = dx * b.fx + dy * b.fy + dz * b.fz;
     const camX = dx * b.rx + dy * b.ry + dz * b.rz;
     const camY = dx * b.ux + dy * b.uy + dz * b.uz;
@@ -4194,7 +4363,7 @@
     return false;
   }
   let lastOwnHitCall = -99;
-  function ownShipHit(h) {
+  function ownShipHit(h, gun, rf) {
     if (!bomber || bomber.dead) return;
     if (window.FGAudio) window.FGAudio.hitOwn("self");
     const p = h.part;
@@ -4207,7 +4376,7 @@
     else msg = p === "wing" ? "YOU'RE HITTING OUR WING!" : "YOU'RE HITTING OUR OWN SHIP!";
     bomber.ownHits = (bomber.ownHits || 0) + 1;
     if (mission) mission.ownHits = (mission.ownHits || 0) + 1;
-    shipHit(bomber, id, "m2", 1, "own");
+    shipHit(bomber, id, gun || "m2", rf || 1, "own");
     // 1.3.8: the hole sits exactly where the round met the rendered skin (raycast point + normal), in the ship's frame
     const hole = { x: h.lx, y: h.ly, z: h.lz };
     if (bomber.holes.length < 80) bomber.holes.push(hole);
@@ -4304,7 +4473,8 @@
   function hitTestBullet(b, dt) {
     // 1.3.2: real ballistics — swept segment vs moving fighter sphere (box-relative)
     for (const e of enemies) {
-      if (!e.alive || e.hold) continue; // 1.5.3: our rounds do NOT skip the Mustangs any more (friendly fire, penalty)
+      if (!e.alive || e.hold) continue;
+      if (b.ride && e.id === b.rideId) continue; // 1.6.6: a ride-along fighter never hits itself // 1.5.3: our rounds do NOT skip the Mustangs any more (friendly fire, penalty)
       const r0x = (b.px != null ? b.px : b.x - b.vx * dt) - (e.x - e.vx * dt), r0y = (b.py != null ? b.py : b.y - b.vy * dt) - (e.y - e.vy * dt), r0z = (b.pz != null ? b.pz : b.z - b.vz * dt) - (e.z - e.vz * dt); // 1.3.9: the round's real previous position on its curved path
       const r1x = b.x - e.x, r1y = b.y - e.y, r1z = b.z - e.z;
       // 1.3.8: exact test vs the rendered 109 at its current heading / pitch / bank (sphere only as broadphase / fallback)
@@ -4318,20 +4488,21 @@
       const qx = r0x + sx * tt, qy = r0y + sy * tt, qz = r0z + sz * tt;
       let fhit = null;
       if (qx * qx + qy * qy + qz * qz < R * R && exact) {
-        const dCam = Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z);
+        const VE = b.ride && ride && ride.eye ? ride.eye : CAM, dCam = Math.hypot(e.x - VE.x, e.y - VE.y, e.z - VE.z);
         const tol = clamp((dCam - 40) * TUNE.fHitTolAng, 0, 1.6); // ≈0.3° of the gunner's view (~2 px on a phone) past 40u, exact skin inside 40u: gunnery stays playable, sparks stay on the skin
         fhit = World3D.rayFighter(e, e.x + r0x, e.y + r0y, e.z + r0z, e.x + r1x, e.y + r1y, e.z + r1z, tol);
         if (fhit === undefined) fhit = qx * qx + qy * qy + qz * qz < FIGHTER_R * FIGHTER_R ? { x: e.x + qx, y: e.y + qy, z: e.z + qz } : null;
         if (!fhit) { if (mission) mission.fMeshMiss = (mission.fMeshMiss || 0) + 1; continue; }
         if (World3D.addFighterHole && fhit.lx != null) World3D.addFighterHole(e, fhit, 0.11);
       } else if (qx * qx + qy * qy + qz * qz < R * R) fhit = { x: e.x + qx, y: e.y + qy, z: e.z + qz };
-      if (fhit && e.team === "allied") return ffMustang(e, fhit, "you");
+      if (fhit && e.team === "allied") return ffMustang(e, fhit, "you", b.ride ? (b.dm || 1) * (RIDE_FMUL[b.gun] || 1) : 1);
       if (fhit) {
         if (mission) { const fl = mission.fHitLog || (mission.fHitLog = []); if (fl.length < 400) fl.push({ id: e.id, x: fhit.x, y: fhit.y, z: fhit.z, lx: fhit.lx, ly: fhit.ly, lz: fhit.lz, bank: e.bank }); }
         let part = "hull";
         if (fhit.lx != null && World3D.fighterBoundR) { const kk = 1.75 / Math.max(0.5, World3D.fighterBoundR(e.type)); part = FC.classifyFighterHit(fhit.lx * kk, fhit.ly * kk, -fhit.lz * kk); }
-        const pd = exact ? FC.fighterRound(e.type, part, TUNE.fRoundDmg, e.sturm) : 1;
-        if (mission) { const L = mission.hitLog || (mission.hitLog = {}), m = L["you:m2>" + e.type] || (L["you:m2>" + e.type] = {}); m[part] = (m[part] || 0) + 1; }
+        const pd = (exact ? FC.fighterRound(e.type, part, TUNE.fRoundDmg, e.sturm) : 1) * (b.ride ? (b.dm || 1) * (RIDE_FMUL[b.gun] || 1) : 1); // 1.6.6: ride rounds carry their gun + batch weight
+        if (b.ride && mission) { mission.rideHits = (mission.rideHits || 0) + 1; mission.rideDmg = (mission.rideDmg || 0) + pd; }
+        if (mission) { const L = mission.hitLog || (mission.hitLog = {}), hk = "you:" + (b.ride ? b.gun : "m2") + ">" + e.type, m = L[hk] || (L[hk] = {}); m[part] = (m[part] || 0) + 1; }
         if (e.ps && e.phase === "attack") { e.ps.hit = true; if (!e.firedPass) e.ps.hitFirst = true; }
         e.hp -= pd;
         e.pHits = (e.pHits || 0) + pd; // damage, same unit as e.cHits
@@ -4342,7 +4513,7 @@
         comboTimer = 2.2;
         spawnHit(e, fhit);
         sfxHit();
-        if (e.hp <= 0) killEnemy(e, (e.cHits || 0) > e.pHits); // 1.3.8: credit goes to whoever did most damage to him
+        if (e.hp <= 0) killEnemy(e, b.ride ? false : (e.cHits || 0) > e.pHits); // 1.6.6: a ride-along kill is always yours // 1.3.8: credit goes to whoever did most damage to him
         else if (e.phase === "attack" && e.burst && (Math.random() < 0.55 ? (e.burst = null, true) : (e.burst.jit = Math.max(e.burst.jit, 1.8), false)) && Math.random() < (e.tgt && e.tgt.kind === "player" ? 0.55 : 0.3)) { // hit and rattled: spoils his run (1.3.8: his burst too, half the time), breaks off early — more so when he's coming at us
           e.burstsLeft = 0; e.phase = "break"; e.phaseT = 0; e.brkSide = Math.random() < 0.5 ? -1 : 1;
           e.breakType = e.type === "190" ? "under" : Math.random() < 0.5 ? "splitS" : "under"; e.invert = e.breakType === "splitS"; if (e.opening) e.opening = false;
@@ -4353,10 +4524,10 @@
     // 1.3.5: no interrupter — our own ship is hit first (it's closest)
     const b0x = b.px != null ? b.px : b.x - b.vx * dt, b0y = b.py != null ? b.py : b.y - b.vy * dt, b0z = b.pz != null ? b.pz : b.z - b.vz * dt;
     const oh = hitOwnShipSeg(b0x, b0y, b0z, b.x, b.y, b.z, b.trav || 0);
-    if (oh) { ownShipHit(oh); return true; }
+    if (oh) { ownShipHit(oh, b.ride ? b.gun : null, b.ride ? b.dm : 1); return true; }
     // 1.3.4: friendly fire — our .50s can hit the other Fortresses
     const fh = hitFriendlySeg(b0x, b0y, b0z, b.x, b.y, b.z, null, true);
-    if (fh) { friendlyFireHit(fh, TUNE.ffPlayerDmg, true); return true; }
+    if (fh) { friendlyFireHit(fh, TUNE.ffPlayerDmg, true, b.ride ? b.gun : null, b.ride ? b.dm : 1); return true; }
     return false;
   }
 
@@ -4840,7 +5011,7 @@
   function update(dt) {
     window.__FG_SIMT = (window.__FG_SIMT || 0) + dt; // 1.3.9: sim clock for the tracer persistence smear
     elapsed += dt;
-    if (window.FGAudio && !update._inAdvance) { const b = lookBasis(); window.FGAudio.frame({ playing: state === "PLAYING", firing: !!(input.fire && !guns.overheated), listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: EYE.x, cy: EYE.y, cz: EYE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20), holes: bomber ? Math.max(bomber.holes.length, bomber.holeN || 0) : 0 }); }
+    if (window.FGAudio && !update._inAdvance) { const b = viewBasis(), LE = viewEye(); window.FGAudio.frame({ playing: state === "PLAYING", firing: !!(input.fire && !guns.overheated && !ride), listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: LE.x, cy: LE.y, cz: LE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20), holes: bomber ? Math.max(bomber.holes.length, bomber.holeN || 0) : 0 }); }
     if (state === "TITLE") {
       gunner.yaw = 0.25 + Math.sin(elapsed * 0.18) * 0.35;
       gunner.pitch = 0.10 + Math.sin(elapsed * 0.11) * 0.05;
@@ -4856,8 +5027,8 @@
     applyAim(dt);
     onTarget = MISSION_MODE ? false : !!screenHitscan();
     if (downSeq) input.fire = false;
-    tryFire(dt);
-    { const firingNow = !!(input.fire && !guns.overheated); if (guns.fireWas && !firingNow && window.FGAudio && window.FGAudio.gunRelease) window.FGAudio.gunRelease(); guns.fireWas = firingNow; } // 1.5.6: trigger released / jammed / cut → the gun's end sound (audio plays it once, and only if rounds were fired)
+    if (ride) { ridePose(); rideFire(dt); } else tryFire(dt); // 1.6.6: on a ride-along the trigger works that fighter's guns
+    { const firingNow = !!(input.fire && !guns.overheated && !ride); if (guns.fireWas && !firingNow && window.FGAudio && window.FGAudio.gunRelease) window.FGAudio.gunRelease(); guns.fireWas = firingNow; } // 1.5.6: trigger released / jammed / cut → the gun's end sound (audio plays it once, and only if rounds were fired)
     for (let i = 0; i < 2; i++) {
       guns.recoilLR[i] = Math.max(0, guns.recoilLR[i] - dt * 9);
       guns.flashLR[i] = Math.max(0, guns.flashLR[i] - dt * 13);
@@ -4937,7 +5108,9 @@
     if (window.FGVoice && mission && !update._inAdvance) { try { if (VX.bailed && downSeq && downSeq.chute && downSeq.chute.t > 3.2 && !window.FGVoice.silenced && (downSeq.chute.t > 7 || !window.FGVoice.state().cur)) window.FGVoice.silence(true); /* 1.6.0: the last line ("You're out!") is allowed to finish before the radio goes quiet */ vTimeline(); window.FGVoice.gunsFiring = !!input.fire; window.FGVoice.tick(mission.t); } catch (e) { window.FGVoice.stats.errors++; } }
     if (downSeq && state === "PLAYING") updateDownSeq(dt);
     updateWorld(dt, false);
+    rideTick(dt);
     updateHud();
+    rideHud();
     if (callouts.length) {
       callouts[0].life -= dt;
       for (let k = 1; k < callouts.length; k++) callouts[k].age += dt;
@@ -4968,6 +5141,7 @@
   }
   function applyLookDelta(dxPx, dyPx) {
     const k = lookRadPerPx();
+    if (ride) { rideLook(dxPx, dyPx, k); return; } // 1.6.6: head movement inside the fighter cockpit
     // lookXSign = -1: drag right → look right (3D camera-right = world -X)
     gunner.yaw = wrapYaw(gunner.yaw - dxPx * k);
     gunner.pitch = clampPitch(gunner.pitch - dyPx * k);
@@ -4981,6 +5155,7 @@
     if (input.keys["arrowup"] || input.keys["w"]) ay += 1;
     if (input.keys["arrowdown"] || input.keys["s"]) ay -= 1;
     gunner.yawV = 0; gunner.pitchV = 0;
+    if (ride) { if (ax || ay) { ride.yaw = clamp(ride.yaw - ax * 1.4 * dt, -RIDE_YAW, RIDE_YAW); ride.pitch = clamp(ride.pitch + ay * 1.0 * dt, RIDE_PMIN, RIDE_PMAX); ridePose(); } return; }
     if (ax || ay) {
       gunner.yaw = wrapYaw(gunner.yaw + ax * 1.4 * dt);
       gunner.pitch = clampPitch(gunner.pitch + ay * 1.0 * dt);
@@ -5143,6 +5318,9 @@
     const inChute = !!(downSeq && (downSeq.phase === "chute" || (downSeq.phase === "done" && state !== "GAMEOVER")));
     const use3d = World3D && World3D.ready;
     const models3d = use3d && World3D.modelsReady;
+    if (ride && (state !== "PLAYING" || downSeq)) endRide();
+    if (ride) ridePose(); // 1.6.6: exact pose for this frame (also with a frozen sim)
+    if (ride || rideHud.on) { rideHud(); rideHud.on = !!ride; }
     if (use3d) {
       World3D.sync(enemies, gunner, clouds);
       if (models3d && World3D.setTracers) { const n = fillTracerBuf(); World3D.setTracers(tracerBuf, n); }
@@ -5182,17 +5360,17 @@
       drawCanopy();
       drawTurretInterior();
       drawGuns();
-    } else if (!inChute) {
+    } else if (!inChute && !ride) {
       // light plexi dirt + vignette only — metal/glass come from GLTF
       drawPlexiOverlay();
     }
-    drawMuzzleGrit();
+    if (!ride) drawMuzzleGrit(); // 1.6.6: the turret's own overlays stay off while you ride in a fighter
     if (!models3d) drawBrass();
-    if (!inChute) drawCabinFx();
-    if (!downSeq) drawCrosshair(models3d && !inChute);
+    if (!inChute && !ride) drawCabinFx();
+    if (!downSeq && !ride) drawCrosshair(models3d && !inChute);
     if (!inChute) drawHitMarks();
     if (!models3d) drawFarFighters(); // 1.3.6: 3D mode draws far 109s as depth-tested GL specks
-    if (!downSeq) { drawIncoming(); if (!mouse.desktop) drawControls(); } // 1.4.0-web: no touch hints on desktop
+    if (!downSeq) { if (!ride) drawIncoming(); if (!mouse.desktop) drawControls(); } // 1.4.0-web: no touch hints on desktop
     if (downSeq) drawDownOverlay(inChute);
     // 1.3.2: flash lives at the barrel tips in 3D; only a faint warm kick at the bottom edge here
     if (guns.muzzle > 0.08 && state === "PLAYING") {
@@ -5926,11 +6104,11 @@
       // no barrel anchoring; it fades in over the first ~16 u (≈19 m) and burns out at end of life.
       const sp = Math.hypot(b.vx, b.vy, b.vz) || 1, trav = b.trav || 0;
       if (trav < 0.5) continue;
-      const tl = Math.min(28, 0.45 * trav); // 28 u = the same ~65 ms of travel as the gunners' 22 u at 330 u/s; near the gun the tail never reaches back to the barrel
-      const fi = clamp((trav - 4) / 14, 0, 1);  // fades in between ~5 m and ~22 m from the muzzle
+      const tl = b.ride ? Math.min(40, 0.95 * trav) : Math.min(28, 0.45 * trav); // 1.6.6: a ride-along round's streak reaches back toward its gun, so the wing / cowl streams read from the cockpit // 28 u = the same ~65 ms of travel as the gunners' 22 u at 330 u/s; near the gun the tail never reaches back to the barrel
+      const fi = b.ride ? clamp((trav - 1) / 6, 0, 1) : clamp((trav - 4) / 14, 0, 1);  // (1.6.6: a ride-along gun's tracer lights right off the wing/nose) fades in between ~5 m and ~22 m from the muzzle
       const a = fi * fi * (3 - 2 * fi) * clamp(b.life / TRACER_BURN, 0, 1);
       if (a < 0.02) continue;
-      put(b.x, b.y, b.z, b.x - b.vx / sp * tl, b.y - b.vy / sp * tl, b.z - b.vz / sp * tl, 0, a);
+      put(b.x, b.y, b.z, b.x - b.vx / sp * tl, b.y - b.vy / sp * tl, b.z - b.vz / sp * tl, b.tk || 0, a);
     }
     const capA = 240, capX = 120; let nX = 0; // 1.4.0: draw caps — the gunners' and the 109s' glowing rounds never swamp the sky
     for (const t of tracers) {
@@ -7021,6 +7199,7 @@
   function mouseLook(dx, dy) {
     if (!dx && !dy) return;
     const k = mouseRadPerPx();
+    if (ride) { rideLook(dx, dy, k); return; } // 1.6.6
     gunner.yaw = wrapYaw(gunner.yaw - dx * k); // continuous yaw, wraps forever (tail clamps via clampStationAim)
     gunner.pitch = clampPitch(gunner.pitch - dy * k);
     clampStationAim();
@@ -7095,6 +7274,7 @@
       ev.preventDefault();
       return;
     }
+    if (ride) { const now = performance.now(); if (now - (ride.tapT || 0) < 320 && Math.hypot(x - (ride.tapX || 0), y - (ride.tapY || 0)) < 70) { rideRecenter(); ride.tapT = 0; } else { ride.tapT = now; ride.tapX = x; ride.tapY = y; } } // 1.6.6: quick double-tap = head forward
     input.stickActive = true;
     input.stickId = ev.pointerId;
     input.stickX = x; input.stickY = y;
@@ -7150,6 +7330,12 @@
   window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
     input.keys[k] = true;
+    if (state === "PLAYING" && !downSeq && !e.repeat) { // 1.6.6 ride-along keys: R ride / back to B-17, , . (or Q E) cycle, C recentre the head
+      if (k === "r") rideToggle();
+      else if (ride && (k === "," || k === "q")) rideCycle(-1);
+      else if (ride && (k === "." || k === "e")) rideCycle(1);
+      else if (ride && k === "c") rideRecenter();
+    }
     if (k === " " || k === "enter") {
       if (state === "TITLE") startGame();
       else if (state === "GAMEOVER") restartGame();
@@ -7574,6 +7760,19 @@
     holdOff: (x, y, z) => holdOff(x, y, z),
     // 1.3.9: one of our rounds and a box-gunner tracer launched with the same state; after the air
     // frame turns they must still be in the same place (both swing with the formation)
+    ride: { // 1.6.6 test hooks
+      start: (sel) => { const L = rideList(); const e = sel == null ? rideDefault() : typeof sel === "number" ? L[sel] : L.find((q) => q.id === sel) || L.find((q) => q.type === sel); return e ? startRide(e) && { id: e.id, type: e.type, label: rideLabel(e) } : false; },
+      end: () => { endRide(); return true; },
+      cycle: (d) => { rideCycle(d || 1); return ride ? rideLabel(ride.e) : null; },
+      look: (yawDeg, pitchDeg) => { if (!ride) return false; ride.yaw = clamp(yawDeg * Math.PI / 180, -RIDE_YAW, RIDE_YAW); ride.pitch = clamp(pitchDeg * Math.PI / 180, RIDE_PMIN, RIDE_PMAX); ridePose(); return [ride.yaw, ride.pitch]; },
+      recenter: () => rideRecenter(),
+      list: () => rideList().map((e) => ({ id: e.id, type: e.type, label: rideLabel(e), phase: e.phase, team: e.team, d: Math.round(Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z)) })),
+      state: () => ride ? { id: ride.id, type: ride.e.type, label: rideLabel(ride.e), alive: ride.e.alive, yaw: ride.yaw, pitch: ride.pitch, eye: ride.eye, pf: ride.pf, dead: ride.deadT, bank: Math.atan2(-(ride.pf ? ride.pf.ry : 0), ride.pf ? ride.pf.uy : 1) * 180 / Math.PI, phase: ride.e.phase } : null,
+      fire: (on) => { input.fire = !!on; input.fireId = on ? "test" : null; },
+      kill: () => { if (!ride) return false; const e = ride.e; if (e.team === "allied") { e.hp = 0; killP51(e, "cpu"); } else killEnemy(e, true); return true; },
+      fighter: () => ride ? ride.e : null,
+      stats: () => mission ? { rounds: mission.rideRounds || 0, hits: mission.rideHits || 0, dmg: mission.rideDmg || 0, lost: mission.rideLost || 0, log: mission.rideLog || [] } : null,
+    },
     twinRound: (dx, dy, dz) => { const L = Math.hypot(dx, dy, dz); const o = { x: CAM.x, y: CAM.y + 3, z: CAM.z, vx: dx / L * BULLET_UPS, vy: dy / L * BULLET_UPS, vz: dz / L * BULLET_UPS }; const bl = Object.assign({ life: BULLET_LIFE, tracer: true, side: 0, trav: 0, twin: 1 }, o); bullets.push(bl); const tr = Object.assign({ life: BULLET_LIFE, maxLife: BULLET_LIFE, trav: 0, team: "allied", twin: 1 }, o); tracers.push(tr); window.__twin = [bl, tr]; return true; },
     twinCheck: () => { const t = window.__twin; if (!t) return null; const [b, r] = t; return { sep: Math.hypot(b.x - r.x, b.y - r.y, b.z - r.z), bLife: b.life, rLife: r.life, heading: mission ? mission.heading || 0 : null, roll: mission ? mission.turnRoll || 0 : null, b: { x: b.x - CAM.x, z: b.z - CAM.z } }; },
     balInfo: () => ({ BAL_G, BAL_K, BULLET_UPS, BULLET_LIFE, VF, CONV_R }),

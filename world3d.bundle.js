@@ -41375,6 +41375,557 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     }
     const slotOf = /* @__PURE__ */ new Map();
     const slotUsed = new Array(64).fill(false);
+    const RIDE_CP = {};
+    const _rideM = new Matrix4(), _rideR = new Vector3(), _rideU = new Vector3(), _rideF = new Vector3();
+    let rideStats = { on: false, type: null, builds: 0 };
+    function rideReticleTex(kind) {
+      const c = document.createElement("canvas");
+      c.width = c.height = 256;
+      const x = c.getContext("2d");
+      x.translate(128, 128);
+      x.shadowColor = kind === "k14" ? "rgba(255,170,60,0.9)" : "rgba(255,120,40,0.9)";
+      x.shadowBlur = 6;
+      x.strokeStyle = x.fillStyle = kind === "k14" ? "rgba(255,196,90,0.95)" : "rgba(255,150,70,0.95)";
+      if (kind === "k14") {
+        for (let k = 0; k < 6; k++) {
+          const a = k * Math.PI / 3 - Math.PI / 2, r = 92;
+          x.save();
+          x.translate(Math.cos(a) * r, Math.sin(a) * r);
+          x.rotate(a);
+          x.beginPath();
+          x.moveTo(-9, 0);
+          x.lineTo(0, -5);
+          x.lineTo(9, 0);
+          x.lineTo(0, 5);
+          x.closePath();
+          x.fill();
+          x.restore();
+        }
+        x.beginPath();
+        x.arc(0, 0, 4.5, 0, Math.PI * 2);
+        x.fill();
+        x.lineWidth = 1.2;
+        x.globalAlpha = 0.35;
+        x.beginPath();
+        x.arc(0, 0, 118, 0, Math.PI * 2);
+        x.stroke();
+      } else {
+        x.lineWidth = 3.2;
+        x.beginPath();
+        x.arc(0, 0, 92, 0, Math.PI * 2);
+        x.stroke();
+        x.lineWidth = 2.6;
+        x.beginPath();
+        x.moveTo(-118, 0);
+        x.lineTo(-14, 0);
+        x.moveTo(14, 0);
+        x.lineTo(118, 0);
+        x.moveTo(0, -14);
+        x.lineTo(0, -100);
+        x.moveTo(0, 14);
+        x.lineTo(0, 118);
+        x.stroke();
+        x.lineWidth = 2;
+        for (const d of [36, 64]) {
+          x.beginPath();
+          x.moveTo(-6, d);
+          x.lineTo(6, d);
+          x.stroke();
+        }
+        x.beginPath();
+        x.arc(0, 0, 3.6, 0, Math.PI * 2);
+        x.fill();
+      }
+      const t = new CanvasTexture(c);
+      t.colorSpace = SRGBColorSpace;
+      return t;
+    }
+    function rideCanvas(w, h) {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      return c;
+    }
+    const RIDE_PANEL = {
+      // gauge layout in panel px (512 × 192): [x, y, r, kind]
+      "109": { bg: "#3b3f41", gauges: [[52, 54, 38, "asi"], [140, 50, 38, "alt"], [228, 54, 32, "ai"], [314, 50, 38, "rpm"], [402, 54, 36, "ata"], [96, 142, 30, "comp"], [180, 146, 28, "temp"], [262, 146, 28, "oil"]], ammo: [350, 116, 4] },
+      "190": { bg: "#383c3e", gauges: [[50, 50, 34, "asi"], [128, 46, 34, "ai"], [206, 46, 34, "alt"], [284, 46, 32, "comp"], [362, 50, 34, "rpm"], [450, 56, 34, "ata"], [90, 138, 30, "fuel"], [172, 142, 28, "oil"], [252, 142, 28, "temp"]], ammo: [318, 122, 4] },
+      p51: { bg: "#3c4934", gauges: [[46, 48, 32, "asi"], [120, 44, 32, "ai"], [194, 44, 32, "alt"], [268, 44, 32, "comp"], [342, 46, 32, "rpm"], [416, 48, 30, "mp"], [478, 112, 26, "vsi"], [70, 136, 28, "turn"], [144, 140, 26, "oil"], [214, 140, 26, "temp"], [286, 140, 26, "fuel"]], ammo: null }
+    };
+    function drawRidePanel(cv, type, mph, ft, t) {
+      const L = RIDE_PANEL[type], x = cv.getContext("2d"), W = cv.width, H = cv.height;
+      x.fillStyle = L.bg;
+      x.fillRect(0, 0, W, H);
+      const gr = x.createLinearGradient(0, 0, 0, H);
+      gr.addColorStop(0, "rgba(255,255,255,0.07)");
+      gr.addColorStop(1, "rgba(0,0,0,0.28)");
+      x.fillStyle = gr;
+      x.fillRect(0, 0, W, H);
+      x.strokeStyle = "rgba(0,0,0,0.35)";
+      x.lineWidth = 2;
+      x.strokeRect(3, 3, W - 6, H - 6);
+      for (const [gx, gy, r, k] of L.gauges) {
+        x.fillStyle = "#151515";
+        x.beginPath();
+        x.arc(gx, gy, r + 4, 0, 6.283);
+        x.fill();
+        x.fillStyle = "#0b0b0b";
+        x.beginPath();
+        x.arc(gx, gy, r, 0, 6.283);
+        x.fill();
+        x.strokeStyle = "#e8e4d8";
+        x.lineWidth = 1.6;
+        const nT = k === "comp" ? 0 : 12;
+        for (let i = 0; i < nT; i++) {
+          const a2 = -2.4 + i * 4.8 / (nT - 1), r0 = r * (i % 2 ? 0.86 : 0.78);
+          x.beginPath();
+          x.moveTo(gx + Math.cos(a2 - 1.571) * r0, gy + Math.sin(a2 - 1.571) * r0);
+          x.lineTo(gx + Math.cos(a2 - 1.571) * r * 0.95, gy + Math.sin(a2 - 1.571) * r * 0.95);
+          x.stroke();
+        }
+        if (k === "ai") {
+          x.fillStyle = "#3a5a7a";
+          x.beginPath();
+          x.arc(gx, gy, r * 0.9, Math.PI, 0);
+          x.fill();
+          x.fillStyle = "#4b3a26";
+          x.beginPath();
+          x.arc(gx, gy, r * 0.9, 0, Math.PI);
+          x.fill();
+          x.strokeStyle = "#f0e6c0";
+          x.lineWidth = 2;
+          x.beginPath();
+          x.moveTo(gx - r * 0.6, gy);
+          x.lineTo(gx + r * 0.6, gy);
+          x.stroke();
+          continue;
+        }
+        if (k === "comp") {
+          x.fillStyle = "#e8e4d8";
+          x.font = "bold " + Math.round(r * 0.5) + "px sans-serif";
+          x.textAlign = "center";
+          x.textBaseline = "middle";
+          x.fillText(["N", "E", "S", "W"][Math.floor(t * 0.05 % 4)], gx, gy);
+          continue;
+        }
+        let v;
+        if (k === "asi") v = Math.min(1, Math.max(0, mph / 600));
+        else if (k === "alt") v = ft % 1e4 / 1e4;
+        else if (k === "rpm") v = 0.72 + Math.sin(t * 1.3) * 0.01;
+        else if (k === "ata" || k === "mp") v = 0.66 + Math.sin(t * 0.9) * 0.01;
+        else if (k === "vsi") v = 0.5;
+        else if (k === "turn") v = 0.5;
+        else v = { temp: 0.58, oil: 0.52, fuel: 0.7 }[k] || 0.5;
+        const a = -2.4 + v * 4.8 - 1.571;
+        x.strokeStyle = "#f2f0e6";
+        x.lineWidth = Math.max(2, r * 0.07);
+        x.lineCap = "round";
+        x.beginPath();
+        x.moveTo(gx - Math.cos(a) * r * 0.15, gy - Math.sin(a) * r * 0.15);
+        x.lineTo(gx + Math.cos(a) * r * 0.82, gy + Math.sin(a) * r * 0.82);
+        x.stroke();
+        if (k === "alt") {
+          const a2 = -1.571 + ft % 1e5 / 1e5 * 6.283;
+          x.lineWidth = r * 0.1;
+          x.beginPath();
+          x.moveTo(gx, gy);
+          x.lineTo(gx + Math.cos(a2) * r * 0.5, gy + Math.sin(a2) * r * 0.5);
+          x.stroke();
+        }
+        x.fillStyle = "#777";
+        x.beginPath();
+        x.arc(gx, gy, r * 0.08, 0, 6.283);
+        x.fill();
+      }
+      if (L.ammo) {
+        const [ax, ay, n] = L.ammo;
+        for (let i = 0; i < n; i++) {
+          const bx = ax + i * 30;
+          x.fillStyle = "#121212";
+          x.fillRect(bx, ay, 26, 52);
+          x.fillStyle = "#d8d2c0";
+          x.font = "bold 13px monospace";
+          x.textAlign = "center";
+          x.textBaseline = "middle";
+          x.fillText(String(9 - i * 2), bx + 13, ay + 14);
+          x.fillText("0", bx + 13, ay + 30);
+          x.fillStyle = "#6a6";
+          x.fillRect(bx + 8, ay + 42, 10, 5);
+        }
+      }
+    }
+    function rideWingTex(type, port) {
+      const cv = rideCanvas(512, 256), x = cv.getContext("2d");
+      if (type === "p51") {
+        const g = x.createLinearGradient(0, 0, 512, 256);
+        g.addColorStop(0, "#b9bec2");
+        g.addColorStop(0.5, "#a8adb1");
+        g.addColorStop(1, "#c3c7ca");
+        x.fillStyle = g;
+        x.fillRect(0, 0, 512, 256);
+        for (let i = 0; i < 260; i++) {
+          x.fillStyle = "rgba(" + (Math.random() < 0.5 ? "255,255,255" : "40,44,48") + "," + (0.03 + Math.random() * 0.05).toFixed(3) + ")";
+          x.fillRect(Math.random() * 512, Math.random() * 256, 20 + Math.random() * 60, 6 + Math.random() * 14);
+        }
+        x.fillStyle = "#8d9296";
+        x.fillRect(0, 0, 512, 26);
+        x.fillStyle = "rgba(0,0,0,0.12)";
+        x.fillRect(0, 26, 512, 3);
+      } else {
+        x.fillStyle = "#555b52";
+        x.fillRect(0, 0, 512, 256);
+        for (let i = 0; i < 9; i++) {
+          x.fillStyle = i % 2 ? "#4b5149" : "#5e6459";
+          x.beginPath();
+          const u = i * 60;
+          x.moveTo(u, 0);
+          x.lineTo(u + 70, 0);
+          x.lineTo(u + 20, 256);
+          x.lineTo(u - 50, 256);
+          x.fill();
+        }
+      }
+      x.strokeStyle = type === "p51" ? "rgba(60,66,72,0.55)" : "rgba(20,22,20,0.4)";
+      x.lineWidth = 1.5;
+      for (const v of [70, 150, 215]) {
+        x.beginPath();
+        x.moveTo(0, v);
+        x.lineTo(512, v + 8);
+        x.stroke();
+      }
+      for (const u of [60, 150, 250, 340, 430]) {
+        x.beginPath();
+        x.moveTo(u, 0);
+        x.lineTo(u - 14, 256);
+        x.stroke();
+      }
+      x.fillStyle = "rgba(30,30,30,0.5)";
+      for (let i = 0; i < 40; i++) x.fillRect(Math.random() * 512, Math.random() * 256, 2, 2);
+      if (type === "p51") {
+        for (const u of [0.37, 0.43, 0.49]) {
+          x.fillStyle = "#2a2a2a";
+          x.beginPath();
+          x.ellipse(u * 512, 9, 3.5, 2.6, 0, 0, 6.283);
+          x.fill();
+        }
+        x.strokeStyle = "rgba(40,40,40,0.5)";
+        x.strokeRect(0.36 * 512, 60, 0.15 * 512, 70);
+        if (port) {
+          const cx = 0.72 * 512, cy = 128, R = 52;
+          x.fillStyle = "#1d2c63";
+          x.fillRect(cx - R * 2.05, cy - R * 0.42, R * 4.1, R * 0.84);
+          x.fillStyle = "#f4f4f2";
+          x.fillRect(cx - R * 1.95, cy - R * 0.32, R * 3.9, R * 0.64);
+          x.fillStyle = "#1d2c63";
+          x.beginPath();
+          x.arc(cx, cy, R, 0, 6.283);
+          x.fill();
+          x.fillStyle = "#f4f4f2";
+          x.beginPath();
+          for (let k = 0; k < 10; k++) {
+            const a = -1.571 + k * Math.PI / 5, r = k % 2 ? R * 0.38 : R * 0.97;
+            x.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+          }
+          x.fill();
+        }
+      } else {
+        const cx = 0.68 * 512, cy = 128, R = 46;
+        x.fillStyle = "#f2f2f0";
+        x.fillRect(cx - R, cy - R * 0.22, R * 2, R * 0.44);
+        x.fillRect(cx - R * 0.22, cy - R, R * 0.44, R * 2);
+        x.fillStyle = "#111";
+        x.fillRect(cx - R * 0.8, cy - R * 0.13, R * 1.6, R * 0.26);
+        x.fillRect(cx - R * 0.13, cy - R * 0.8, R * 0.26, R * 1.6);
+      }
+      const t = new CanvasTexture(cv);
+      t.colorSpace = SRGBColorSpace;
+      t.anisotropy = 4;
+      t.flipY = false;
+      return t;
+    }
+    function buildRideCockpit(type) {
+      const g = new Group();
+      g.name = "rideCockpit_" + type;
+      g.visible = false;
+      const ger = type !== "p51";
+      const mat = (col, o) => {
+        const c = new Color(col);
+        return new MeshLambertMaterial(Object.assign({ color: c, emissive: c.clone().multiplyScalar(0.22), fog: false }, o || {}));
+      };
+      const frameM = mat(ger ? 4869970 : 9278102), intM = mat(ger ? 4080197 : 4740924), padM = mat(ger ? 2894374 : 3025444), paintNose = mat(type === "p51" ? 11120306 : type === "190" ? 5923160 : 5791834), dark = mat(1973790), metal = mat(7106674), spinM = mat(type === "p51" ? 12070954 : type === "190" ? 3949112 : 14209728), yel = mat(13214248), sightM = mat(ger ? 4540747 : 4145728);
+      const glassM = new MeshBasicMaterial({ color: 10930368, transparent: true, opacity: 0.09, depthWrite: false, fog: false });
+      const glassEdge = new LineBasicMaterial({ color: 8365210, transparent: true, opacity: 0.32, fog: false });
+      const boxG = new BoxGeometry(1, 1, 1), _a = new Vector3(), _b = new Vector3(), _d = new Vector3(), _y2 = new Vector3(0, 1, 0);
+      const bar = (p, q, th, m, th2) => {
+        _a.set(p[0], p[1], p[2]);
+        _b.set(q[0], q[1], q[2]);
+        _d.subVectors(_b, _a);
+        const L = _d.length();
+        const o = new Mesh(boxG, m || frameM);
+        o.position.copy(_a).addScaledVector(_d, 0.5);
+        o.scale.set(th, L, th2 || th);
+        o.quaternion.setFromUnitVectors(_y2, _d.normalize());
+        g.add(o);
+        return o;
+      };
+      const poly = (pts, th, m) => {
+        for (let i = 0; i + 1 < pts.length; i++) bar(pts[i], pts[i + 1], th, m);
+      };
+      const hoop = (z, w, yB, yT, th, m, n) => {
+        const pts = [];
+        n = n || 10;
+        for (let k = 0; k <= n; k++) {
+          const a = Math.PI * k / n;
+          pts.push([-Math.cos(a) * w, yB + Math.sin(a) * (yT - yB), z]);
+        }
+        poly(pts, th, m);
+      };
+      const cyl = (r0, r1, z0, z1, y, m, seg) => {
+        const o = new Mesh(new CylinderGeometry(r1, r0, z1 - z0, seg || 24, 1, false), m);
+        o.rotation.x = Math.PI / 2;
+        o.position.set(0, y, (z0 + z1) / 2);
+        g.add(o);
+        return o;
+      };
+      const quad = (pts, m, uv) => {
+        const geo = new BufferGeometry();
+        geo.setAttribute("position", new Float32BufferAttribute([].concat(pts[0], pts[1], pts[2], pts[0], pts[2], pts[3]), 3));
+        if (uv) geo.setAttribute("uv", new Float32BufferAttribute([].concat(uv[0], uv[1], uv[2], uv[0], uv[2], uv[3]), 2));
+        geo.computeVertexNormals();
+        const o = new Mesh(geo, m);
+        g.add(o);
+        return o;
+      };
+      const slab = (w, h, d, x, y, z, rx) => {
+        const geo = new BoxGeometry(w, h, d);
+        const o = new Mesh(geo, glassM);
+        o.position.set(x, y, z);
+        o.rotation.x = rx || 0;
+        o.renderOrder = 55;
+        g.add(o);
+        const e = new LineSegments(new EdgesGeometry(geo), glassEdge);
+        o.add(e);
+        return o;
+      };
+      const N = type === "p51" ? { r0: 0.36, r1: 0.27, z1: 3.15, y: -0.56, sp: 0.2, sl: 0.5 } : type === "190" ? { r0: 0.47, r1: 0.45, z1: 2, y: -0.66, sp: 0.3, sl: 0.42 } : { r0: 0.36, r1: 0.26, z1: 2.75, y: -0.56, sp: 0.21, sl: 0.5 };
+      cyl(N.r0, N.r1, 0.62, N.z1, N.y, paintNose, 28);
+      if (type === "109") {
+        const lo = cyl(N.r0 * 0.99, N.r1 * 0.99, 1.7, N.z1 - 0.02, N.y - 0.03, yel, 24);
+        lo.scale.set(1.01, 1, 0.94);
+        {
+          const prof = [];
+          for (let i = 0; i <= 16; i++) {
+            const t = i / 16;
+            prof.push(new Vector2(Math.max(1e-4, Math.pow(Math.sin(Math.PI * Math.pow(t, 0.62)), 0.9)), t - 0.5));
+          }
+          const tg = new LatheGeometry(prof, 20);
+          const zc = 1.22, rc = N.r0 + (N.r1 - N.r0) * (zc - 0.62) / (N.z1 - 0.62);
+          for (const s of [-1, 1]) {
+            const ang = 0.42, cx = s * Math.sin(ang) * rc, cy = N.y + Math.cos(ang) * rc;
+            const b = new Mesh(tg, paintNose);
+            b.rotation.order = "ZXY";
+            b.rotation.set(-Math.PI / 2, 0, -s * ang);
+            b.scale.set(0.09, 0.52, 0.024);
+            b.position.set(cx, cy - 8e-3, zc);
+            g.add(b);
+          }
+        }
+        const o = new Mesh(boxG, paintNose);
+        o.scale.set(0.12, 0.14, 0.42);
+        o.position.set(N.r0 + 0.02, N.y + 0.02, 1.45);
+        g.add(o);
+      }
+      if (type === "190") {
+        cyl(N.r1 + 0.025, N.r1 + 0.025, N.z1 - 0.14, N.z1, N.y, mat(3093552), 28);
+        for (let k = 0; k < 14; k++) {
+          const a = Math.PI * (0.05 + 0.9 * k / 13), R = N.r0 + 0.015;
+          const fl = new Mesh(boxG, mat(2764331));
+          fl.scale.set(0.15, 0.014, 0.17);
+          fl.position.set(Math.cos(a) * R, N.y - Math.sin(a) * R, 0.7);
+          fl.rotation.z = Math.PI / 2 - a;
+          g.add(fl);
+        }
+      }
+      if (type === "p51") quad([[-0.16, N.y + N.r0 + 2e-3, 0.62], [0.16, N.y + N.r0 + 2e-3, 0.62], [0.12, N.y + N.r1 + 2e-3, N.z1], [-0.12, N.y + N.r1 + 2e-3, N.z1]], mat(4080168, { side: DoubleSide }));
+      const spin = new Mesh(new ConeGeometry(N.sp, N.sl, 18), spinM);
+      spin.rotation.x = Math.PI / 2;
+      spin.position.set(0, N.y, N.z1 + N.sl / 2);
+      g.add(spin);
+      const disc = new Mesh(new CircleGeometry(type === "p51" ? 1.12 : 1, 36), new MeshBasicMaterial({ color: 2105376, transparent: true, opacity: 0.05, depthWrite: false, side: DoubleSide, fog: false }));
+      disc.position.set(0, N.y, N.z1 + 0.12);
+      g.add(disc);
+      if (type !== "190") for (const s of [-1, 1]) for (let k = 0; k < 6; k++) {
+        const o = new Mesh(boxG, dark);
+        o.scale.set(0.05, 0.05, 0.11);
+        o.position.set(s * (N.r0 * 0.9), N.y + 0.1 - (type === "p51" ? 0.05 : 0.12), 0.95 + k * 0.17);
+        g.add(o);
+      }
+      cyl(0.22, 0.42, -4, -0.62, -0.42, paintNose, 16);
+      {
+        const o = new Mesh(boxG, paintNose);
+        o.scale.set(0.05, 0.85, 0.75);
+        o.position.set(0, 0.02, -3.85);
+        g.add(o);
+      }
+      const W = type === "p51" ? { s: 3.77, le: 1.25, rc: 1.7, tc: 0.85, y: -0.92 } : type === "190" ? { s: 3.5, le: 0.95, rc: 1.45, tc: 0.75, y: -0.9 } : { s: 3.3, le: 0.95, rc: 1.3, tc: 0.62, y: -0.86 };
+      for (const s of [-1, 1]) {
+        const tipY = W.y + 0.26, tLE = W.le - (W.rc - W.tc) * 0.28;
+        const wm = new MeshLambertMaterial({ map: rideWingTex(type, s > 0), side: DoubleSide, fog: false, emissive: 2105376 });
+        quad([[s * 0.38, W.y, W.le], [s * W.s, tipY, tLE], [s * W.s, tipY, tLE - W.tc], [s * 0.38, W.y, W.le - W.rc]], wm, [[0, 0], [1, 0], [1, 1], [0, 1]]);
+      }
+      if (type === "109") {
+        const th = 0.014;
+        bar([-0.15, -0.17, 0.62], [-0.12, 0.17, 0.45], th);
+        bar([0.15, -0.17, 0.62], [0.12, 0.17, 0.45], th);
+        bar([-0.12, 0.17, 0.45], [0.12, 0.17, 0.45], th);
+        bar([-0.15, -0.17, 0.62], [0.15, -0.17, 0.62], th);
+        slab(0.25, 0.33, 0.055, 0, 0, 0.53, -0.37);
+        for (const s of [-1, 1]) {
+          bar([s * 0.15, -0.17, 0.62], [s * 0.33, -0.19, 0.48], th);
+          bar([s * 0.33, -0.19, 0.48], [s * 0.23, 0.2, 0.34], th);
+          bar([s * 0.12, 0.17, 0.45], [s * 0.23, 0.2, 0.34], th);
+          bar([s * 0.34, -0.2, 0.34], [s * 0.34, -0.2, -0.62], 0.012);
+          bar([s * 0.235, 0.21, 0.34], [s * 0.22, 0.25, -0.62], 0.013);
+          bar([s * 0.33, 0.02, 0.34], [s * 0.32, 0.03, -0.62], 0.01);
+        }
+        poly([[-0.34, -0.2, 0.34], [-0.23, 0.2, 0.34], [0.23, 0.2, 0.34], [0.34, -0.2, 0.34]], 0.016);
+        poly([[-0.34, -0.2, -0.62], [-0.22, 0.25, -0.62], [0.22, 0.25, -0.62], [0.34, -0.2, -0.62]], 0.016);
+        slab(0.36, 0.3, 0.05, 0, 0.06, -0.6, 0);
+      } else if (type === "190") {
+        const th = 5e-3;
+        for (const s of [-1, 1]) {
+          bar([s * 0.15, -0.17, 0.6], [s * 0.11, 0.13, 0.47], th);
+          bar([s * 0.15, -0.17, 0.6], [s * 0.28, -0.2, 0.48], th);
+          bar([s * 0.28, -0.2, 0.48], [s * 0.2, 0.11, 0.41], 4e-3);
+          bar([s * 0.11, 0.13, 0.47], [s * 0.2, 0.11, 0.41], 35e-4);
+          bar([s * 0.33, -0.25, 0.4], [s * 0.33, -0.25, -0.6], 8e-3);
+        }
+        bar([-0.15, -0.17, 0.6], [0.15, -0.17, 0.6], th);
+        slab(0.25, 0.31, 0.06, 0, -0.01, 0.52, -0.4);
+        hoop(-0.52, 0.31, -0.25, 0.27, 0.01);
+        const pz2 = new Mesh(boxG, intM);
+        pz2.scale.set(0.4, 0.34, 0.03);
+        pz2.position.set(0, 0, -0.62);
+        g.add(pz2);
+      } else {
+        const th = 8e-3;
+        for (const s of [-1, 1]) {
+          bar([s * 0.12, -0.17, 0.6], [s * 0.1, 0.1, 0.48], th);
+          bar([s * 0.12, -0.17, 0.6], [s * 0.3, -0.21, 0.45], 8e-3);
+        }
+        {
+          const pts = [];
+          for (let k = 0; k <= 8; k++) {
+            const a = Math.PI * k / 8;
+            pts.push([-Math.cos(a) * 0.1, 0.1 + Math.sin(a) * 0.035, 0.48 + Math.sin(a) * 4e-3]);
+          }
+          poly(pts, 7e-3);
+        }
+        bar([-0.12, -0.17, 0.6], [0.12, -0.17, 0.6], 8e-3);
+        slab(0.2, 0.27, 0.035, 0, -0.03, 0.55, -0.42);
+        for (const s of [-1, 1]) bar([s * 0.35, -0.3, 0.42], [s * 0.35, -0.3, -0.75], 9e-3);
+        const hr = new Mesh(boxG, padM);
+        hr.scale.set(0.2, 0.18, 0.06);
+        hr.position.set(0, -0.02, -0.55);
+        g.add(hr);
+      }
+      {
+        const o = new Mesh(boxG, intM);
+        o.scale.set(0.46, 0.012, 0.03);
+        o.position.set(0, -0.128, 0.455);
+        g.add(o);
+      }
+      const pcv = rideCanvas(512, 192);
+      drawRidePanel(pcv, type, 0, 25e3, 0);
+      const ptex = new CanvasTexture(pcv);
+      ptex.colorSpace = SRGBColorSpace;
+      ptex.anisotropy = 4;
+      const panel = new Mesh(new PlaneGeometry(0.46, 0.17), new MeshLambertMaterial({ map: ptex, fog: false, emissive: 16777215, emissiveMap: ptex, emissiveIntensity: 0.4 }));
+      panel.position.set(0, -0.215, 0.45);
+      panel.lookAt(0, 0.04, 0);
+      g.add(panel);
+      g.userData.panel = { cv: pcv, tex: ptex, t: -1 };
+      if (ger) {
+        const b = new Mesh(boxG, sightM);
+        b.scale.set(0.034, 0.032, 0.07);
+        b.position.set(0, -0.112, 0.47);
+        g.add(b);
+        slab(0.058, 0.048, 3e-3, 0, -0.072, 0.478, -0.5);
+        bar([-0.029, -0.097, 0.488], [-0.029, -0.052, 0.466], 3e-3, sightM);
+        bar([0.029, -0.097, 0.488], [0.029, -0.052, 0.466], 3e-3, sightM);
+      } else {
+        const b = new Mesh(boxG, sightM);
+        b.scale.set(0.022, 0.024, 0.065);
+        b.position.set(-0.034, -0.132, 0.47);
+        g.add(b);
+        const h = new Mesh(boxG, mat(2500906));
+        h.scale.set(0.018, 0.01, 0.022);
+        h.position.set(-0.034, -0.116, 0.49);
+        g.add(h);
+        bar([-0.027, -0.111, 0.495], [-0.027, -0.079, 0.488], 3e-3, sightM);
+        slab(0.05, 0.04, 3e-3, -4e-3, -0.06, 0.49, -0.55);
+      }
+      const ret = new Mesh(new PlaneGeometry(1, 1), new MeshBasicMaterial({ map: rideReticleTex(type === "p51" ? "k14" : "revi"), transparent: true, depthTest: false, depthWrite: false, blending: AdditiveBlending, fog: false }));
+      const RD = 0.5, RS = RD * Math.tan((type === "p51" ? 7.2 : 6.6) * Math.PI / 180);
+      ret.scale.set(RS * 2, RS * 2, 1);
+      ret.position.set(0, 0, RD);
+      ret.rotation.y = Math.PI;
+      ret.renderOrder = 998;
+      g.add(ret);
+      g.userData.ret = ret;
+      g.userData.flash = [];
+      g.traverse((o) => {
+        if (o.isMesh || o.isLineSegments) {
+          o.frustumCulled = false;
+          o.userData.noHit = true;
+        }
+      });
+      scene.add(g);
+      rideStats.builds++;
+      return g;
+    }
+    function syncRide(R) {
+      for (const k in RIDE_CP) RIDE_CP[k].visible = false;
+      rideStats.on = !!R;
+      rideStats.type = R ? R.type : null;
+      if (!R) return;
+      const g = RIDE_CP[R.type] || (RIDE_CP[R.type] = buildRideCockpit(R.type));
+      const P = R.pf, C = R.cam;
+      camera.position.set(R.eye.x, R.eye.y, R.eye.z);
+      _rideM.makeBasis(_rideR.set(C.rx, C.ry, C.rz), _rideU.set(C.ux, C.uy, C.uz), _rideF.set(-C.fx, -C.fy, -C.fz));
+      camera.quaternion.setFromRotationMatrix(_rideM);
+      g.position.set(R.eye.x, R.eye.y, R.eye.z);
+      _rideM.makeBasis(_rideR.set(-P.rx, -P.ry, -P.rz), _rideU.set(P.ux, P.uy, P.uz), _rideF.set(P.fx, P.fy, P.fz));
+      g.quaternion.setFromRotationMatrix(_rideM);
+      g.visible = true;
+      {
+        const PN = g.userData.panel, now2 = pnow() / 1e3;
+        if (PN && (now2 - PN.t > 0.16 || now2 < PN.t)) {
+          PN.t = now2;
+          drawRidePanel(PN.cv, R.type, R.mph || 0, R.ft || 25e3, now2);
+          PN.tex.needsUpdate = true;
+        }
+      }
+      const fl = g.userData.flash, guns = R.guns || [], eL = R.eyeL || { x: 0, y: 0, z: 0 };
+      while (fl.length < guns.length) {
+        const s = new Sprite(new SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: AdditiveBlending, fog: false }));
+        s.renderOrder = 60;
+        g.add(s);
+        fl.push(s);
+      }
+      for (let i = 0; i < fl.length; i++) {
+        const p = guns[i], s = fl[i];
+        if (!p || !(R.flash > 0.25) || R.dead) {
+          s.visible = false;
+          continue;
+        }
+        s.visible = Math.random() < 0.8;
+        s.position.set(-(p[0] - eL.x), p[1] - eL.y, p[2] - eL.z + 0.15);
+        const sz = (p[3] || 0.3) * (0.75 + Math.random() * 0.5);
+        s.scale.set(sz, sz, 1);
+        s.material.opacity = 0.7 + Math.random() * 0.3;
+      }
+    }
     function sync(enemiesArr, gunnerState, opts = {}) {
       const shake = gunnerState.shake || 0;
       const recoil = gunnerState.recoil || 0;
@@ -41408,11 +41959,13 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         _rollQ.setFromEuler(_camFallE.set(FALL.ship.pd || 0, FALL.ship.yaw || 0, -(FALL.ship.roll || 0), "YXZ"));
       } else _rollQ.setFromAxisAngle(_zAxis2, -(opts.roll || 0));
       camera.quaternion.premultiply(_rollQ);
+      const RIDE = opts.ride || null;
+      if (RIDE || rideStats.on) syncRide(RIDE);
       if (ownShip) updateOwnShip(opts);
       {
         const inChute = !!(FALL && FALL.phase === "chute");
         CR.chuteRich = inChute;
-        const atTail = opts.station === "tail";
+        const atTail = opts.station === "tail" && !RIDE;
         CR.tailDim = atTail;
         if (TS.walls) {
           const tw = town.getWorldPosition(_mw);
@@ -41424,10 +41977,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
           if (TS.wagons) TS.wagons.visible = nearH && dTown < 1800;
           if (TS.cxg) TS.cxg.visible = nearH && agl < 1100;
         }
-        turretAnchor.visible = !inChute && !window.__FG_FREECAM;
-        updateCage(pitch, inChute || !!window.__FG_FREECAM || atTail);
-        if (window.__FG_FREECAM) arch.visible = false;
-        sightBox.visible = !inChute && !window.__FG_FREECAM && !atTail;
+        turretAnchor.visible = !inChute && !window.__FG_FREECAM && !RIDE;
+        updateCage(pitch, inChute || !!window.__FG_FREECAM || atTail || !!RIDE);
+        if (window.__FG_FREECAM || RIDE) arch.visible = false;
+        sightBox.visible = !inChute && !window.__FG_FREECAM && !atTail && !RIDE;
         if (tailFrame) tailFrame.visible = false;
         if (ownShip) {
           if (!ownShip.userData._tailTagged) {
@@ -41506,6 +42059,14 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         const mesh = slot.mesh;
         mesh.visible = true;
         mesh.position.set(e.x, e.y, e.z);
+        if (RIDE && e.id === RIDE.id) {
+          mesh.visible = false;
+          if (slot.fire) slot.fire.visible = false;
+          if (slot.trail) slot.trail.line.visible = false;
+          if (slot.wasAlive && !e.alive) spawnKillFx(mesh.position, e);
+          slot.wasAlive = e.alive;
+          continue;
+        }
         if (!slot.fire) {
           slot.fire = new Sprite(new SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: AdditiveBlending }));
           slot.fire.visible = false;
@@ -42004,6 +42565,15 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       townLayout: () => TL,
       townStrike,
       townReset,
+      get rideStats() {
+        const g = rideStats.type && RIDE_CP[rideStats.type];
+        let n = 0;
+        if (g) g.traverse((o) => {
+          if (o.isMesh) n++;
+        });
+        return Object.assign({ meshes: n, built: Object.keys(RIDE_CP), cam: camera.position.toArray().map((v) => +v.toFixed(2)), ownVis: !!(ownShip && ownShip.visible), turretVis: turretAnchor.visible }, rideStats);
+      },
+      // 1.6.6
       get bombStats() {
         return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) });
       },
