@@ -5452,7 +5452,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     "190": { bg: "#383c3e", gauges: [[50, 50, 34, "asi"], [128, 46, 34, "ai"], [206, 46, 34, "alt"], [284, 46, 32, "comp"], [362, 50, 34, "rpm"], [450, 56, 34, "ata"], [90, 138, 30, "fuel"], [172, 142, 28, "oil"], [252, 142, 28, "temp"]], ammo: [318, 122, 4] },
     p51: { bg: "#3c4934", gauges: [[46, 48, 32, "asi"], [120, 44, 32, "ai"], [194, 44, 32, "alt"], [268, 44, 32, "comp"], [342, 46, 32, "rpm"], [416, 48, 30, "mp"], [478, 112, 26, "vsi"], [70, 136, 28, "turn"], [144, 140, 26, "oil"], [214, 140, 26, "temp"], [286, 140, 26, "fuel"]], ammo: null },
   };
-  function drawRidePanel(cv, type, mph, ft, t) {
+  function drawRidePanel(cv, type, mph, ft, t, att) { // 1.6.7b: att = { bank, pitch, hdg } (rad) from the ridden airframe's basis
     const L = RIDE_PANEL[type], x = cv.getContext("2d"), W = cv.width, H = cv.height;
     x.fillStyle = L.bg; x.fillRect(0, 0, W, H);
     const gr = x.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "rgba(255,255,255,0.07)"); gr.addColorStop(1, "rgba(0,0,0,0.28)"); x.fillStyle = gr; x.fillRect(0, 0, W, H);
@@ -5463,8 +5463,21 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       x.strokeStyle = "#e8e4d8"; x.lineWidth = 1.6;
       const nT = k === "comp" ? 0 : 12;
       for (let i = 0; i < nT; i++) { const a = -2.4 + i * 4.8 / (nT - 1), r0 = r * (i % 2 ? 0.86 : 0.78); x.beginPath(); x.moveTo(gx + Math.cos(a - 1.571) * r0, gy + Math.sin(a - 1.571) * r0); x.lineTo(gx + Math.cos(a - 1.571) * r * 0.95, gy + Math.sin(a - 1.571) * r * 0.95); x.stroke(); }
-      if (k === "ai") { x.fillStyle = "#3a5a7a"; x.beginPath(); x.arc(gx, gy, r * 0.9, Math.PI, 0); x.fill(); x.fillStyle = "#4b3a26"; x.beginPath(); x.arc(gx, gy, r * 0.9, 0, Math.PI); x.fill(); x.strokeStyle = "#f0e6c0"; x.lineWidth = 2; x.beginPath(); x.moveTo(gx - r * 0.6, gy); x.lineTo(gx + r * 0.6, gy); x.stroke(); continue; }
-      if (k === "comp") { x.fillStyle = "#e8e4d8"; x.font = "bold " + Math.round(r * 0.5) + "px sans-serif"; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(["N", "E", "S", "W"][Math.floor((t * 0.05) % 4)], gx, gy); continue; }
+      if (k === "ai") { // 1.6.7b: live attitude indicator — horizon card rolls opposite the bank, slides with pitch (±60° → ±0.8 r), fixed miniature aircraft
+        const bk = att ? att.bank : 0, pc = att ? Math.max(-1.047, Math.min(1.047, att.pitch)) : 0, R0 = r * 0.9, off = pc / 1.047 * r * 0.8;
+        x.save(); x.beginPath(); x.arc(gx, gy, R0, 0, 6.283); x.clip(); x.translate(gx, gy); x.rotate(-bk);
+        x.fillStyle = "#3a5a7a"; x.fillRect(-2 * r, -2 * r + off, 4 * r, 2 * r); x.fillStyle = "#4b3a26"; x.fillRect(-2 * r, off, 4 * r, 2 * r);
+        x.strokeStyle = "#f0e6c0"; x.lineWidth = 2; x.beginPath(); x.moveTo(-r, off); x.lineTo(r, off); x.stroke();
+        x.lineWidth = 1; for (const d of [-0.5236, -0.2618, 0.2618, 0.5236]) { const yy = off - d / 1.047 * r * 0.8; x.beginPath(); x.moveTo(-r * 0.18, yy); x.lineTo(r * 0.18, yy); x.stroke(); } // ±15° / ±30° pitch marks
+        x.restore();
+        x.strokeStyle = "#ffb43c"; x.lineWidth = 2.4; x.beginPath(); x.moveTo(gx - r * 0.55, gy); x.lineTo(gx - r * 0.18, gy); x.lineTo(gx - r * 0.1, gy + r * 0.1); x.moveTo(gx + r * 0.55, gy); x.lineTo(gx + r * 0.18, gy); x.lineTo(gx + r * 0.1, gy + r * 0.1); x.stroke();
+        x.fillStyle = "#ffb43c"; x.beginPath(); x.arc(gx, gy, r * 0.06, 0, 6.283); x.fill();
+        continue; }
+      if (k === "comp") { // 1.6.7b: directional card turns with heading under a fixed lubber line
+        const hd = att ? att.hdg : 0; x.save(); x.translate(gx, gy); x.rotate(-hd); x.fillStyle = "#e8e4d8"; x.strokeStyle = "#e8e4d8"; x.lineWidth = 1.2; x.textAlign = "center"; x.textBaseline = "middle"; x.font = "bold " + Math.round(r * 0.32) + "px sans-serif";
+        for (let i = 0; i < 12; i++) { const a = i * 0.5236; x.save(); x.rotate(a); x.beginPath(); x.moveTo(0, -r * 0.95); x.lineTo(0, -r * (i % 3 ? 0.84 : 0.76)); x.stroke(); if (i % 3 === 0) x.fillText(["N", "E", "S", "W"][i / 3], 0, -r * 0.55); x.restore(); }
+        x.restore(); x.strokeStyle = "#ffb43c"; x.lineWidth = 2.4; x.beginPath(); x.moveTo(gx, gy - r * 0.98); x.lineTo(gx, gy - r * 0.7); x.stroke();
+        continue; }
       let v; // 0..1 needle position
       if (k === "asi") v = Math.min(1, Math.max(0, mph / 600));
       else if (k === "alt") v = (ft % 10000) / 10000;
@@ -5636,7 +5649,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     _rideM.makeBasis(_rideR.set(-P.rx, -P.ry, -P.rz), _rideU.set(P.ux, P.uy, P.uz), _rideF.set(P.fx, P.fy, P.fz)); // right-handed: local +X = port, +Y = canopy, +Z = nose
     g.quaternion.setFromRotationMatrix(_rideM);
     g.visible = true;
-    { const PN = g.userData.panel, now = pnow() / 1000; if (PN && (now - PN.t > 0.16 || now < PN.t)) { PN.t = now; drawRidePanel(PN.cv, R.type, R.mph || 0, R.ft || 25000, now); PN.tex.needsUpdate = true; } } // live ASI + altimeter, ≤ 6 Hz
+    { const PN = g.userData.panel, now = pnow() / 1000; if (PN && (now - PN.t > 0.16 || now < PN.t)) { PN.t = now; drawRidePanel(PN.cv, R.type, R.mph || 0, R.ft || 25000, now, { bank: Math.atan2(-P.ry, P.uy), pitch: Math.asin(Math.max(-1, Math.min(1, P.fy))), hdg: 1.5708 + (R.hd || 0) - Math.atan2(P.fx, P.fz) }); PN.tex.needsUpdate = true; } } // live ASI + altimeter, ≤ 6 Hz
     const fl = g.userData.flash, guns = R.guns || [], eL = R.eyeL || { x: 0, y: 0, z: 0 };
     while (fl.length < guns.length) { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); s.renderOrder = 60; g.add(s); fl.push(s); }
     for (let i = 0; i < fl.length; i++) {

@@ -169,7 +169,8 @@
     fHitTolAng: 0.005,       // 1.3.8: our rounds vs the rendered 109 — line may pass within ~0.3° of the skin (strike lands ON the skin)
     fRoundDmg: 3.3,          // 1.3.8: per .50 strike on a 109 (the exact mesh is a smaller target than the old 2.9u sphere)
     cpuTracerRate: 13, // 1.6.4: slightly hotter box defense (6 stations visible)        // 1.3.7: tracers/s per twin mount (singles ×0.5–0.6); arcs now limit who can fire
-    cpuBurstMul: 1, gerDmg: 0.14, gerPlayerMul: 0.5, // 1.5.1: global scale on German hits to B-17s (balance after the fighters got tougher/more accurate)
+    cpuBurstMul: 1, gerDmg: 0.62, // 1.6.7: was 0.14 — aimed fire lands ~4.4× fewer hits than 1.6.6’s guided rounds; same damage per pass
+    gerPlayerMul: 0.5, // 1.5.1: global scale on German hits to B-17s (balance after the fighters got tougher/more accurate)
     burstsPerPass: 1, bursts190: 2,         // 1.4.0: 2 → 3 — tougher 109s press their attacks (balances the tougher Fortresses)
     open1Km: 4.0, open1Up: 1400,  // 1.3.5 opening: Staffel 1 start (km ahead, m above), diving
     open2Km: 5.5,
@@ -906,6 +907,9 @@
     turnBleed190: 4.0, turnBleed109: 3.5, turnBleedP51: 2.5,
     diveAccMph: 15.0,
     climb190: 2700, climb109: 3500, climbP51: 3400, // ft/min (soft energy bias)
+    // 1.6.7 user's table: level / dive limit (mph), sustained 360° turn time (s) — the turn-rate cap is 2π/T at any speed
+    vLev109: 400 * MPH, vLev190: 405 * MPH, vLevP51: 435 * MPH, vDiv109: 500 * MPH, vDiv190: 530 * MPH, vDivP51: 500 * MPH,
+    turnT109: 21, turnT190: 24, turnTP51: 20,
     alt15k: 4572 * U_PER_M,
   };
   // 1.3.5: box centre = mean of all 19 slots (player in the lead squadron's port wing slot)
@@ -942,6 +946,19 @@
     const sBox = -b + Math.sqrt(Math.max(0, b * b - VF * VF + V * V));
     return norm3(sBox * u.x, sBox * u.y, sBox * u.z + VF);
   }
+  // 1.6.7 GUN LEAD: the AIR-frame nose direction h that puts a round on a point P moving at (tvx,tvy,tvz) in the box frame.
+  // A round leaves at muzzle speed along the nose plus the shooter's CURRENT velocity (box frame), so with w = v_shooter − v_target:
+  // |r − w·t| = Vm·t → h = (r − w·t) / (Vm·t). Returns { x, y, z, t } or null.
+  function gunLead(e, px, py, pz, tvx, tvy, tvz) {
+    const rx = px - e.x, ry = py - e.y, rz = pz - e.z, cx = (tvx || 0) - (e.vx || 0), cy = (tvy || 0) - (e.vy || 0), cz = (tvz || 0) - (e.vz || 0), S = BULLET_UPS;
+    const a = cx * cx + cy * cy + cz * cz - S * S, b = rx * cx + ry * cy + rz * cz, c = rx * rx + ry * ry + rz * rz;
+    if (a >= 0) return null;
+    const t = (-b - Math.sqrt(Math.max(0, b * b - a * c))) / a; if (!(t > 0)) return null;
+    const hx = rx + cx * t, hy = ry + cy * t, hz = rz + cz * t, hl = Math.hypot(hx, hy, hz) || 1;
+    return { x: hx / hl, y: hy / hl, z: hz / hl, t };
+  }
+  function leadCos(e, L) { return L ? L.x * e.hx + L.y * e.hy + L.z * e.hz : -1; }
+  const GUN_COS = Math.cos(3 / 57.2958), GUN_RANGE = 400, CANNON_RANGE = 267; // 1.6.7: fire only with the nose within 3° of the lead point; MGs < 600 m, cannon < 400 m
   function boxClosing(u, V) { // box-frame speed achievable along unit u at airspeed V
     const b = VF * u.z;
     return -b + Math.sqrt(Math.max(0, b * b - VF * VF + V * V));
@@ -965,8 +982,12 @@
     let wx = d.x - c * hx, wy = d.y - c * hy, wz = d.z - c * hz;
     const wl = Math.hypot(wx, wy, wz);
     if (wl > 1e-5) { wx /= wl; wy /= wl; wz /= wl; } else { wx = ux; wy = uy; wz = uz; }
-    const nMaxE = e.nMax || FAI.nMax, rrE = e.rollRate || FAI.rollRate, raE = e.rollAcc || FAI.rollAcc;
-    const wRate = Math.min(th * (gain || 1.6), Math.sqrt(Math.max(0.04, nMaxE * nMaxE - 1)) * G_U / V); // nMax = total load factor; the turn gets the part beyond 1 g
+    if (c < -0.3 && !e.invert && Math.abs(hy) < 0.85) { // 1.6.7: a reversal (target behind) is flown as a level-ish turn, not a 10 s half-loop with the canopy down
+      wy *= 0.3; const k = wx * hx + wy * hy + wz * hz; wx -= k * hx; wy -= k * hy; wz -= k * hz; const l2 = Math.hypot(wx, wy, wz); if (l2 > 1e-5) { wx /= l2; wy /= l2; wz /= l2; }
+    }
+    const brkG = e.phase === "break" && e.type !== "p51", nMaxE = e.nMax || FAI.nMax, rrE = brkG ? 3.2 : (e.rollRate || FAI.rollRate), raE = brkG ? 10 : (e.rollAcc || FAI.rollAcc); // 1.6.7: a break is a snap half-roll (≈180°/s) and pull
+    const tT = e.type === "190" ? FAI.turnT190 : e.type === "p51" ? FAI.turnTP51 : FAI.turnT109;
+    const wRate = Math.min(th * (gain || 1.6), Math.sqrt(Math.max(0.04, nMaxE * nMaxE - 1)) * G_U / V, TAU / tT * (brkG ? 2.2 : 1)); // a break is an INSTANTANEOUS hard pull (paid for with speed by the bleed below), not a sustained turn // nMax = total load factor; the turn gets the part beyond 1 g; 1.6.7: never faster than the type's sustained 360° time (24 / 21 / 20 s)
     const gpx = G_U * hy * hx, gpy = -G_U + G_U * hy * hy, gpz = G_U * hy * hz; // gravity ⊥ path
     const ax = wx * V * wRate - gpx, ay = wy * V * wRate - gpy, az = wz * V * wRate - gpz; // wanted lift
     const aMag = Math.hypot(ax, ay, az);
@@ -977,12 +998,26 @@
       tx = ax / aMag; ty = ay / aMag; tz = az / aMag;
       // small pushes are flown with negative g, not by rolling inverted (unless a Split-S is wanted)
       const pushLim = e.type === "p51" ? 99 : e.phase === "attack" && e.phaseT > 1.0 ? 1.9 : 1.0; // Mustangs never roll inverted to follow a target down // 1.3.7: attackers roll upright and push rather than stay inverted
-      if (!e.invert && aMag < G_U * pushLim && tx * ux + ty * uy + tz * uz < -0.2) { tx = -tx; ty = -ty; tz = -tz; }
+      const upr = lvl ? ux * lvl.x + uy * lvl.y + uz * lvl.z : 1; // 1.6.7: > 0 = canopy up
+      if (!e.invert && upr > 0.2 && aMag < G_U * pushLim && tx * ux + ty * uy + tz * uz < -0.2) { tx = -tx; ty = -ty; tz = -tz; } // upright: small pushes are flown with negative g. Inverted: never — he rolls upright (no long inverted flight)
       if (e.type === "p51" && lvl && tx * lvl.x + ty * lvl.y + tz * lvl.z < 0) { tx = -tx; ty = -ty; tz = -tz; } // stay upright: push over (negative g, floored at -1 g) instead of rolling inverted
     }
+    if (lvl && !e.invert) { // 1.6.7: bank limit ±115° vs the horizon (no rolling round the clock; only a split-S roll-in goes fully inverted)
+      const bx = lvl.y * tz - lvl.z * ty, by = lvl.z * tx - lvl.x * tz, bz = lvl.x * ty - lvl.y * tx;
+      const phT = Math.atan2(bx * hx + by * hy + bz * hz, lvl.x * tx + lvl.y * ty + lvl.z * tz), PM = e.phase === "break" && e.type !== "p51" ? 2.6 : 2.0; // a German break may roll to 150° and pull (a short half-roll-and-pull down, ≤ 2–3 s); otherwise ±115°
+      if (Math.abs(phT) > PM) {
+        const a = Math.sign(phT) * PM, ca = Math.cos(a), sa = Math.sin(a), kx = hy * lvl.z - hz * lvl.y, ky = hz * lvl.x - hx * lvl.z, kz = hx * lvl.y - hy * lvl.x; // h × lvl
+        tx = lvl.x * ca + kx * sa; ty = lvl.y * ca + ky * sa; tz = lvl.z * ca + kz * sa;
+      }
+    }
     const crx = uy * tz - uz * ty, cry = uz * tx - ux * tz, crz = ux * ty - uy * tx;
-    const phiErr = Math.atan2(crx * hx + cry * hy + crz * hz, ux * tx + uy * ty + uz * tz);
-    const pCmd = clamp(phiErr * 3.0, -rrE, rrE);
+    let phiErr = Math.atan2(crx * hx + cry * hy + crz * hz, ux * tx + uy * ty + uz * tz);
+    if (lvl && !e.invert) { // 1.6.7: bank changes go through wings-level, never the long way round through inverted
+      const bc = (u0x, u0y, u0z) => { const bx = lvl.y * u0z - lvl.z * u0y, by = lvl.z * u0x - lvl.x * u0z, bz = lvl.x * u0y - lvl.y * u0x; return Math.atan2(bx * hx + by * hy + bz * hz, lvl.x * u0x + lvl.y * u0y + lvl.z * u0z); };
+      const phC = bc(ux, uy, uz), phT2 = bc(tx, ty, tz);
+      if (Math.abs(phC) <= 2.2 || !brkG) phiErr = phT2 - phC; // outside the break always back the way it came (from a 150° break bank too): never on round through inverted
+    }
+    const pCmd = Math.sign(phiErr) * Math.min(rrE, Math.abs(phiErr) * 3.0, Math.sqrt(2 * raE * Math.abs(phiErr)) * 0.85); // 1.6.7: brake the roll in time (no overshoot past the wanted bank → no rolling on round the clock)
     const p0 = e.p || 0;
     e.p = p0 + clamp(pCmd - p0, -raE * dt, raE * dt);
     { // roll u about h (Rodrigues, u ⊥ h)
@@ -999,13 +1034,17 @@
     e.hx = hx; e.hy = hy; e.hz = hz; e.ux = ux / ul; e.uy = uy / ul; e.uz = uz / ul;
     e.turnW = Math.hypot(pax, pay, paz) / V;
     const n = lift / G_U;
-    const vT = e.type === "190" ? Math.max(e.vT || 0, FAI.v190) : e.type === "p51" ? (e.vT || FAI.vP51) : (e.vT || FAI.vFull);
-    let dV = -G_U * hy + 0.09 * (vT - V) - 0.25 * Math.max(0, Math.abs(n) - 1.5);
-    // 1.6.4 physics table: dive accel +15 mph/s to dive limit; hard turn bleeds speed
-    if (hy < -0.25) dV += FAI.diveAccMph * MPH;
+    const vLv = e.type === "190" ? FAI.vLev190 : e.type === "p51" ? FAI.vLevP51 : FAI.vLev109, vDv = e.type === "190" ? FAI.vDiv190 : e.type === "p51" ? FAI.vDivP51 : FAI.vDiv109;
+    const vT = Math.min(vLv, e.type === "190" ? Math.max(e.vT || 0, FAI.v190) : e.type === "p51" ? (e.vT || FAI.vP51) : (e.vT || FAI.vFull)); // 1.6.7: the engine alone never makes more than the type's level speed
+    // 1.6.7 energy (user's table): climbing up to the type's climb rate costs no speed (beyond it = a zoom paid with speed); a dive adds at most +15 mph/s, fading to 0 at the dive limit
+    const cr = (e.type === "190" ? FAI.climb190 : e.type === "p51" ? FAI.climbP51 : FAI.climb109) * 0.3048 / 60 * U_PER_M; // u/s
+    let dG;
+    if (hy >= 0) dG = -G_U * Math.max(0, hy - cr / Math.max(V, 1));
+    else dG = Math.min(-G_U * hy, FAI.diveAccMph * MPH) * clamp((vDv - V) / (25 * MPH), 0, 1);
+    let dV = dG + (V > vT ? 0.13 : 0.09) * (vT - V) - 0.25 * Math.max(0, Math.abs(n) - 1.5); // above level speed the drag wins back faster
     { const bleed = e.type === "190" ? FAI.turnBleed190 : e.type === "p51" ? FAI.turnBleedP51 : FAI.turnBleed109;
       if (Math.abs(n) > 2.8) dV -= bleed * MPH * Math.min(1, (Math.abs(n) - 2.8) / 2); }
-    { const vc = e.vCap || (e.type === "190" ? FAI.v190Cap : e.type === "p51" ? FAI.vP51Dive : FAI.vDive);
+    { const vc = Math.min(vDv, e.vCap || vDv);
       if (V > vc) dV -= 1.2 * (V - vc); }
     const vFloor = e.type === "190" ? FAI.v190 * 0.92 : (e.vMin || FAI.vMin);
     e.V = Math.max(vFloor, V + dV * dt);
@@ -1030,21 +1069,32 @@
     e.vx = e.V * e.hx; e.vy = e.V * e.hy; e.vz = e.V * e.hz - VF;
   }
   // steering modifiers: collision avoidance (turret glass, B-17s), deck, energy
+  const AV_R = 27, AV_T0 = 2.0, AV_TT = 1.3; // 1.6.7: 40 m miss radius, 2 s look-ahead (1.3 s on the ship of his own gun run)
   function safeDir(e, d) {
     let dx = d.x, dy = d.y, dz = d.z;
-    const vb = Math.hypot(e.vx, e.vy, e.vz) || 1;
-    const avoid = (ox, oy, oz, R, w) => {
-      const rx = ox - e.x, ry = oy - e.y, rz = oz - e.z;
-      const tca = clamp((rx * e.vx + ry * e.vy + rz * e.vz) / (vb * vb), 0, 2.2);
-      if (tca <= 0 || Math.hypot(rx, ry, rz) > vb * 2.4 + R) return;
-      const mx = e.x + e.vx * tca - ox, my = e.y + e.vy * tca - oy, mz = e.z + e.vz * tca - oz;
+    // 1.6.7 COLLISION AVOIDANCE: look ahead ≤ 2 s along the RELATIVE motion; if the predicted miss to any aircraft (B-17 or fighter) is < 40 m (27 u),
+    // steer away along the miss vector (pull up / push down + lateral). Cheap: a box reject first, every other aircraft only when it is that close.
+    const brkAv = (e.phase === "break" || e.phase === "extend") && e.type === "190"; // the 190 breaking under the box; a 109 split-S resolves by the plain miss vector (he may be diving INTO the low squadron)
+    const brk109 = e.phase === "break" && e.type === "109";
+    const avoid = (ox, oy, oz, ovx, ovy, ovz, R, w, tgt) => {
+      const AV_T = tgt ? AV_TT : (brkAv || brk109) ? 2.2 : AV_T0; // 1.6.7: a breaking/extending German (diving at 450+ mph through the lower ships) looks 2.2 s ahead with a wider margin; the ship he is shooting at: 1.3 s (he breaks on his own at ~1.5 s), everything else 2 s
+      const rx = ox - e.x, ry = oy - e.y, rz = oz - e.z, wx = e.vx - ovx, wy = e.vy - ovy, wz = e.vz - ovz, w2 = wx * wx + wy * wy + wz * wz;
+      const reach = Math.sqrt(w2) * AV_T + R;
+      if (Math.abs(rx) > reach || Math.abs(ry) > reach || Math.abs(rz) > reach) return;
+      const tca = w2 > 1 ? clamp((rx * wx + ry * wy + rz * wz) / w2, 0, AV_T) : 0;
+      const mx = wx * tca - rx, my = wy * tca - ry, mz = wz * tca - rz; // our position relative to him at the closest approach
       const m = Math.hypot(mx, my, mz);
       if (m >= R) return;
-      const k = w * (1 - m / R) / (m || 1);
-      dx += (m ? mx : 0) * k; dy += (m ? my : 1) * k; dz += (m ? mz : 0) * k;
+      const k = w * (1 - m / R) * (1.6 - 0.6 * tca / AV_T) / (m || 1);
+      if (brkAv && my < 12) { dx += mx * k * 0.35; dz += mz * k * 0.35; dy += Math.min(0, my) * k - w * 1.2 * (1 - m / R); e.avoidT = (mission ? mission.t : 0); return; } // a breaking German resolves a conflict by going UNDER (the way he is already going), never by pulling level through the box
+      if (brkAv) dy += w * 0.6 * (1 - m / R); // a breaking German resolves a conflict VERTICALLY (under the ship, the way he is already going), not by a level slide through the box
+      if (m > 0.5) { dx += mx * k; dy += my * k; dz += mz * k; } else { dx += e.ux * w * 1.6; dy += e.uy * w * 1.6; dz += e.uz * w * 1.6; }
+      e.avoidT = (mission ? mission.t : 0);
     };
-    avoid(CAM.x, CAM.y, CAM.z, FAI.camMiss, 2.5);
-    for (const f of friendlies) if (friendlyOk(f)) avoid(f.x, f.y, f.z, 11, 1.8);
+    const avS = e.gunRun && e.phase === "attack" ? e.avShip : null;
+    if (bomber && !bomber.dead) avoid(CAM.x, CAM.y, CAM.z, 0, 0, 0, Math.max(FAI.camMiss, AV_R + 4), 4.0, avS === bomber);
+    for (const f of friendlies) if ((f.alive || f.spiraling) && f.x != null) avoid(f.x, f.y, f.z, f.vx || 0, f.vy || 0, f.vz || 0, AV_R + (brkAv ? 12 : brk109 ? 8 : 4), 4.0, avS === f); // a B-17 is 32 m across: 46 m clearance on its centre
+    for (const q of enemies) if (q !== e && q.alive && !q.hold && q.phase !== "debug") avoid(q.x, q.y, q.z, q.vx || 0, q.vy || 0, q.vz || 0, q === e.target ? AV_R + 4 : AV_R, q === e.target ? 4.0 : 2.4); // the German a Mustang is chasing (and vice versa) gets the full B-17 margin
     { const vm = e.vMin || FAI.vMin, vs = e.vSlow || FAI.vSlow; if (e.V < vs && dy > 0) dy *= Math.max(0, (e.V - vm) / (vs - vm)); } // no stall-climbs
     const yPred = e.y + Math.min(0, e.vy) * 6; // look 6 s ahead: pull out of dives in time (deck wins)
     if (yPred < FAI.floorY + 90) {
@@ -1220,7 +1270,7 @@
     e.phase = "attack"; e.phaseT = 0; e.vT = FAI.vFull; e.invert = false;
     e.fireWin = TAC.fire[mode] || TAC.fire.headon;
     e.breakR = (TAC.brk[mode] || 120) * rand(0.9, 1.1);
-    if (is190) { e.fireWin = [rand(250, 366), 80]; e.breakR = rand(74, 96); if (mission && !mission.called190) { mission.called190 = true; pushCallout("FW190s " + clockLabel(e.x - T.x, e.z - T.z) + " — LOW!", 1.8, true); sfxIntercom(); } } // 1.5.5: the hammer opens at 400-600 yd (244-366 u) and presses to ~130 yd
+    if (is190) { e.fireWin = [rand(250, 366), 80]; e.breakR = rand(100, 125); if (mission && !mission.called190) { mission.called190 = true; pushCallout("FW190s " + clockLabel(e.x - T.x, e.z - T.z) + " — LOW!", 1.8, true); sfxIntercom(); } } // 1.5.5: the hammer opens at 400-600 yd (244-366 u) and presses to ~130 yd
     e.az190 = null;
     if (e.presser && !is190) e.breakR = rand(TAC.presserBrk[0], TAC.presserBrk[1]);
     const r = Math.random();
@@ -1322,9 +1372,13 @@
     const a = frameAngles(ship), c = FC.boxCenter(b.aimId), aw = fromShipA(a, c[0], c[1], c[2]);
     const sx = e.uy * e.hz - e.uz * e.hy, sy = e.uz * e.hx - e.ux * e.hz, sz = e.ux * e.hy - e.uy * e.hx; // port side
     const set = gunSetOf(e), isP = ship === bomber, src = e.type;
+    // 1.6.7: the trigger only makes rounds while the NOSE sits within 3° of the gun-lead point on the aimed spot; cannon only inside 400 m
+    const sv0 = isP ? null : ship, LA = gunLead(e, aw[0], aw[1], aw[2], sv0 ? sv0.vx || 0 : 0, sv0 ? sv0.vy || 0 : 0, sv0 ? sv0.vz || 0 : 0);
+    if (leadCos(e, LA) < GUN_COS) { b.gated = (b.gated || 0) + dt; return; }
+    const rngA = Math.hypot(aw[0] - e.x, aw[1] - e.y, aw[2] - e.z);
     e.mf = 0.1; b.snd -= dt; if (b.snd <= 0) { b.snd = 0.14; if (window.FGAudio) window.FGAudio.enemyGun(e.x, e.y, e.z); }
     for (let gi = 0; gi < set.length; gi++) {
-      const G = set[gi]; b.acc[gi] += G.rate * dt;
+      const G = set[gi]; if ((G.g === "mg151" || G.g === "mk108") && rngA > CANNON_RANGE) continue; b.acc[gi] += G.rate * dt;
       while (b.acc[gi] >= 1) {
         b.acc[gi] -= 1; b.rounds++;
         const mx = e.x + e.hx * 2.6 + sx * G.off[0] + e.ux * G.off[1], my = e.y + e.hy * 2.6 + sy * G.off[0] + e.uy * G.off[1], mz = e.z + e.hz * 2.6 + sz * G.off[0] + e.uz * G.off[1];
@@ -1336,6 +1390,7 @@
         const ea = (b.ba + gaussR() * b.sr) * b.jit, eb = (b.bb + gaussR() * b.sr) * b.jit;
         let fx = dx + rx * ea + ux2 * eb, fy = dy + uy2 * eb, fz = dz + rz * ea + uz2 * eb;
         const fl = Math.hypot(fx, fy, fz) || 1; fx /= fl; fy /= fl; fz /= fl;
+        aimRound(e, mx, my, mz, aw[0], aw[1], aw[2], ship);
         if ((++b.trc % 5) === 1) { // 1.5.8: a visible tracer every 5th round (every round is still simulated below), bent away from the glass when we are the target
           let vx = fx, vy = fy, vz = fz;
           if (isP) {
@@ -1343,8 +1398,8 @@
             const px = cx - vx * al, py = cy - vy * al, pz = cz - vz * al, pd = Math.hypot(px, py, pz);
             if (al > 0 && pd < 5.5) { const k = (5.5 - pd) / Math.max(40, al), qx = pd > 1e-3 ? -px / pd : 1, qy = pd > 1e-3 ? -py / pd : 0, qz = pd > 1e-3 ? -pz / pd : 0; vx += qx * k; vy += qy * k; vz += qz * k; const vl = Math.hypot(vx, vy, vz); vx /= vl; vy /= vl; vz /= vl; }
           }
-          const V = BULLET_UPS; // 1.5.1: same muzzle speed as the player's tracers (was 520)
-          tracers.push({ x: mx + vx * 2, y: my + vy * 2, z: mz + vz * 2, vx: vx * V + e.vx, vy: vy * V + e.vy, vz: vz * V + e.vz, life: Math.min(1.8, range / 400 + 0.35), maxLife: 1.8, trav: 0, team: "axis", hid: false, k190: src === "190" }); // 1.5.3: 190 tracers are RED. 1.5.1: 1 round in 4 glows, like the player's
+          const V = BULLET_UPS + Math.max(0, e.vx * vx + e.vy * vy + e.vz * vz); // 1.6.7: the glowing round flies the real line to the aimed spot (muzzle speed + the shooter's own speed along it), so from his cockpit the tracers go INTO the ship
+          tracers.push({ x: mx + vx * 2, y: my + vy * 2, z: mz + vz * 2, vx: vx * V, vy: vy * V, vz: vz * V, life: Math.min(1.8, range / 400 + 0.35), maxLife: 1.8, trav: 0, team: "axis", hid: false, k190: src === "190" }); // 1.5.3: 190 tracers are RED. 1.5.1: 1 round in 4 glows, like the player's
         }
         const h = rayShips(mx, my, mz, fx, fy, fz, range + 70);
         if (!h) continue;
@@ -1464,8 +1519,8 @@
       if (de > (surge ? 6500 : wide ? 5200 : 4300)) continue;
       const ph = q.phase;
       const strag = isStragTgt(q.tgt) && ATTACKING_PH[ph] || (q.hunt && huntOk(q.hunt));
-      let sc = ATTACKING_PH[ph] ? 3 : ph === "rollin" ? 2.5 : (ph === "break" || ph === "extend") ? 1.4 : 0.9;
-      const s2 = sc * 700 - de + (strag ? 1200 : 0) + (q.hp < q.maxHp ? 150 : 0) + (q.p51n ? -200 : 0) - Math.max(0, dB - 1300) * 0.4 + (surge && q.opening ? 900 : 0);
+      const sc = ATTACKING_PH[ph] ? 2600 : ph === "rollin" ? 2300 : (ph === "break" || ph === "extend") ? 500 : 0; // 1.6.7: Germans on a run (threatening the box) first, and among them the NEAREST (distance counts 1:1)
+      const s2 = sc - de + (strag ? 1200 : 0) + (q.hp < q.maxHp ? 150 : 0) + (q.p51n ? -300 : 0) - Math.max(0, dB - 1300) * 0.3 + (surge && q.opening ? 900 : 0);
       if (s2 > bs) { bs = s2; best = q; }
     }
     return best;
@@ -1476,12 +1531,12 @@
     if (rideHolds(e)) return; // 1.6.6
     const hl = Math.hypot(e.hx, e.hz) || 1, sx = e.hz / hl, sz = -e.hx / hl; // right wing direction
     const dx = T.x - e.x, dy = T.y - e.y, dz = T.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
-    const lead = clamp(dl / BULLET_UPS, 0, 1.0), ax = T.x + T.vx * lead * 0.5 - e.x, ay = T.y + T.vy * lead * 0.5 - e.y, az = T.z + T.vz * lead * 0.5 - e.z, al = Math.hypot(ax, ay, az) || 1;
+    const LT = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz), tf = LT ? LT.t : dl / BULLET_UPS, ax = T.x + T.vx * tf - e.x, ay = T.y + T.vy * tf - e.y, az = T.z + T.vz * tf - e.z, al = Math.hypot(ax, ay, az) || 1, SP = al / Math.max(0.05, tf); // 1.6.7: the tracer flies the real line to where the German will be
     for (let i = 0; i < 1; i++) { // 1.5.8: ONE glowing round per 70 ms slice (≈5.6 rounds fired → ~1 in 5); the hit roll below is unchanged
       e.gunI = ((e.gunI || 0) + 1) % 6;
       const wing = e.gunI < 3 ? -1 : 1, off = (e.gunI % 3) * 1.15 + 2.6; // three guns a side, 2.6–4.9 u out from the centreline
       tracers.push({ x: e.x + e.hx * 4 + sx * wing * off, y: e.y + e.hy * 4 - 0.4, z: e.z + e.hz * 4 + sz * wing * off,
-        vx: ax / al * BULLET_UPS + e.vx + rand(-5, 5), vy: ay / al * BULLET_UPS + e.vy + rand(-5, 5), vz: az / al * BULLET_UPS + e.vz + rand(-5, 5),
+        vx: ax / al * SP + rand(-4, 4), vy: ay / al * SP + rand(-4, 4), vz: az / al * SP + rand(-4, 4),
         life: Math.min(1.3, dl / 380 + 0.35), maxLife: 1.3, trav: 0, team: "allied", p51: true, delay: i * 0.03 });
     }
     e.mf = 0.1; e.mfI = (e.mfI || 0) + 1;
@@ -1512,6 +1567,7 @@
   // Returns true while the guns are firing. A burst lasts 0.45–0.95 s (≈ 40 rounds a gun-pair), then a short gap; gun-camera rules: inside ~370 u, within a few degrees.
   function p51Fire(e, T, range, cosA, dt, hm) {
     const near = Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z) < 1500;
+    { const L = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz), c = leadCos(e, L); cosA = c > GUN_COS ? 1 : 0.5; if (range > GUN_RANGE) cosA = 0.5; } // 1.6.7: six .50s only with the nose within 3° of the lead point, inside 600 m
     if (!e.pbOn) {
       e.pbGap = (e.pbGap || 0) - dt;
       if (e.pbGap <= 0 && range < 400 && range > 40 && cosA > (range < 160 ? 0.93 : 0.955)) {
@@ -1536,7 +1592,7 @@
     const L = mission ? (mission.hitLog || (mission.hitLog = {})) : {};
     const m = L["p51:m2"] || (L["p51:m2"] = {});
     const dx = T.x - e.x, dy = T.y - e.y, dz = T.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
-    for (let i = 0; i < 2; i++) tracers.push({ x: e.x + e.hx * 3, y: e.y + e.hy * 3, z: e.z + e.hz * 3, vx: dx / dl * BULLET_UPS + e.vx + rand(-6, 6), vy: dy / dl * BULLET_UPS + e.vy + rand(-6, 6), vz: dz / dl * BULLET_UPS + e.vz + rand(-6, 6), life: Math.min(1.2, dl / 400 + 0.3), maxLife: 1.2, trav: 0, team: "allied", hid: i === 1, delay: i * 0.04, src: e });
+    { const SP = BULLET_UPS + Math.max(0, (e.vx * dx + e.vy * dy + e.vz * dz) / dl); for (let i = 0; i < 2; i++) tracers.push({ x: e.x + e.hx * 3, y: e.y + e.hy * 3, z: e.z + e.hz * 3, vx: dx / dl * SP + rand(-6, 6), vy: dy / dl * SP + rand(-6, 6), vz: dz / dl * SP + rand(-6, 6), life: Math.min(1.2, dl / 400 + 0.3), maxLife: 1.2, trav: 0, team: "allied", hid: i === 1, delay: i * 0.04, src: e }); }
     if (window.FGAudio && Math.random() < 0.5) window.FGAudio.gun(e.x, e.y, e.z);
     if (Math.random() > p) return false;
     const r = Math.random();
@@ -1572,11 +1628,17 @@
         const dm = Math.hypot(e.x - MM.x, e.y - MM.y, e.z - MM.z), rT = T ? Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z) : 1e9;
         if (e.id > MM.id && dm <= 350 && MM.phase !== "surge") { // formation flying: the wingman is GLUED to his leader's wing (same attitude and speed, 60–70 u off, 55–60 u back) and copies what the leader is doing; in a chase he fires at the leader's German
           const tb = mission ? mission.t : elapsed, side = e.slot ? 1 : -1, ph = e.pairIdx * 1.7;
-          const Pf = p51Follow(MM, 64 * side + 7 * Math.sin(tb * 0.7 + ph), 58 + 6 * Math.sin(tb * 0.5 + ph), -5 + 4 * Math.sin(tb * 0.9 + ph)), kP = 5.5, aA = 1 - Math.exp(-7 * dt);
-          e.vx = MM.vx + (Pf.x - e.x) * kP; e.vy = MM.vy + (Pf.y - e.y) * kP; e.vz = MM.vz + (Pf.z - e.z) * kP;
-          let hx = e.hx + (MM.hx - e.hx) * aA, hy = e.hy + (MM.hy - e.hy) * aA, hz = e.hz + (MM.hz - e.hz) * aA; const hl = Math.hypot(hx, hy, hz) || 1; hx /= hl; hy /= hl; hz /= hl;
+          const Pf = p51Follow(MM, 64 * side + 7 * Math.sin(tb * 0.7 + ph), 58 + 6 * Math.sin(tb * 0.5 + ph), -5 + 4 * Math.sin(tb * 0.9 + ph)), kP = 1.6, aA = 1 - Math.exp(-7 * dt);
+          // 1.6.7: the station-keeping correction is a small, smoothed velocity (≤ 18 u/s ≈ 40 mph) and the NOSE is set to the resulting air velocity — no crabbing (was: a 5.5/s position servo with the leader's nose = up to 176° off the real track)
+          let cx = (Pf.x - e.x) * kP, cy = (Pf.y - e.y) * kP, cz = (Pf.z - e.z) * kP; const cl = Math.hypot(cx, cy, cz); if (cl > 10) { cx *= 10 / cl; cy *= 10 / cl; cz *= 10 / cl; }
+          { const av = safeDir(e, { x: e.hx, y: e.hy, z: e.hz }), dv = (av.x - e.hx) * e.V, dvy = (av.y - e.hy) * e.V, dvz = (av.z - e.hz) * e.V; cx += dv; cy += dvy; cz += dvz; } // collision avoidance on top
+          const kS = 1 - Math.exp(-3 * dt); e.cvx = (e.cvx || 0) + (cx - (e.cvx || 0)) * kS; e.cvy = (e.cvy || 0) + (cy - (e.cvy || 0)) * kS; e.cvz = (e.cvz || 0) + (cz - (e.cvz || 0)) * kS;
+          e.vx = MM.vx + e.cvx; e.vy = MM.vy + e.cvy; e.vz = MM.vz + e.cvz;
+          let avx = e.vx, avy = e.vy, avz = e.vz + VF, avl = Math.hypot(avx, avy, avz) || 1;
+          { const lim = Math.abs(avy / avl) < 0.1 ? FAI.vLevP51 * 1.02 : FAI.vDivP51; if (avl > lim) { avx *= lim / avl; avy *= lim / avl; avz *= lim / avl; avl = lim; e.vx = avx; e.vy = avy; e.vz = avz - VF; } } // never faster than the P-51 can fly
+          const hx = avx / avl, hy = avy / avl, hz = avz / avl;
           let ux = e.ux + (MM.ux - e.ux) * aA, uy = e.uy + (MM.uy - e.uy) * aA, uz = e.uz + (MM.uz - e.uz) * aA; const du = ux * hx + uy * hy + uz * hz; ux -= du * hx; uy -= du * hy; uz -= du * hz; const ul = Math.hypot(ux, uy, uz) || 1;
-          e.hx = hx; e.hy = hy; e.hz = hz; e.ux = ux / ul; e.uy = uy / ul; e.uz = uz / ul; e.V = MM.V; e.p = MM.p || 0; e.bank = MM.bank || 0; e.phi = e.bank; e.gLoad = MM.gLoad || 1; e.turnW = MM.turnW;
+          e.hx = hx; e.hy = hy; e.hz = hz; e.ux = ux / ul; e.uy = uy / ul; e.uz = uz / ul; e.V = avl; e.p = MM.p || 0; e.bank = MM.bank || 0; e.phi = e.bank; e.gLoad = MM.gLoad || 1; e.turnW = MM.turnW;
           e.glued = (e.glued || 0) + dt;
           if (MM.phase === "intercept" && MM.target && MM.target.alive && !MM.target.hold) {
             if (e.phase !== "intercept" || e.target !== MM.target) { if (e.phase === "intercept" && e.target) e.target.p51n = Math.max(0, (e.target.p51n || 0) - 1); p51Go(e, MM.target, 0); e.chLead = false; e.phaseT = 0.6; }
@@ -1616,7 +1678,7 @@
       if (!T || !T.alive || T.hold || e.phaseT > 60 || dT4 > TUNE.p51Abort) { if (mission) { if (!T || !T.alive || T.hold) mission.p51EndLost = (mission.p51EndLost || 0) + 1; else if (e.phaseT > 60) mission.p51EndT = (mission.p51EndT || 0) + 1; else { mission.p51EndLeash = (mission.p51EndLeash || 0) + 1; (mission.p51Abort4 || (mission.p51Abort4 = [])).push({ t: +mission.t.toFixed(1), d: Math.round(dT4), ty: T.type }); } } endIntercept(e); return; }
       const rx = T.x - e.x, ry = T.y - e.y, rz = T.z - e.z, range = Math.hypot(rx, ry, rz) || 1;
       if (wingOf && range > 340) { const Pw = p51Follow(wingOf, 70 * (e.slot ? 1 : -1), 85, 6); e.vT = Math.max(wingOf.V + 45 * MPH, 300 * MPH); e.vCap = 480 * MPH; d = airDirTo(e, Pw.x + wingOf.vx * 0.9, Pw.y + wingOf.vy * 0.9, Pw.z + wingOf.vz * 0.9); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, 1.9); return; }
-      if (T.y < BOX_C.y - 1900 || e.y < BOX_C.y - 1900 || (T.hy < -0.6 && range > 700 && T.y < BOX_C.y - 1300)) { if (mission) mission.p51EndDive = (mission.p51EndDive || 0) + 1; endIntercept(e); return; } // he dived away: let him go
+      if (T.y < BOX_C.y - 900 || e.y < BOX_C.y - 900 || (T.hy < -0.6 && range > 700 && T.y < BOX_C.y - 500)) { if (mission) mission.p51EndDive = (mission.p51EndDive || 0) + 1; endIntercept(e); return; } // he dived away: let him go
       const tL = clamp(range / Math.max(120, e.speed || 150), 0, 1.4);
       const lx = T.x + T.vx * tL * 0.9, ly = T.y + T.vy * tL * 0.9 + clamp(range * 0.1, 0, 55) * (e.phaseT < 4 ? 1 : 0.3), lz = T.z + T.vz * tL * 0.9; // bounce from above and astern
       e.vT = FAI.vP51; e.vCap = FAI.vP51Dive;
@@ -1624,7 +1686,8 @@
       // 1.5.7: ~410 mph cruise (P-51D: ~437 mph max at 25,000 ft, ~380-400 mph combat cruise); a dive adds up to 470 to run a 190 down
       let ax = lx, ay = ly, az = lz;
       if (e.chLead && MW && (MW.phase === "intercept" || MW.phase === "zoom") && range > 400) { const dm = Math.hypot(e.x - MW.x, e.y - MW.y, e.z - MW.z); if (dm > 380) { const w = clamp((dm - 380) / 350, 0, 0.85); ax += (MW.x + MW.vx * 1.2 - ax) * w; ay += (MW.y + MW.vy * 1.2 - ay) * w; az += (MW.z + MW.vz * 1.2 - az) * w; } } // 1.6.0: the leader bends back toward a wingman who is falling behind
-      d = airDirTo(e, ax, ay, az); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, 1.9);
+      const LgP = range < GUN_RANGE * 1.4 ? gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz) : null; // 1.6.7: inside ~850 m he flies LEAD PURSUIT for his guns (nose on the bullet-lead point), farther out a curve of pursuit to catch him
+      d = LgP && (rx * e.hx + ry * e.hy + rz * e.hz) / range > 0.5 ? LgP : airDirTo(e, ax, ay, az); d = slopeLimit(e, d, -0.9, 0.7); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, LgP ? 2.4 : 1.9);
       const vb = Math.hypot(e.vx, e.vy, e.vz) || 1;
       const cosA = (rx * e.vx + ry * e.vy + rz * e.vz) / (range * vb);
       e.minR = Math.min(e.minR || 1e9, range);
@@ -1638,7 +1701,8 @@
         if (!p51Dogfight(e, T)) driveOff(T, e);
       }
       // he broke it off (driven, rattled or finished): a few more bursts if he is right there, then back up to station
-      if (!ATTACKING_PH[T.phase] && T.phase !== "rollin") { e.followT = (e.followT || 0) + dt; if (range > 2400 || e.followT > 40) { if (mission) mission.p51Follow = (mission.p51Follow || 0) + 1; endIntercept(e); return; } } // 1.6.0: no 2.6 s cut-off: he keeps chasing the German out to 4 miles (lost contact beyond 2,400 u ends it)
+      if (!ATTACKING_PH[T.phase] && T.phase !== "rollin" && (e.followT || 0) > 1.5 && mission) { e.swT = (e.swT || 0) - dt; if (e.swT <= 0) { e.swT = rand(0.4, 0.7); const th = p51PickThreat(e); if (th && th !== T && (ATTACKING_PH[th.phase] || th.phase === "rollin")) { T.p51n = Math.max(0, (T.p51n || 1) - 1); p51Go(e, th, 0); return; } } } // 1.6.7: his German has broken off - switch to one who is on a run at the box now
+      if (!ATTACKING_PH[T.phase] && T.phase !== "rollin") { e.followT = (e.followT || 0) + dt; if (range > 2400 || e.followT > 40 || (dT4 > TUNE.p51Engage && e.followT > 4)) { if (mission) mission.p51Follow = (mission.p51Follow || 0) + 1; endIntercept(e); return; } } // 1.6.0: no 2.6 s cut-off: he keeps chasing the German out to 4 miles (lost contact beyond 2,400 u ends it)
       if (range > 330) e.passArm = true;
       if ((range < 55 || passed) && e.passArm) {
         e.pass = (e.pass || 0) + 1; e.passArm = false; e.minR = 1e9; if (mission) mission.p51EndPass = (mission.p51EndPass || 0) + 1;
@@ -1657,7 +1721,7 @@
       d = airDirTo(e, S.x, S.y, S.z); d = slopeLimit(e, d, -0.2, 0.4); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, 1.3);
       if (zLead && zLead.phase === "cap" && dd < 300) { e.phase = "cap"; e.phaseT = 0; e.scanT = rand(0.8, 1.6); return; }
       if (zLead) return; // (the leader scans, the wingman only follows)
-      if (e.phaseT > 1.5 && mission && mission.t >= (e.coolUntil || 0)) { e.scanT = (e.scanT || 0) - dt; if (e.scanT <= 0) { e.scanT = rand(0.4, 0.8); const th = p51PickThreat(e); if (th) { p51Go(e, th, 0); const R2 = p51Roles(e); if (R2.mate && (R2.mate.phase === "cap" || R2.mate.phase === "zoom") && mission.t >= (R2.mate.coolUntil || 0)) p51Go(R2.mate, th, -0.9); return; } } } // 1.6.0: a returning Mustang jumps any German inside 2 miles
+      if (e.phaseT > 0.5 && mission && mission.t >= (e.coolUntil || 0)) { e.scanT = (e.scanT || 0) - dt; if (e.scanT <= 0) { e.scanT = rand(0.4, 0.8); const th = p51PickThreat(e); if (th) { p51Go(e, th, 0); const R2 = p51Roles(e); if (R2.mate && (R2.mate.phase === "cap" || R2.mate.phase === "zoom") && mission.t >= (R2.mate.coolUntil || 0)) p51Go(R2.mate, th, -0.9); return; } } } // 1.6.0: a returning Mustang jumps any German inside 2 miles
       if (dd < 900 && e.y > S.y - 80 || e.phaseT > 12) { if (mission && e.retT0 != null) { (mission.p51Ret || (mission.p51Ret = [])).push({ dt: +(mission.t - e.retT0).toFixed(1), forced: e.phaseT > 12 ? 1 : 0 }); } e.phase = "cap"; e.phaseT = 0; e.scanT = rand(0.8, 1.6); }
       return;
     }
@@ -1793,7 +1857,7 @@
   function duelBurst(e, f, R) { // German cannon / MG burst at a Mustang (tracers: 190 red, 109 yellow)
     if (rideHolds(e)) return; // 1.6.6
     const dx = f.x - e.x, dy = f.y - e.y, dz = f.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
-    for (let i = 0; i < 2; i++) tracers.push({ x: e.x + e.hx * 3, y: e.y + e.hy * 3, z: e.z + e.hz * 3, vx: dx / dl * BULLET_UPS + e.vx + rand(-6, 6), vy: dy / dl * BULLET_UPS + e.vy + rand(-6, 6), vz: dz / dl * BULLET_UPS + e.vz + rand(-6, 6), life: Math.min(1.3, dl / 400 + 0.3), maxLife: 1.3, trav: 0, team: "axis", hid: i === 1, delay: i * 0.05, k190: e.type === "190" });
+    { const SP = BULLET_UPS + Math.max(0, (e.vx * dx + e.vy * dy + e.vz * dz) / dl); for (let i = 0; i < 2; i++) tracers.push({ x: e.x + e.hx * 3, y: e.y + e.hy * 3, z: e.z + e.hz * 3, vx: dx / dl * SP + rand(-6, 6), vy: dy / dl * SP + rand(-6, 6), vz: dz / dl * SP + rand(-6, 6), life: Math.min(1.3, dl / 400 + 0.3), maxLife: 1.3, trav: 0, team: "axis", hid: i === 1, delay: i * 0.05, k190: e.type === "190" }); }
     e.mf = 0.12; if (window.FGAudio && Math.random() < 0.5) window.FGAudio.enemyGun(e.x, e.y, e.z);
     if (mission) mission.duelGerBursts = (mission.duelGerBursts || 0) + 1;
     const rf = FC.rangeFactor(FC.GUNS.mg151, FC.toYd(R));
@@ -1827,10 +1891,11 @@
       let lx = f.x + f.vx * tL, ly = f.y + f.vy * tL, lz = f.z + f.vz * tL;
       if (R < 120 && cosA < 0.93) { lx -= f.hx * 70; ly += 30; lz -= f.hz * 70; } // overshooting: lag pursuit / high yo-yo
       d = airDirTo(e, lx, ly, lz);
+      const LgD = R < GUN_RANGE * 1.3 && R >= 120 && cosA > 0.7 ? gunLead(e, f.x, f.y, f.z, f.vx, f.vy, f.vz) : null; if (LgD) d = LgD; // 1.6.7: lead pursuit for the guns
       e.vT = clamp(f.V * 1.04 + (R - 160) * 0.2, 285 * MPH, isP ? 440 * MPH : 400 * MPH);
       e.fireCd -= dt;
       if (isP) { if (e.duelDelay <= 0 && p51Fire(e, f, R, cosA, dt, DF.hitMul * 1.4)) { if (mission && !e.duelBurstCt) { } } }
-      else if (e.fireCd <= 0 && e.duelDelay <= 0 && cosA > 0.975 && R < 360 && R > 45) {
+      else if (e.fireCd <= 0 && e.duelDelay <= 0 && leadCos(e, gunLead(e, f.x, f.y, f.z, f.vx, f.vy, f.vz)) > GUN_COS && R < 360 && R > 45) {
         e.fireCd = rand(DF.pBurst[0], DF.pBurst[1]);
         duelBurst(e, f, R);
       }
@@ -1984,6 +2049,11 @@
     const side = e.rSide || 1, tt = (mission ? mission.t : elapsed), w = tt * 0.35 + (e.stPh || 0), R = e.orbR || 0, ph = tt * (e.orbW || 0) + (e.stPh || 0) * 3, An = anchorOf(e);
     return { x: An.x + side * ((e.stLat || 1100) + Math.sin(w) * 70) + Math.cos(ph) * R, y: An.y + (e.stUp || 380) + Math.sin(w * 1.3) * 30, z: An.z + (e.stZ || 500) + Math.cos(w * 0.8) * 60 + Math.sin(ph) * R * 1.4 };
   }
+  function diveTurn(e, side, lat, slope) { // 1.6.7: along the current horizontal heading, turned `lat` toward `side`, at path slope dy/dh = `slope` (clamped ≥ −1 = 45°)
+    let hx = e.hx, hz = e.hz; const hl = Math.hypot(hx, hz) || 1; hx /= hl; hz /= hl;
+    const lx = hz * side, lz = -hx * side; let dx = hx + lx * lat, dz = hz + lz * lat; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
+    return norm3(dx, Math.max(-1, slope), dz);
+  }
   function flyStation(e, S, dt) {
     const dz = S.z - e.z, dist = Math.hypot(S.x - e.x, S.y - e.y, dz);
     e.vT = clamp(VF + 12 + dz * 0.12 + Math.max(0, dist - 250) * 0.08, VF + 8, FAI.vFull);
@@ -2001,16 +2071,18 @@
     const ux = rx / rl, uy = ry / rl, uz = rz / rl;
     let lx = uz, lz = -ux; const ll = Math.hypot(lx, lz) || 1; lx /= ll; lz /= ll;
     const vx = uy * lz, vy = uz * lx - ux * lz, vz = -uy * lx;
-    const t = (mission ? mission.t : elapsed) * (6.283 / e.jT) + e.jPh, a = amp * range, s1 = Math.sin(t), s2 = Math.sin(t * 0.55 + 1.3) * 0.6;
-    return { x: A.x + lx * a * s1 + vx * a * s2, y: A.y + vy * a * s2, z: A.z + lz * a * s1 + vz * a * s2 };
+    const t = (mission ? mission.t : elapsed) * (6.283 / e.jT) + e.jPh, a = amp * range, s1 = Math.sin(t);
+    void vx; void vy; void vz; // 1.6.7: lateral weave only (bank reversals) — the old lateral + vertical Lissajous swung the lift vector round the nose = continuous barrel rolls
+    return { x: A.x + lx * a * s1, y: A.y, z: A.z + lz * a * s1 };
   }
   // 1.5.1: a German with a Mustang on his tail rolls and weaves (scissors) instead of flying straight
   function flyStepE(e, dx, dy, dz, dt, gain) {
-    if (e.evadeT > 0 && e.phase !== "attack") {
-      const d = norm3(dx, dy, dz), t = (mission ? mission.t : elapsed);
+    const tNow = (mission ? mission.t : elapsed);
+    if (e.evadeT > 0 && e.phase !== "attack" && e.phase !== "break" && !(e.phase === "extend" && e.phaseT < 1.5) && !(e.avoidT != null && tNow - e.avoidT < 0.8)) { // 1.6.7: collision avoidance outranks the evasive weave
+      const d = norm3(dx, dy, dz), t = tNow;
       let lx = e.hz, lz = -e.hx; const ll = Math.hypot(lx, lz) || 1; lx /= ll; lz /= ll;
-      const w = Math.sin(t * 2.9 + e.jPh), v = Math.cos(t * 2.1 + e.jPh);
-      const q = norm3(d.x + lx * w * 1.0, d.y + v * 0.6, d.z + lz * w * 1.0);
+      const w = Math.sin(t * 1.7 + e.jPh) >= 0 ? 1 : -1; // 1.6.7: scissors = hard bank reversals every ~1.8 s (no rotating lift vector → no barrel rolls)
+      const hz0 = Math.hypot(d.x, d.z) || 1, q0 = norm3(d.x / hz0 + lx * w * 0.55, 0, d.z / hz0 + lz * w * 0.55), hl0 = Math.hypot(q0.x, q0.z) || 1, q = norm3(q0.x / hl0 * hz0, Math.min(d.y, 0.05) - 0.03, q0.z / hl0 * hz0); // weave in heading only: the dive/climb angle is kept
       return flyStep(e, q.x, q.y, q.z, dt, Math.max(gain || 1, 1.8));
     }
     return flyStep(e, dx, dy, dz, dt, gain);
@@ -2077,17 +2149,26 @@
       const rx = A.x - e.x, ry = A.y - e.y, rz = A.z - e.z;
       const vb = Math.hypot(e.vx, e.vy, e.vz) || 1;
       const along = (rx * e.vx + ry * e.vy + rz * e.vz) / vb;
-      { const rA = Math.hypot(rx, ry, rz), fwm = e.opening ? FAI.fireOpen * 0.66 : (e.fireWin || TAC.fire.headon)[0]; e.jinking = rA > fwm + 90; if (along > 70) { const amp = (e.type === "190" ? 0.03 : 0.05) * clamp((rA - (fwm + 90)) / 700, 0, 1); const J = amp > 0.001 ? jinkAim(e, A, rA, amp) : A; d = airDirTo(e, J.x, J.y, J.z); } }
-      if (along > 70) { /* jinked above */ }
-      else d = { x: e.hx, y: e.hy, z: e.hz }; // committed: flash straight past
-      d = safeDir(e, d);
-      e.vT = e.type === "190" ? FAI.v190 * (e.sturm ? 0.97 : 1) : FAI.vFull;
-      flyStepE(e, d.x, d.y, d.z, dt, e.type === "190" ? 1.5 : 2.0);
-      if (e.invert && e.phaseT > 1.0) e.invert = false; // 1.3.7: the Split-S roll-in is over: fly the run upright
-      const T = targetPoint(e.tgt);
+      const T = targetPoint(e.tgt), shipT0 = shipTargetOf(e);
       const tx = T.x - e.x, ty = T.y - e.y, tz = T.z - e.z;
       const range = Math.hypot(tx, ty, tz) || 1;
-      const cosA = (tx * e.vx + ty * e.vy + tz * e.vz) / (range * vb);
+      // 1.6.7 GUN RUN: inside ~1.6× gun range with the ship ahead, the pilot puts his NOSE on the gun-lead point of an ENGINE (rounds carry his own speed),
+      // fires only while it sits within 3° there, and breaks off when the closing speed says he has ~1.5 s left to miss the ship by 40 m+
+      if (e.engK == null) e.engK = Math.random() < 0.5 ? 1 : 2;
+      const EP = shipT0 ? enginePos(e.tgt, e.engK) : T, sv = shipT0 && shipT0 !== bomber ? shipT0 : null;
+      const Lg = gunLead(e, EP.x, EP.y, EP.z, sv ? sv.vx || 0 : 0, sv ? sv.vy || 0 : 0, sv ? sv.vz || 0 : 0);
+      const ahead = (tx * e.hx + ty * e.hy + tz * e.hz) / range;
+      const closing0 = (tx * e.vx + ty * e.vy + tz * e.vz) / range;
+      const brkR = Math.max(e.breakR, closing0 * (e.type === "190" ? 2.6 : 1.5), e.type === "190" ? Math.hypot(e.vx, e.vy, e.vz) * 1.7 : 0); // 1.6.7: a 190 crossing from the quarter breaks on his own speed through the box, not just on closure (time to roll and get under the next ship)
+      const gunRun = !!Lg && shipT0 && range < GUN_RANGE * 1.6 && range > brkR && ahead > 0.6;
+      e.gunRun = gunRun; e.avShip = gunRun ? shipT0 : null;
+      if (gunRun) d = Lg;
+      else { const rA = Math.hypot(rx, ry, rz), fwm = e.opening ? FAI.fireOpen * 0.66 : (e.fireWin || TAC.fire.headon)[0]; e.jinking = rA > fwm + 90; if (along > 70) { const amp = (e.type === "190" ? 0.03 : 0.05) * clamp((rA - (fwm + 90)) / 700, 0, 1); const J = amp > 0.001 ? jinkAim(e, A, rA, amp) : A; d = airDirTo(e, J.x, J.y, J.z); } else d = { x: e.hx, y: e.hy, z: e.hz }; } // committed: flash straight past
+      d = safeDir(e, d);
+      e.vT = e.type === "190" ? FAI.v190 * (e.sturm ? 0.97 : 1) : FAI.vFull;
+      flyStepE(e, d.x, d.y, d.z, dt, gunRun ? 2.6 : e.type === "190" ? 1.5 : 2.0);
+      if (e.invert && e.phaseT > 1.0) e.invert = false; // 1.3.7: the Split-S roll-in is over: fly the run upright
+      const cosA = leadCos(e, Lg); // 1.6.7: nose vs the gun-lead point (was: box-frame track vs the ship centre, up to 14° off)
       recAz190(e, T, range);
       const fw = e.fireWin || TAC.fire.headon;
       const fireMax = e.opening ? FAI.fireOpen * 0.66 : fw[0];
@@ -2100,7 +2181,7 @@
       if (e.burst) { if (range < fw[1] || !shipT) { e.burst = null; e.burstGap = 0.6; } }
       else {
         e.burstGap = (e.burstGap || 0) - dt;
-        if (e.burstGap <= 0 && e.burstsLeft > 0 && e.ammo > 0 && shipT && range < fireMax && range > fw[1] && cosA > 0.97) {
+        if (e.burstGap <= 0 && e.burstsLeft > 0 && e.ammo > 0 && shipT && range < Math.min(fireMax, GUN_RANGE) && range > fw[1] && cosA > GUN_COS) {
           e.burstsLeft--;
           if (!e.firedPass) { e.firedPass = true; e.ammo--; }
           if (mission) { mission.bursts = (mission.bursts || 0) + 1; if (mission.firstShotT == null) mission.firstShotT = mission.t; const ms = mission.modeStats; if (ms && ms[e.mode]) ms[e.mode].b++; }
@@ -2110,7 +2191,7 @@
       const closing = (tx * e.vx + ty * e.vy + tz * e.vz) / range;
       e.dbg = { range: Math.round(range), cosA: +cosA.toFixed(3), along: Math.round(along), closing: Math.round(closing), bl: e.burstsLeft, m: e.mode };
       const is190 = e.type === "190";
-      if ((range < e.breakR && closing > 0) || along < -25 || e.phaseT > (is190 ? 40 : 34) || (e.phaseT > (is190 ? 30 : 6) && closing < (is190 ? 12 : 40) && range > 250)) {
+      if ((range < brkR && closing > 0) || along < -25 || e.phaseT > (is190 ? 40 : 34) || (e.phaseT > (is190 ? 30 : 6) && closing < (is190 ? 12 : 40) && range > 250)) {
         e.burst = null;
         e.phase = "break"; e.phaseT = 0; e.invert = e.breakType === "splitS";
         e.brkSide = Math.random() < 0.5 ? -1 : 1;
@@ -2120,20 +2201,25 @@
     }
     if (e.phase === "break") { // breakaways from the 3rd BD study — always at speed
       let Lx = e.hz, Lz = -e.hx; const ll = Math.hypot(Lx, Lz) || 1; Lx /= ll; Lz /= ll;
-      const s = e.brkSide || 1;
+      if (e.brkOutT == null || e.phaseT < e.brkOutT) { const ub = e.ux * Lx + e.uz * Lz; e.brkOut = Math.abs(ub) > 0.17 ? Math.sign(ub) : (((e.x - BOX_C.x) * Lx + (e.z - BOX_C.z) * Lz) >= 0 ? 1 : -1); } // 1.6.7: break the way the lift vector already points (no roll through wings-level first); wings level → outboard
+      e.brkOutT = e.phaseT;
+      const s = e.brkOut;
       e.vT = FAI.vFull;
-      if (e.breakType === "splitS") d = norm3(e.hx * 0.3, -1, e.hz * 0.3);
-      else if (e.type === "190") { const sb = e.brkSide || 1; d = norm3(e.hx * 0.25 + sb * 0.6, -0.9, e.hz * 0.12); e.vT = FAI.v190Cap; e.nMax = 6.3; } // 1.5.3: hard roll-and-dive break out to the side, gone from the turret quickly
-      else d = norm3(e.hx, -0.5, e.hz); // under
+      // 1.6.7: every break is a split-S roll-in or a diving turn at 30–45° nose-down for a couple of seconds (never near-vertical), then the extend pulls out
+      if (e.breakType === "splitS") { if (e.phaseT > 0.9) e.invert = false; d = diveTurn(e, s, 0.15, -0.9); } // ~42° down, nearly straight on: roll inverted, pull through, roll upright
+      else if (e.type === "190") { // 40° diving turn AWAY from the box (outboard), mostly down: never a level slide across the other ships
+        d = diveTurn(e, s, 0.4, -0.9); e.vT = FAI.v190Cap; e.nMax = 6.3;
+      }
+      else d = diveTurn(e, s, 0.3, -0.62); // under: ~32° diving turn
       d = safeDir(e, d);
       flyStepE(e, d.x, d.y, d.z, dt, 2.4);
-      if (e.phaseT > (e.breakType === "splitS" ? 2.4 : 1.8)) { e.phase = "extend"; e.phaseT = 0; e.invert = false; }
+      if ((e.phaseT > (e.breakType === "splitS" ? 2.4 : 1.8) && e.hy < -0.47) || e.phaseT > 4.5 || e.y < BOX_C.y - 700) { e.phase = "extend"; e.phaseT = 0; e.invert = false; } // 1.6.7: hold the break until the nose is ≥ 28° down (a 6 g pull at 400 mph needs ~3 s), then extend/pull out
       return;
     }
     if (e.phase === "extend" && e.type === "190") { // through or under, a few seconds, then down to the reform station
       e.vT = FAI.v190;
-      const so = e.brkSide || (e.x > BOX_C.x ? 1 : -1);
-      d = safeDir(e, norm3(e.hx * 0.3 + so * 0.55, -0.75, e.hz * 0.3)); e.nMax = 6.3; // keeps diving away to the side
+      const so = e.brkOut || e.brkSide || (e.x > BOX_C.x ? 1 : -1); // same way as the break (no reversal)
+      d = safeDir(e, diveTurn(e, so, 0.45, e.phaseT < 1.5 ? -0.5 : -0.12)); e.nMax = 6.3; // 1.6.7: shallowing diving turn away to the side (≤ 27°), pulling out
       flyStepE(e, d.x, d.y, d.z, dt, 1.2);
       if (e.phaseT > 3.0 || Math.hypot(e.x - BOX_C.x, e.z - BOX_C.z) > 1300) reformOrEgress(e);
       return;
@@ -2427,6 +2513,7 @@
   // 1.5.5 (md v1.5.5 BUG A): a 190 is placed ALREADY on the rear quarter - 5 o'clock (right = -X) or 7 o'clock (left = +X) - 900-1,140 u abeam and 1,100+ u aft (~1,420-1,500 u out),
   // 140 u (~700 ft) below, nose pointed through the box, at v190 from the first frame. Used for the first launch AND for every re-entry (a fresh launch, never a hold point).
   function placeQtr190(e, side, i, wave) { // side: +1 = +X (left, 7 o'clock), -1 = 5 o'clock; i = slot in the front; wave = row (0/1, ~2.8 s apart)
+    if (ride && ride.e === e && e.alive && e.hx != null) { e.nMax = null; e.vT = FAI.v190; e.evadeT = 0; e.slotX = side; e.phase = "quarter"; e.phaseT = 0; e.tgt = null; e.tgtPre = null; e.azRec = null; return; } // 1.6.7: the ship you ride is never re-placed — he flies the re-entry from where he is
     const An = anchorOf(e), V = FAI.v190;
     // 1.5.7: a flight of FOUR on its quarter: finger-four abreast (lateral 720 + 0/75/150/230 u from the target), stepped back 0/30/10/45 u
     const j = i & 3, LAT = [0, 75, 150, 230], BK = [0, 30, 10, 45];
@@ -2500,6 +2587,92 @@
     if (!SCN.nop51) for (let i = 0; i < MISSION_NP51; i++) enemies.push(makeP51(i));
   }
 
+  // ===== 1.6.7 AI METRICS (test-only; collects nothing unless window.__FG_AIM_ON) =====
+  const AIM = { on: false };
+  function aimReset() {
+    Object.assign(AIM, { on: true, t: 0, n: 0, angMax: 0, angMaxAt: null, angH: new Array(200).fill(0), angS: 0, ang5: 0, ang10: 0, boxMax: 0,
+      inv: {}, invRuns: [], invSec: 0, invRunsN: 0, rolls: 0, rollAt: [], close: {}, closeN: { f2b: 0, f2f: 0 }, near40: { f2b: 0, f2f: 0 }, closeList: [],
+      rounds: 0, r3: 0, r5: 0, rAngSum: 0, eng: {}, engEv: [], minFt: 1e9, minFtAt: null, below20: 0, passT: [], passPer: {}, ph: {}, vmax: {}, vlev: {}, vsteady: {}, tele: 0, teleList: [], pos: {} });
+  }
+  function aimFt(y) { return 25000 + (y - CAM.y) * FT_PER_UNIT; }
+  function aimRound(e, mx, my, mz, ax, ay, az, ship) { // nose vs the bullet lead point on the aimed spot (box frame: bullet = Vm·dir + v_e, ship drifts with its own v)
+    if (!AIM.on) return;
+    const svx = (ship && ship !== bomber && ship.vx) || 0, svy = (ship && ship !== bomber && ship.vy) || 0, svz = (ship && ship !== bomber && ship.vz) || 0;
+    const rx = ax - mx, ry = ay - my, rz = az - mz, wx = e.vx - svx, wy = e.vy - svy, wz = e.vz - svz;
+    const a = BULLET_UPS * BULLET_UPS - (wx * wx + wy * wy + wz * wz), b = rx * wx + ry * wy + rz * wz, c = rx * rx + ry * ry + rz * rz; // |r − w t| = Vm t
+    const disc = b * b + a * c; if (a <= 0 || disc < 0) return;
+    const t = (-b + Math.sqrt(disc)) / a; if (!(t > 0)) return;
+    let hx = (rx - wx * t), hy = (ry - wy * t), hz = (rz - wz * t); const hl = Math.hypot(hx, hy, hz) || 1; hx /= hl; hy /= hl; hz /= hl;
+    const ang = Math.acos(clamp(hx * e.hx + hy * e.hy + hz * e.hz, -1, 1)) * 57.2958;
+    AIM.rounds++; AIM.rAngSum += ang; if (ang < 3) AIM.r3++; if (ang < 5) AIM.r5++;
+  }
+  function aimTick(dt) {
+    if (!AIM.on || !mission) return;
+    AIM.t += dt; AIM.n++;
+    const live = enemies.filter((q) => q.alive && !q.hold && q.phase !== "debug");
+    const ships = []; if (bomber && !bomber.dead) ships.push({ x: CAM.x, y: CAM.y, z: CAM.z, vx: 0, vy: 0, vz: 0, id: "own" });
+    for (const f of friendlies) if (friendlyOk(f) && !f.spiraling) ships.push({ x: f.x, y: f.y, z: f.z, vx: f.vx || 0, vy: f.vy || 0, vz: f.vz || 0, id: "f" + (f.slot != null ? f.slot : friendlies.indexOf(f)) });
+    for (const e of live) {
+      const id = e.id, isG = e.type !== "p51";
+      // visual forward (h) vs the velocity the position is integrated with (air frame = box velocity + VF along +z)
+      const ax = e.vx, ay = e.vy, az = e.vz + VF, al = Math.hypot(ax, ay, az);
+      if (al > 1) { const ang = Math.acos(clamp((ax * e.hx + ay * e.hy + az * e.hz) / al, -1, 1)) * 57.2958; AIM.angH[Math.min(199, Math.floor(ang * 2))]++; AIM.angS++; if (ang > 5) AIM.ang5 += dt; if (ang > 10) AIM.ang10 += dt; if (ang > AIM.angMax) { AIM.angMax = ang; AIM.angMaxAt = { t: +mission.t.toFixed(1), type: e.type, ph: e.phase, glued: e.id > ((e.mate && e.mate.id) || "") && e.mate && e.mate.alive ? 1 : 0 }; } }
+      const bl = Math.hypot(e.vx, e.vy, e.vz); if (bl > 1) AIM.boxMax = Math.max(AIM.boxMax, Math.acos(clamp((e.vx * e.hx + e.vy * e.hy + e.vz * e.hz) / bl, -1, 1)) * 57.2958);
+      // teleports
+      const P = AIM.pos[id]; if (P && Math.hypot(e.x - P[0], e.y - P[1], e.z - P[2]) > Math.max(30, 3 * bl * dt)) { AIM.tele++; if (AIM.teleList.length < 30) AIM.teleList.push({ t: +mission.t.toFixed(1), type: e.type, ph: e.phase }); }
+      AIM.pos[id] = [e.x, e.y, e.z];
+      // roll attitude vs the horizon (inverted = |roll| > 120°)
+      const L = levelUpOf(e.hx, e.hy, e.hz);
+      if (L) { const cu = e.ux * L.x + e.uy * L.y + e.uz * L.z; const I = AIM.inv[id] || (AIM.inv[id] = { run: 0 }); if (cu < -0.5) { if (!I.run) I.ph0 = e.phase; I.run += dt; } else { if (I.run > 3) { AIM.invRunsN++; AIM.invSec += I.run; if (AIM.invRuns.length < 40) AIM.invRuns.push({ t: +mission.t.toFixed(1), s: +I.run.toFixed(1), type: e.type, ph: e.phase, ph0: I.ph0, inv: !!e.invert }); } I.run = 0; } }
+      if (L) { const I = AIM.inv[id] || (AIM.inv[id] = { run: 0 }); const cx2 = e.uy * L.z - e.uz * L.y, cy2 = e.uz * L.x - e.ux * L.z, cz2 = e.ux * L.y - e.uy * L.x; const bk = Math.atan2(cx2 * e.hx + cy2 * e.hy + cz2 * e.hz, e.ux * L.x + e.uy * L.y + e.uz * L.z); // bank vs the horizon
+        if (I.bk != null) { let db = bk - I.bk; if (db > Math.PI) db -= 6.2832; if (db < -Math.PI) db += 6.2832; const sg = db > 1e-4 ? 1 : db < -1e-4 ? -1 : 0; if (sg && sg === I.rs) { I.ra = (I.ra || 0) + Math.abs(db); if (I.ra >= 6.283) { AIM.rolls++; I.ra -= 6.283; if (AIM.rollAt.length < 40) AIM.rollAt.push({ t: +mission.t.toFixed(1), type: e.type, ph: e.phase }); } } else if (sg) { I.rs = sg; I.ra = Math.abs(db); } }
+        I.bk = bk; }
+      { const I = AIM.inv[id]; if (I) { if (Math.abs(e.hy) < 0.05) { I.lv = (I.lv || 0) + dt; if (I.lv > 10) AIM.vsteady[e.type] = Math.max(AIM.vsteady[e.type] || 0, e.V / MPH); } else I.lv = 0; } }
+      // altitude / speed
+      const ft = aimFt(e.y); if (ft < AIM.minFt) { AIM.minFt = ft; AIM.minFtAt = { t: +mission.t.toFixed(1), type: e.type, ph: e.phase }; } if (ft < 20000) AIM.below20 += dt;
+      const mph = e.V / MPH; AIM.vmax[e.type] = Math.max(AIM.vmax[e.type] || 0, mph); if (Math.abs(e.hy) < 0.08) AIM.vlev[e.type] = Math.max(AIM.vlev[e.type] || 0, mph);
+      // pass starts
+      if (isG) { if (e.phase === "attack" && AIM.ph[id] !== "attack") { AIM.passT.push(mission.t); (AIM.passPer[id] || (AIM.passPer[id] = [])).push(mission.t); } AIM.ph[id] = e.phase; }
+      // P-51 engagement: a German inside 2 miles of the nearest B-17 → time until a Mustang commits to him
+      if (isG) {
+        const dB = nearB17(e.x, e.y, e.z), E = AIM.eng[id] || (AIM.eng[id] = { in: false });
+        const hunted = enemies.some((q) => q.alive && q.type === "p51" && ((q.phase === "intercept" && q.target === e) || (q.phase === "duel" && q.foe === e)));
+        if (!E.in && dB < 2146) { E.in = true; E.t0 = mission.t; E.ph0 = e.phase; E.done = hunted; if (hunted) AIM.engEv.push({ dt: 0, ty: e.type, ph0: e.phase }); }
+        else if (E.in && !E.done && hunted) { E.done = true; AIM.engEv.push({ dt: +(mission.t - E.t0).toFixed(2), ty: e.type, ph0: E.ph0 }); }
+        if (E.in && dB > 2400) { if (!E.done) { let nf = 1e9, nfree = 0; for (const q of enemies) if (q.alive && q.type === "p51") { if (q.phase === "cap" || q.phase === "zoom" || q.phase === "surge") { nfree++; nf = Math.min(nf, Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z)); } } AIM.engEv.push({ dt: null, ty: e.type, ph0: E.ph0, stay: +(mission.t - E.t0).toFixed(1), p51n: e.p51n || 0, nfree, nf: Math.round(nf), ph: e.phase }); } E.in = false; }
+      }
+    }
+    // close passes (swept over the last step): fighter–B-17 and fighter–fighter, centre distance < 10 u (15 m); < 27 u (40 m) for reference
+    const now = mission.t;
+    const chk = (a, b, kind, key) => {
+      const rx = a.x - b.x, ry = a.y - b.y, rz = a.z - b.z; if (Math.abs(rx) > 120 || Math.abs(ry) > 120 || Math.abs(rz) > 120) return;
+      const wx = (a.vx - (b.vx || 0)) * dt, wy = (a.vy - (b.vy || 0)) * dt, wz = (a.vz - (b.vz || 0)) * dt; // relative displacement over this step
+      const ww = wx * wx + wy * wy + wz * wz, s = ww > 1e-9 ? clamp((rx * wx + ry * wy + rz * wz) / ww, 0, 1) : 0; // closest point on [now − dt, now]
+      const d = Math.hypot(rx - wx * s, ry - wy * s, rz - wz * s);
+      const C = AIM.close[key] || (AIM.close[key] = { t15: -9, t40: -9 });
+      if (d < 10) { if (now - C.t15 > 1.5) { AIM.closeN[kind]++; if (AIM.closeList.length < 40) AIM.closeList.push({ t: +now.toFixed(1), kind, d: +(d * 1.5).toFixed(1), a: a.type + ":" + a.phase, b: b.type ? b.type + ":" + b.phase : "B-17" }); } C.t15 = now; }
+      if (d < 27) { if (now - C.t40 > 1.5) AIM.near40[kind]++; C.t40 = now; }
+    };
+    for (let i = 0; i < live.length; i++) { const a = live[i]; for (const s of ships) chk(a, s, "f2b", a.id + s.id); for (let j = i + 1; j < live.length; j++) { const b = live[j]; if ((a.mate === b || b.mate === a)) { /* pair mates fly 60 u apart, still counted */ } chk(a, b, "f2f", a.id < b.id ? a.id + b.id : b.id + a.id); } }
+  }
+  function aimReport() {
+    const H = AIM.angH, n = AIM.angS || 1; let c = 0, p99 = 0, p999 = 0; for (let i = 0; i < H.length; i++) { c += H[i]; if (!p99 && c >= n * 0.99) p99 = (i + 1) / 2; if (!p999 && c >= n * 0.999) p999 = (i + 1) / 2; }
+    for (const id in AIM.inv) { const I = AIM.inv[id]; if (I.run > 3) { AIM.invRunsN++; AIM.invSec += I.run; I.run = 0; } }
+    const ev = AIM.engEv, done = ev.filter((q) => q.dt != null).map((q) => q.dt).sort((a, b) => a - b), med = done.length ? done[done.length >> 1] : null;
+    const pt = AIM.passT.slice().sort((a, b) => a - b), gaps = []; for (let i = 1; i < pt.length; i++) gaps.push(pt[i] - pt[i - 1]);
+    const per = []; for (const id in AIM.passPer) { const L = AIM.passPer[id]; for (let i = 1; i < L.length; i++) per.push(L[i] - L[i - 1]); }
+    const avg = (A) => A.length ? +(A.reduce((s, x) => s + x, 0) / A.length).toFixed(1) : null;
+    return { simSec: +AIM.t.toFixed(1), visualVsVelocity: { maxDeg: +AIM.angMax.toFixed(2), at: AIM.angMaxAt, p99Deg: p99, p999Deg: p999, fighterSecOver5: +AIM.ang5.toFixed(1), fighterSecOver10: +AIM.ang10.toFixed(1), boxFrameMaxDeg_info: +AIM.boxMax.toFixed(1) },
+      inverted: { runsOver3s: AIM.invRunsN, secondsInThoseRuns: +AIM.invSec.toFixed(1), sample: AIM.invRuns.slice(0, 12) }, fullRolls360: { n: AIM.rolls, sample: AIM.rollAt.slice(0, 10) },
+      closePasses15m: AIM.closeN, closePasses40m: AIM.near40, closeSample: AIM.closeList.slice(0, 15),
+      germanRounds: { n: AIM.rounds, within3degPct: AIM.rounds ? +(100 * AIM.r3 / AIM.rounds).toFixed(1) : null, within5degPct: AIM.rounds ? +(100 * AIM.r5 / AIM.rounds).toFixed(1) : null, meanErrDeg: AIM.rounds ? +(AIM.rAngSum / AIM.rounds).toFixed(1) : null },
+      germanHits: mission ? (mission.gunHits || 0) : null, bomberLost: mission ? mission.friendliesLost : null,
+      p51Engage: { germansEntering2mi: ev.length, committed: done.length, neverCommitted: ev.length - done.length, medianSec: med, meanSec: avg(done), within10sPct: ev.length ? +(100 * done.filter((x) => x <= 10).length / ev.length).toFixed(1) : null, neverSample: ev.filter((q) => q.dt == null).slice(0, 8), onRun: (() => { const RUN = { attack: 1, quarter: 1, stack: 1, rollin: 1, arrive: 1, inbound: 1 }; const E2 = ev.filter((q) => RUN[q.ph0]), D = E2.filter((q) => q.dt != null).map((q) => q.dt).sort((a, b) => a - b); return { n: E2.length, committed: D.length, medianSec: D.length ? D[D.length >> 1] : null, meanSec: avg(D), within10sPct: E2.length ? +(100 * D.filter((x) => x <= 10).length / E2.length).toFixed(1) : null }; })() },
+      minAltFt: Math.round(AIM.minFt), minAltAt: AIM.minFtAt, fighterSecBelow20kft: +AIM.below20.toFixed(1),
+      passes: { n: pt.length, meanGapAllSec: avg(gaps), meanGapPerFighterSec: avg(per) },
+      speedMaxMph: Object.fromEntries(Object.entries(AIM.vmax).map(([k, v]) => [k, Math.round(v)])), levelSpeedMaxMph: Object.fromEntries(Object.entries(AIM.vlev).map(([k, v]) => [k, Math.round(v)])), steadyLevel10sMaxMph: Object.fromEntries(Object.entries(AIM.vsteady).map(([k, v]) => [k, Math.round(v)])),
+      teleports: AIM.tele, teleSample: AIM.teleList.slice(0, 8) };
+  }
   function missionFighterLoop(dt) {
     aiActive = 0;
     if (mission && (mission.dbChk = (mission.dbChk || 0) - dt) <= 0) { // 1.6.0: nearest-B-17 distance of every German (0.2 s), Mustang re-pairing, pair-integrity metrics (1 s)
@@ -4045,7 +4218,7 @@
   }
   function rideOpts() {
     if (!ride || !ride.eye) return null;
-    return { id: ride.id, type: ride.e.type, eye: ride.eye, pf: ride.pf, cam: ride.basis, flash: ride.flash, dead: ride.deadT != null, eyeL: RIDE_EYE, mph: (ride.e.V || 0) / MPH, ft: 25000 + (ride.e.y - CAM.y) * FT_PER_UNIT, guns: RIDE_GUNS[ride.e.type].map((G) => [G.p[0], G.p[1], G.p[2], G.g === "mg151" ? 0.34 : G.g === "mg131" ? 0.1 : 0.22]) };
+    return { id: ride.id, type: ride.e.type, eye: ride.eye, pf: ride.pf, cam: ride.basis, flash: ride.flash, dead: ride.deadT != null, eyeL: RIDE_EYE, hd: mission ? (mission.heading || 0) : 0, mph: (ride.e.V || 0) / MPH, ft: 25000 + (ride.e.y - CAM.y) * FT_PER_UNIT, guns: RIDE_GUNS[ride.e.type].map((G) => [G.p[0], G.p[1], G.p[2], G.g === "mg151" ? 0.34 : G.g === "mg131" ? 0.1 : 0.22]) };
   }
   function rideHud() {
     const el = document.getElementById("rideLabel"); if (!el) return;
@@ -5186,6 +5359,7 @@
     // 1.3.4: the old box-relative perch/orbit fighter loop is gone — every 109 is flown by the
     // air-frame flight model in missionFighterLoop (no fixed offsets, no hovering).
     missionFighterLoop(dt);
+    aimTick(dt);
     updateChutes(dt);
     updateFlakSim(dt);
     // Fade persistent MotA sky contrails
@@ -7501,6 +7675,7 @@
     drag: (dx, dy) => { applyLookDelta(dx, dy); },
     friendlies: () => friendlies.map((f) => ({ name: f.name, x: f.x, y: f.y, z: f.z, yaw: f.yaw, bank: f.bank || 0, health: f.health, ok: friendlyOk(f), eng: f.engines.map((q) => +q.fire.toFixed(2) + (q.out ? "X" : "")) })),
     cam: () => ({ x: CAM.x, y: CAM.y, z: CAM.z }),
+    aiMetrics: { reset: aimReset, report: aimReport },
     fighters: () => enemies.map((e) => ({ sweep: e.sweep || 0, id: e.id, type: e.type, team: e.team, alive: e.alive, phase: e.phase, x: e.x, y: e.y, z: e.z, vx: e.vx, vy: e.vy, vz: e.vz, hx: e.hx, hy: e.hy, hz: e.hz, V: e.V, g: e.gLoad, bank: e.bank, p: e.p, ux: e.ux, uy: e.uy, uz: e.uz, w: e.turnW, mode: e.mode, diveT: e.diveT, dbg: e.dbg, dbg2: e.dbg2, tk: e.tgt ? e.tgt.kind : null, tt: e.target ? e.target.type : null, foe: e.foe ? e.foe.id : null, role: e.duelRole || null, hp: e.hp, sturm: !!e.sturm, fl: e.fl, slot: e.slot, f109: e.flight109, f190: e.flight190, hold: !!e.hold, strag: !!(e.tgt && isStragTgt(e.tgt)), drives: e.drives || 0, chLead: !!e.chLead, phT: e.phaseT, pair: e.pairIdx, pslot: e.slot, mate: e.mate && e.mate.alive ? e.mate.id : null, esc: !!e.esc, goHome: e.goHome != null ? e.goHome : null, tgtId: e.target ? e.target.id : null, ammo: e.ammo, vT: e.vT, runN: e.runN, rgN: e.rg ? e.rg.members.filter((q) => q.alive && q.rg === e.rg).length : 0, surgeP: !!e.surgeP, fin: !!e.final, hunt: !!e.hunt, tx: e.tgt && e.tgt.kind === 'friendly' ? e.tgt.f.x : 0, tz: e.tgt && e.tgt.kind === 'friendly' ? e.tgt.f.z : 0, ty: e.tgt && e.tgt.kind === 'friendly' ? e.tgt.f.y : 0 })),
     aimBlocked: () => aimHitsOwnShip(),
     p51dbg: () => ({ t: mission ? mission.t : 0, p51: enemies.filter((q) => q.alive && q.type === "p51").map((q) => ({ id: q.id, pair: q.pairIdx, ph: q.phase, scanT: q.scanT, readyAt: q.readyAt, cool: q.coolUntil, esc: !!q.esc, mate: q.mate ? q.mate.id : null, x: q.x, y: q.y, z: q.z })), ger: enemies.filter((q) => q.alive && q.team !== "allied" && !q.hold && q.type !== "p51").map((q) => ({ id: q.id, ty: q.type, ph: q.phase, p51n: q.p51n || 0, dB: Math.round(nearB17(q.x, q.y, q.z)), dB17: q.dB17, x: q.x, y: q.y, z: q.z, opening: !!q.opening, foe: q.foe ? q.foe.id : null })), boxY: BOX_C.y, strag: stragNow ? { x: stragNow.x, y: stragNow.y, z: stragNow.z } : null, escDuty: mission ? !!mission.escDuty : false }),
