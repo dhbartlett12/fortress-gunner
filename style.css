@@ -424,3 +424,16 @@ body.desktop canvas { cursor: crosshair; }
   #rideNext { right: 8px; }
   #rideLabel { right: 8px; bottom: 154px; }
 }
+
+/* 1.6.9: on-screen trigger while flying a fighter (Volume Up / Space also fire) */
+#flyFire { position: fixed; right: calc(14px + env(safe-area-inset-right)); bottom: calc(14px + env(safe-area-inset-bottom)); width: 58px; height: 58px; border-radius: 50%;
+  border: 2px solid rgba(255, 150, 120, 0.75); background: rgba(70, 12, 8, 0.55); color: #ffd9cc; font: 700 11px/1 system-ui, sans-serif; letter-spacing: 1px; z-index: 30; touch-action: none; }
+#flyFire.hidden { display: none; }
+#flyFire.on { background: rgba(190, 40, 20, 0.75); }
+
+/* 1.6.9: FLAK (ground POV) sits left of RIDE */
+#flakBtn { right: 92px; min-width: 64px; text-align: center; }
+@media (max-width: 520px), (max-height: 480px) { #flakBtn { right: 80px; min-width: 56px; padding: 0 8px; } }
+
+/* 1.6.9: flak POV dormant until the ground/impact framing is fixed */
+#flakBtn { display: none !important; }

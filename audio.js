@@ -573,10 +573,20 @@
     for (let k = 0; k < 10; k++) { const tt = t + 0.25 + Math.pow(Math.random(), 1.5) * 1.3; tink(G, tt, 0.2 * (1 - (tt - t) / 1.7), (Math.random() - 0.5) * 0.9); }
   }
 
-  function sBoom(G, t, dist, pan, big) {
-    const near = DM ? 1 : 1 / (1 + dist / 150), lp = DM ? 9000 : Math.max(300, 1800 - dist * 1.2);
-    thump(G, t, big ? 60 : 80, 22, big ? 1.4 : 0.9, (big ? 1.3 : 0.9) * near, pan, lp);
-    noiseHit(G, t, big ? 1.6 : 1.1, 260, 0.5, 1.3 * near, pan, lp, 0.01);
+  function sBoom(G, t, dist, pan, big) { // 1.6.9: layered — a bright crack, the fireball's body, a sub thump that drops in pitch, a rolling tail and falling debris
+    const near = DM ? 1 : 1 / (1 + dist / 150), lp = DM ? 9000 : Math.max(300, 1800 - dist * 1.2), k = big ? 1.25 : 0.9;
+    if (lp > 900) noiseHit(G, t, 0.05, 2600, 0.6, 0.9 * near * k, pan, Math.min(9000, lp * 3), 0.001); // crack
+    noiseHit(G, t + 0.005, big ? 0.55 : 0.4, 650, 0.7, 1.0 * near * k, pan, lp, 0.004); // body
+    thump(G, t, big ? 70 : 90, 24, big ? 1.8 : 1.1, 1.3 * near * k, pan, lp); // sub
+    noiseHit(G, t + 0.12, big ? 2.8 : 1.6, 180, 0.45, 0.75 * near * k, pan, Math.min(lp, 700), 0.08); // rolling tail
+    if (dist < 700) for (let i = 0; i < (big ? 9 : 5); i++) tink(G, t + 0.35 + Math.random() * (big ? 1.6 : 0.9), 0.09 * near, pan); // debris
+  }
+  function sFlak88(G, t, dist, pan) { // 1.6.9 flak POV: an 88 firing close by — a slamming report, the pressure wave, a long echo off the fields
+    const near = DM ? 1 : 1 / (1 + dist / 40);
+    noiseHit(G, t, 0.06, 1900, 0.5, 1.2 * near, pan, 8000, 0.0008);
+    thump(G, t, 85, 28, 0.9, 1.4 * near, pan, 1200);
+    noiseHit(G, t + 0.02, 0.9, 260, 0.5, 0.7 * near, pan, 900, 0.01);
+    noiseHit(G, t + 0.42, 1.6, 200, 0.4, 0.22 * near, pan, 600, 0.12); // echo
   }
   // 1.5.2: WGr.21 rocket launch — ignition thump, then a rushing hiss that sweeps up and fades as it flies off
   function sRocket(G, t, dist, pan) {
@@ -821,6 +831,8 @@
       try { thump(G, t, 52, 19, 1.5 + sz, 1.25 * sz, q.pan, 420); noiseHit(G, t, 2.6 + 1.6 * sz, 150, 0.4, 0.95 * sz, q.pan, 380, 0.06); noiseHit(G, t + 0.22, 1.3, 320, 0.5, 0.45 * sz, q.pan, 600, 0.02); } finally { DM = null; }
       count("crash");
     },
+    boomAt(dist, big) { if (!ok()) return; withDM(dist, big ? 900 : 650, (m) => sBoom(G, ctx.currentTime + m.delay, dist, 0, big)); count("boom"); }, // 1.6.9 (flak POV: distance in u)
+    gun88(dist) { if (!ok()) return; withDM(dist, 300, (m) => sFlak88(G, ctx.currentTime + m.delay, dist, 0)); count("gun88"); },
     boom(x, y, z, big) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, big ? 900 : 650, (m) => sBoom(G, ctx.currentTime + m.delay, q.d, q.pan, big)); count("boom"); },
     rocket(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 420, (m) => sRocket(G, ctx.currentTime + m.delay, q.d, q.pan)); count("rocket"); },
     flak(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); withDM(q.d, 700, (m) => sFlak2(G, ctx.currentTime + m.delay, q.d, q.pan)); count("flak"); },

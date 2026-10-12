@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "./vendor/GLTFLoader.js";
 import { createTown3D } from "./town3d.js"; // 1.6.8 TOWN
 import { createFlakGround } from "./flakground.js"; // 1.6.8 FLAK GROUND
+import { createFlakPov } from "./flakpov.js"; // 1.6.9 FLAK POV
 
 const CAM = { x: 0, y: 10.2, z: 6.5 };
 // 1.4.1: capture clock — offline clip harnesses set window.__FG_CAPCLK (ms) so effects run at sim speed
@@ -1998,6 +1999,7 @@ export function createWorld3D(canvas) {
   };
   const chuteMatUS = new THREE.MeshLambertMaterial({ map: goreTex([236, 232, 218]), side: THREE.DoubleSide, fog: true });
   const chuteMatDE = new THREE.MeshLambertMaterial({ map: goreTex([214, 196, 160]), side: THREE.DoubleSide, fog: true });
+  const chuteMatBail = new THREE.MeshLambertMaterial({ map: goreTex([250, 120, 30]), side: THREE.DoubleSide, fog: true, emissive: 0x3a1400 }); // 1.6.9: your own bail-out — orange/white so it reads against the fields
   const chuteBody = new THREE.MeshLambertMaterial({ color: 0x3b3a2c, fog: true });
   const lineMat = new THREE.LineBasicMaterial({ color: 0x6a665a, transparent: true, opacity: 0.8, fog: true });
   const canopyGeo = new THREE.SphereGeometry(1, 16, 6, 0, Math.PI * 2, 0, 1.15);
@@ -2027,8 +2029,8 @@ export function createWorld3D(canvas) {
       if (!c) { g.visible = false; continue; }
       g.visible = true;
       const U = g.userData;
-      U.dome.material = c.kind === "de" ? chuteMatDE : chuteMatUS;
-      g.position.set(c.x, c.y, c.z);
+      U.dome.material = c.kind === "bail" ? chuteMatBail : c.kind === "de" ? chuteMatDE : chuteMatUS;
+      g.position.set(c.x, c.y, c.z); g.scale.setScalar(c.kind === "bail" ? 1.7 : 1);
       const o = c.open || 0, R = 2.8;
       // streamer (tall, narrow) → blossoming canopy
       const w = 0.12 + 0.88 * Math.pow(o, 0.7), hgt = o > 0 ? 1 : 0.2;
@@ -2585,8 +2587,10 @@ export function createWorld3D(canvas) {
   // drifting smoke for 20–30 s. Pooled Points (2 draw calls), screen-size clamped, fog-exempt, drawn over the ground in the Earth pass.
   // (1.6.4's sprites sat directly under the sky burst — i.e. under our own box — and their updater was never called.)
   const FLAKG = createFlakGround({ landG, TOWN_X, TOWN_Z, TOWN_S, renderer, camera, clock: () => (window.__FG_FREEZE && window.__FG_SIMT != null ? window.__FG_SIMT : pnow() / 1000) });
+  const FPOV = createFlakPov({ landG, TOWN_X, TOWN_Z, TOWN_S, AF: { x: TOWN3D.airfield[0], z: TOWN3D.airfield[1], rx: 6.3, rz: 5.0, rot: 0.28 }, camera, flakG: FLAKG, fireTex, smokeTex, audio: window.FGAudio || null }); // 1.6.9
   function flakMuzzle() { FLAKG.muzzle(); }
   function bombBurst(lx, lz, big) { // ground-frame local coords (landG). 1.6.1: much bigger so a stick reads from a straggler several km back
+    try { FPOV.impact(lx, lz, big); } catch (e) { /* POV not built yet */ }
     const mul = big ? 3.6 : 2.0;
     const f = impactFlash[_ifI]; _ifI = (_ifI + 1) % impactFlash.length;
     f.sp.position.set(lx, 0.8, lz); f.life = f.max = 1.6; f.big = mul; f.sp.visible = true;
@@ -3119,7 +3123,7 @@ export function createWorld3D(canvas) {
   function flakGhostClear() { const q = ghGeo.attributes.aQ.array; q.fill(-1e6); ghGeo.attributes.aQ.needsUpdate = true; ghBirth.fill(-1e6); ghMesh.position.set(0, 0, 0); ghMesh.rotation.set(0, 0, 0); }
   function flakGhost(F, b) { // hand burst b (last state seen, time b.t) from mesh F to the ghost pool
     const slot = ghNext; ghNext = (ghNext + 1) % GH_N;
-    const life = 60 + ((b.seed * 7919) % 30);
+    const life = window.__FG_GHOLD ? 60 + ((b.seed * 7919) % 30) : 14 + ((b.seed * 7919) % 8); // (__FG_GHOLD: the 1.6.8 lifetime, for A/B metrics) // 1.6.9: a dropped burst (14 s old) now thins out over 14–22 s (was 60–90 s: hundreds of 48 m quads behind the box cost FPS looking aft)
     ghBirth[slot] = ghT; ghLife[slot] = life;
     ghMesh.updateMatrixWorld(true);
     const t = b.t, A = ghGeo.attributes, pos = A.position.array, P4 = A.aP.array, Q4 = A.aQ.array, T3 = A.aTint.array;
@@ -3430,6 +3434,7 @@ export function createWorld3D(canvas) {
     updateFlak(!!opts.flakOn, dt, dz);
     updateFlakBursts(opts.flakBursts, dt, dz, dH);
     FLAKG.update(dt);
+    if (FPOV.on) FPOV.update(dt, _fpBox.set(CAM.x, CAM.y, CAM.z), syncMission._simT || 0);
     updateRockets(opts.rockets);
     updateDebris(dz);
     updateFlakDebris(dz);
@@ -4079,8 +4084,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const g = new THREE.Group(); g.name = "P51D"; g.userData.procedural = true;
     // 1.5.2 fix: bright natural-metal silver. Low metalness (no env map in the scene → high metalness renders near-black) + a self-lit emissive floor.
     const nmf = (o) => new THREE.MeshStandardMaterial(Object.assign({ color: 0xd8d8d2, metalness: 0.12, roughness: 0.5, emissive: 0xb4b4ae, emissiveIntensity: 0.5, envMapIntensity: 0.3 }, o || {}));
-    const M = nmf(), Mdark = nmf({ color: 0x55574f, metalness: 0.2, roughness: 0.55, emissive: 0x0a0a0a, emissiveIntensity: 0.3 }), Mred = nmf({ color: 0xe0b020, metalness: 0.1, roughness: 0.5, emissive: 0x6a5008, emissiveIntensity: 0.4 }), Mod = nmf({ color: 0x5c6636, metalness: 0.1, roughness: 0.6, emissive: 0x20260c, emissiveIntensity: 0.4 });
-    const Mglass = new THREE.MeshStandardMaterial({ color: 0xa8d4ea, metalness: 0.0, roughness: 0.05, transparent: true, opacity: 0.38, depthWrite: false, emissive: 0x2a4a5c, emissiveIntensity: 0.5 });
+    const M = nmf(), Mdark = nmf({ color: 0x55574f, metalness: 0.2, roughness: 0.55, emissive: 0x0a0a0a, emissiveIntensity: 0.3 }), Mred = nmf({ color: 0xc81e18, metalness: 0.1, roughness: 0.45, emissive: 0x5a0806, emissiveIntensity: 0.45 }), Mod = nmf({ color: 0x5c6636, metalness: 0.1, roughness: 0.6, emissive: 0x20260c, emissiveIntensity: 0.4 });
+    const Mglass = new THREE.MeshStandardMaterial({ color: 0x4f6f86, metalness: 0.3, roughness: 0.04, transparent: true, opacity: 0.72, depthWrite: false, emissive: 0x16242e, emissiveIntensity: 0.5, envMapIntensity: 1.6 });
     const add = (geo, mat, name, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.name = name || ""; m.position.set(x || 0, y || 0, z || 0); g.add(m); return m; };
     // fuselage loft: sections along z (nose −z → tail +z); each {z, w (half width), t (top), b (bottom), y (centre)}
     function loft(secs, seg) {
@@ -4089,49 +4094,75 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       for (let k = 0; k < secs.length - 1; k++) for (let i = 0; i < seg; i++) { const a = k * seg + i, b = k * seg + (i + 1) % seg, c = (k + 1) * seg + i, d = (k + 1) * seg + (i + 1) % seg; idx.push(a, c, b, b, c, d); }
       const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx); geo.computeVertexNormals(); return geo;
     }
-    const fus = loft([
-      { z: -2.30, w: 0.05, t: 0.05, b: 0.05, y: 0 }, { z: -2.12, w: 0.30, t: 0.27, b: 0.26, y: 0.02 }, { z: -1.75, w: 0.40, t: 0.36, b: 0.34, y: 0.04 },
-      { z: -1.2, w: 0.44, t: 0.42, b: 0.30, y: 0.06 }, { z: -0.6, w: 0.43, t: 0.44, b: 0.32, y: 0.08 }, { z: 0.1, w: 0.40, t: 0.40, b: 0.30, y: 0.07 },
-      { z: 0.8, w: 0.33, t: 0.30, b: 0.24, y: 0.06 }, { z: 1.5, w: 0.22, t: 0.22, b: 0.17, y: 0.07 }, { z: 2.1, w: 0.11, t: 0.14, b: 0.10, y: 0.09 }, { z: 2.52, w: 0.04, t: 0.07, b: 0.05, y: 0.10 },
-    ], 14);
+    // ===== 1.6.9 P-51D re-shape: superelliptic loft with UVs + a natural-metal panel-line skin; Merlin nose with the chin intake,
+    // the belly radiator scoop lofted into the fuselage, laminar wing (straight LE, forward-swept TE, root extension, 5° dihedral),
+    // tapered tailplane, D-model bubble canopy with the windscreen frame, antenna mast, closed gear doors (gear is up in flight).
+    const skinTex = (() => { const W = 1024, H = 512, c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+      let sd = 51; const r = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+      x.fillStyle = "#d4d4ce"; x.fillRect(0, 0, W, H);
+      for (let i = 0; i < 90; i++) { const v = 204 + (r() * 12) | 0; x.fillStyle = `rgb(${v},${v},${v - 4})`; x.fillRect(r() * W, r() * H, 40 + r() * 140, 30 + r() * 90); } // panel-to-panel tone
+      x.strokeStyle = "rgba(90,92,90,0.2)"; x.lineWidth = 1.1;
+      for (let k = 1; k < 14; k++) { const yy = k * H / 14 + (r() - 0.5) * 6; x.beginPath(); x.moveTo(0, yy); x.lineTo(W, yy); x.stroke(); } // stations (around the fuselage)
+      for (let k = 1; k < 9; k++) { const xx = k * W / 9; x.beginPath(); x.moveTo(xx, 0); x.lineTo(xx, H); x.stroke(); } // stringers
+      x.fillStyle = "rgba(90,90,88,0.16)"; for (let k = 0; k < 2600; k++) x.fillRect(r() * W, Math.round(r() * 14) * H / 14 + 3, 1.4, 1.4); // rivet rows
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; })();
+    M.map = skinTex; M.emissiveMap = skinTex; M.emissiveIntensity = 0.42; M.needsUpdate = true;
+    function loftSE(secs, seg, n) { // superellipse sections {z, w, t, b, y}; UV: u = around, v = along
+      const pos = [], uv = [], idx = [], e = 2 / (n || 2.5), z0 = secs[0].z, z1 = secs[secs.length - 1].z;
+      for (const s of secs) for (let i = 0; i <= seg; i++) { const a = i / seg * Math.PI * 2, c = Math.cos(a), sn = Math.sin(a); pos.push(s.w * Math.sign(c) * Math.pow(Math.abs(c), e), s.y + (sn > 0 ? s.t : s.b) * Math.sign(sn) * Math.pow(Math.abs(sn), e), s.z); uv.push(i / seg, (s.z - z0) / (z1 - z0) * 2.2); }
+      const S = seg + 1; for (let k = 0; k < secs.length - 1; k++) for (let i = 0; i < seg; i++) { const a = k * S + i, b = a + 1, c = a + S, d = c + 1; idx.push(a, c, b, b, c, d); }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx); geo.computeVertexNormals(); return geo;
+    }
+    const fus = loftSE([
+      { z: -2.40, w: 0.101, t: 0.13, b: 0.13, y: 0.03 }, { z: -2.30, w: 0.187, t: 0.25, b: 0.27, y: 0.02 }, { z: -2.10, w: 0.242, t: 0.32, b: 0.36, y: 0.01 },
+      { z: -1.75, w: 0.273, t: 0.36, b: 0.40, y: 0.02 }, { z: -1.30, w: 0.289, t: 0.39, b: 0.38, y: 0.04 }, { z: -0.80, w: 0.296, t: 0.41, b: 0.36, y: 0.06 },
+      { z: -0.35, w: 0.296, t: 0.43, b: 0.37, y: 0.07 }, { z: 0.10, w: 0.289, t: 0.40, b: 0.38, y: 0.07 }, { z: 0.50, w: 0.265, t: 0.33, b: 0.38, y: 0.07 },
+      { z: 0.90, w: 0.226, t: 0.27, b: 0.38, y: 0.07 }, { z: 1.25, w: 0.179, t: 0.22, b: 0.30, y: 0.08 }, { z: 1.65, w: 0.133, t: 0.18, b: 0.18, y: 0.09 },
+      { z: 2.10, w: 0.078, t: 0.13, b: 0.11, y: 0.10 }, { z: 2.50, w: 0.023, t: 0.07, b: 0.04, y: 0.11 },
+    ], 28, 2.6);
     add(fus, M, "fuselage");
-    // wing: straight taper, squared-off tips, laminar-flow thin section; slight dihedral
-    function prism(x0, x1, le0, te0, le1, te1, t0, t1, y0, y1) { // x0 root → x1 tip, z of leading/trailing edge at each end
-      const v = [[x0, y0 + t0, le0], [x0, y0 + t0, te0], [x1, y1 + t1, te1], [x1, y1 + t1, le1], [x0, y0 - t0, le0], [x0, y0 - t0, te0], [x1, y1 - t1, te1], [x1, y1 - t1, le1]];
-      const pos = []; for (const q of v) pos.push(...q);
-      const idx = [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 1, 5, 6, 1, 6, 2];
-      const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx); geo.computeVertexNormals(); return geo;
-    }
+    { const sc = loftSE([ // 1.6.9: the distinct belly radiator scoop (split mouth forward of the trailing edge, tapering to the exit flap)
+        { z: -0.30, w: 0.10, t: 0.02, b: 0.03, y: -0.30 }, { z: -0.10, w: 0.15, t: 0.04, b: 0.17, y: -0.33 }, { z: 0.30, w: 0.16, t: 0.04, b: 0.2, y: -0.35 },
+        { z: 0.70, w: 0.15, t: 0.04, b: 0.17, y: -0.34 }, { z: 1.05, w: 0.12, t: 0.03, b: 0.07, y: -0.30 }, { z: 1.25, w: 0.08, t: 0.02, b: 0.02, y: -0.26 } ], 20, 2.4);
+      add(sc, M, "radiator_scoop"); }
+    add(new THREE.BoxGeometry(0.26, 0.11, 0.03), Mdark, "radiator_inlet", 0, -0.45, -0.11); // the scoop's mouth (dark)
+    add(new THREE.BoxGeometry(0.2, 0.05, 0.1), Mdark, "carb_intake", 0, -0.37, -2.0);   // chin carburettor intake
+    add(new THREE.BoxGeometry(0.22, 0.03, 0.12), Mdark, "radiator_exit", 0, -0.36, 1.1);
+    function wingLoft(sd, st, name, mat) { // st: [{x, le, te, t, y}] spanwise stations; a cambered laminar section (11 pts per side)
+      const N = 11, pos = [], uv = [], idx = [];
+      for (const q of st) { const ch = q.te - q.le; for (let i = 0; i <= 2 * N; i++) { const up = i <= N, u = up ? i / N : (2 * N - i) / N, xc = (1 - Math.cos(u * Math.PI)) / 2;
+          const th = q.t * ch * 2.6 * (0.2969 * Math.sqrt(xc) - 0.126 * xc - 0.3516 * xc * xc + 0.2843 * xc * xc * xc - 0.1036 * xc * xc * xc * xc), cb = 0.012 * ch * Math.sin(xc * Math.PI);
+          pos.push(sd * q.x, q.y + cb + (up ? th : -th), q.le + xc * ch); uv.push((q.le + xc * ch) * 0.6, q.x * 0.35); } }
+      const S = 2 * N + 1; for (let k = 0; k < st.length - 1; k++) for (let i = 0; i < 2 * N; i++) { const a = k * S + i, b = a + 1, c = a + S, d = c + 1; if (sd > 0) idx.push(a, b, c, b, d, c); else idx.push(a, c, b, b, c, d); }
+      const L = st[st.length - 1], o = (st.length - 1) * S; const cap = pos.length / 3; pos.push(sd * L.x, L.y, (L.le + L.te) / 2); uv.push(0, 0); for (let i = 0; i < 2 * N; i++) { if (sd > 0) idx.push(o + i, cap, o + i + 1); else idx.push(o + i, o + i + 1, cap); }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx); geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, mat); m.name = name; g.add(m); return m; }
+    const WY = (x) => -0.2 + Math.abs(x) * 0.087; // 5° dihedral from the root (low wing)
     for (const sd of [1, -1]) {
-      add(prism(sd * 0.3, sd * 2.9, -0.62, 0.62, -0.18, 0.28, 0.065, 0.025, -0.12, -0.04), M, sd > 0 ? "wing_r" : "wing_l");
-      add(prism(sd * 0.1, sd * 1.0, 1.58, 2.18, 1.7, 2.1, 0.03, 0.02, 0.1, 0.1), M, "tailplane");
+      wingLoft(sd, [{ x: 0.2, le: -0.70, te: 0.92, t: 0.155, y: WY(0.2) }, { x: 0.62, le: -0.66, te: 0.62, t: 0.15, y: WY(0.62) }, { x: 1.6, le: -0.58, te: 0.36, t: 0.13, y: WY(1.6) }, { x: 2.66, le: -0.47, te: 0.10, t: 0.11, y: WY(2.66) }, { x: 2.78, le: -0.42, te: 0.06, t: 0.09, y: WY(2.78) }], sd > 0 ? "wing_r" : "wing_l", M);
+      wingLoft(sd, [{ x: 0.08, le: 1.62, te: 2.26, t: 0.1, y: 0.16 }, { x: 0.55, le: 1.70, te: 2.20, t: 0.09, y: 0.16 }, { x: 1.0, le: 1.82, te: 2.12, t: 0.08, y: 0.16 }], "tailplane", M);
+      add(new THREE.BoxGeometry(0.42, 0.012, 0.5), Mdark, "gear_door", sd * 0.62, WY(0.62) - 0.12, -0.12).rotation.z = sd * 0.087; // closed main-gear doors (panel outline)
     }
-    // wing-root fairing + belly radiator scoop (the P-51's signature chin under the aft cockpit)
-    add(new THREE.BoxGeometry(0.46, 0.2, 0.9), M, "radiator", 0, -0.33, 0.55);
-    add(new THREE.BoxGeometry(0.34, 0.12, 0.14), Mdark, "radiator_inlet", 0, -0.30, 0.09);
-    add(new THREE.BoxGeometry(0.34, 0.12, 0.5), M, "chin_scoop", 0, -0.30, -1.55);
-    // vertical fin with dorsal fillet (big), rudder
-    {
-      const s = new THREE.Shape(); s.moveTo(0, 0); s.lineTo(0.35, 0); s.lineTo(1.0, 0.82); s.lineTo(1.18, 0.82); s.lineTo(1.12, 0); s.lineTo(1.5, 0); s.lineTo(0, 0);
-      // profile in (z, y): fillet starts at z=0.35 on the spine and sweeps up to the fin tip near z≈2.28
-      const f = new THREE.Shape(); f.moveTo(0.35, 0.0); f.lineTo(1.55, 0.14); f.lineTo(2.0, 0.93); f.lineTo(2.34, 0.93); f.lineTo(2.44, 0.1); f.lineTo(2.38, 0.0); f.lineTo(0.35, 0.0);
-      const geo = new THREE.ExtrudeGeometry(f, { depth: 0.07, bevelEnabled: false });
-      geo.rotateY(-Math.PI / 2); // extrude axis → x; shape x → z, shape y → y
-      geo.translate(-0.035, 0, 0);
-      const fin = new THREE.Mesh(geo, M); fin.name = "fin"; fin.position.set(0, 0.16, 0); g.add(fin);
+    { // vertical fin with dorsal fillet, rudder hinge line
+      const f = new THREE.Shape(); f.moveTo(0.6, 0.0); f.lineTo(1.55, 0.12); f.quadraticCurveTo(1.9, 0.5, 2.06, 0.95); f.quadraticCurveTo(2.26, 1.04, 2.4, 0.9); f.lineTo(2.5, 0.12); f.lineTo(2.42, 0.0); f.lineTo(0.6, 0.0);
+      const geo = new THREE.ExtrudeGeometry(f, { depth: 0.06, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.012, bevelSegments: 1 }); geo.rotateY(-Math.PI / 2); geo.translate(-0.03, 0, 0);
+      const fin = new THREE.Mesh(geo, M); fin.name = "fin"; fin.position.set(0, 0.17, 0); g.add(fin);
+      add(new THREE.BoxGeometry(0.075, 0.82, 0.012), Mdark, "rudder_line", 0, 0.62, 2.2).rotation.x = 0.1;
     }
-    // bubble canopy (D-model): a tall teardrop on a low rear deck
-    const can = add(new THREE.SphereGeometry(0.5, 16, 12), Mglass, "canopy_glass", 0, 0.42, 0.12); can.scale.set(0.34, 0.3, 0.98);
-    add(new THREE.BoxGeometry(0.1, 0.06, 0.4), M, "windscreen_frame", 0, 0.5, -0.5);
-    // spinner (red marker), four-blade prop, small blur disc
-    const spin = add(new THREE.ConeGeometry(0.2, 0.52, 14), M, "spinner", 0, 0.03, -2.5); spin.rotation.x = -Math.PI / 2;
-    add(new THREE.CylinderGeometry(0.31, 0.31, 0.09, 16, 1, true), Mred, "nose_band", 0, 0.03, -2.12).rotation.x = Math.PI / 2; // small yellow squadron nose band
-    add(new THREE.BoxGeometry(0.3, 0.025, 0.95), Mod, "antiglare_panel", 0, 0.45, -1.2).rotation.x = -0.1; // olive-drab anti-glare panel ahead of the windscreen
-    for (let k = 0; k < 4; k++) { const bl = add(new THREE.BoxGeometry(0.1, 1.5, 0.025), Mdark, "propblade" + k, 0, 0.03, -2.58); bl.rotation.z = k * Math.PI / 4 + 0.35; bl.scale.set(1, 1, 1); }
+    // D-model bubble canopy on a cut-down rear deck + framed windscreen, antenna mast
+    const can = add(new THREE.SphereGeometry(0.5, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), Mglass, "canopy_glass", 0, 0.38, 0.05); can.scale.set(0.27, 0.6, 0.95);
+    { 
+      const sl = add(new THREE.BoxGeometry(0.012, 0.012, 0.95), Mdark, "canopy_rail", 0.13, 0.4, 0.05); const sr = sl.clone(); sr.position.x = -0.13; g.add(sr); }
+    add(new THREE.TorusGeometry(0.135, 0.007, 5, 18, Math.PI), Mdark, "canopy_bow", 0, 0.38, -0.3).scale.set(1, 2.2, 1);
+    { const ws = add(new THREE.PlaneGeometry(0.3, 0.24), Mglass, "windscreen", 0, 0.58, -0.62); ws.rotation.x = -0.75; add(new THREE.BoxGeometry(0.32, 0.02, 0.02), Mdark, "windscreen_frame", 0, 0.5, -0.7); add(new THREE.BoxGeometry(0.02, 0.24, 0.02), M, "windscreen_post", 0, 0.58, -0.62).rotation.x = -0.75; }
+    add(new THREE.BoxGeometry(0.015, 0.3, 0.06), Mdark, "antenna", 0, 0.48, 0.85).rotation.x = 0.25;
+    add(new THREE.CylinderGeometry(0.33, 0.33, 0.12, 20, 1, true), Mred, "nose_band", 0, 0.02, -2.18).rotation.x = Math.PI / 2;
+    { const spin = add(new THREE.ConeGeometry(0.135, 0.3, 18), Mred, "spinner", 0, 0.03, -2.54); spin.rotation.x = -Math.PI / 2; }
+    g.userData.propAt = [0, 0.03, -2.45]; g.userData.propR = 0.8; g.userData.propN = 4; // 1.6.9: prop rig attached in cloneFighter
     // wing guns (3 per side), exhaust stacks
     for (const sd of [1, -1]) {
-      for (let k = 0; k < 3; k++) add(new THREE.CylinderGeometry(0.018, 0.018, 0.5, 6), Mdark, "gun", sd * (1.0 + k * 0.18), -0.1, -0.7).rotation.x = Math.PI / 2;
-      for (let k = 0; k < 6; k++) add(new THREE.BoxGeometry(0.05, 0.06, 0.12), Mdark, "exhaust", sd * 0.4, 0.12, -1.6 + k * 0.2);
+      for (let k = 0; k < 3; k++) add(new THREE.CylinderGeometry(0.014, 0.014, 0.08, 6), Mdark, "gun", sd * (1.0 + k * 0.17), WY(1.0 + k * 0.17) + 0.005, -0.6).rotation.x = Math.PI / 2;
+      for (let k = 0; k < 6; k++) add(new THREE.BoxGeometry(0.05, 0.06, 0.12), Mdark, "exhaust", sd * 0.31, 0.12, -1.6 + k * 0.2);
     }
     // markings: US star-and-bar roundels (wing top port / underside starboard, fuselage sides), invasion stripes
     function tex(draw, w, h) { const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; }
@@ -4148,13 +4179,13 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const decalMat = (t) => new THREE.MeshStandardMaterial({ map: t, transparent: true, roughness: 0.6, metalness: 0.1, emissive: 0x303030, emissiveIntensity: 0.25, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide });
     const decal = (w, h, mat, x, y, z, rx, ry) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); m.position.set(x, y, z); m.rotation.set(rx || 0, ry || 0, 0); m.userData.decal = true; m.userData.noHit = true; g.add(m); return m; };
     const RM = decalMat(roundelTex), SMh = decalMat(stripeTex(false)), SMv = decalMat(stripeTex(true));
-    decal(0.78, 0.78, RM, -1.8, -0.022, 0.05, -Math.PI / 2, 0);      // port wing, top
-    decal(0.78, 0.78, RM, 1.8, -0.122, 0.05, Math.PI / 2, 0);        // starboard wing, underside
-    decal(0.52, 0.52, RM, 0.327, 0.08, 0.9, 0, Math.PI / 2);         // fuselage sides
-    decal(0.52, 0.52, RM, -0.327, 0.08, 0.9, 0, -Math.PI / 2);
+    decal(0.7, 0.7, RM, -1.85, WY(1.85) + 0.075, -0.1, -Math.PI / 2, 0);      // port wing, top
+    decal(0.7, 0.7, RM, 1.85, WY(1.85) - 0.07, -0.1, Math.PI / 2, 0);        // starboard wing, underside
+    decal(0.46, 0.46, RM, 0.296, 0.12, 0.9, 0, Math.PI / 2);         // fuselage sides
+    decal(0.46, 0.46, RM, -0.296, 0.12, 0.9, 0, -Math.PI / 2);
     for (const sd of [1, -1]) {                                       // invasion stripes: spanwise bands over the inner wings, vertical bands round the aft fuselage
-      decal(0.7, 0.9, SMh, sd * 1.0, -0.04, 0.02, -Math.PI / 2, 0);
-      decal(0.6, 0.34, SMv, sd * 0.2, 0.09, 1.62, 0, sd * Math.PI / 2).scale.set(1, 1, 1);
+      decal(0.62, 1.1, SMh, sd * 1.0, WY(1.0) + 0.09, -0.08, -Math.PI / 2, 0);
+      decal(0.5, 0.36, SMv, sd * 0.175, 0.1, 1.62, 0, sd * Math.PI / 2).scale.set(1, 1, 1);
     }
     return g;
   }
@@ -4188,6 +4219,50 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     }
   }
 
+  // ===== 1.6.9 PROPS: a translucent blur disc with a tip ring + semi-transparent blades + a spinner, spun every frame
+  const propDiscTex = (() => { const N = 256, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d"); const g = x.createRadialGradient(N / 2, N / 2, N * 0.06, N / 2, N / 2, N / 2);
+    g.addColorStop(0, "rgba(40,40,38,0.0)"); g.addColorStop(0.25, "rgba(40,40,38,0.07)"); g.addColorStop(0.9, "rgba(46,46,44,0.11)"); g.addColorStop(0.955, "rgba(200,180,80,0.16)"); g.addColorStop(0.975, "rgba(40,40,38,0.06)"); g.addColorStop(1, "rgba(40,40,38,0)");
+    x.fillStyle = g; x.fillRect(0, 0, N, N); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+  const fgPropDisc = new THREE.MeshBasicMaterial({ map: propDiscTex, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: true });
+  const fgPropBlade = new THREE.MeshStandardMaterial({ color: 0x1a1a18, roughness: 0.7, metalness: 0.2, transparent: true, opacity: 0.3, depthWrite: false });
+  const _pz = new THREE.Vector3(0, 0, 1);
+  function addFrames(mesh, kind) { // in the GLB's own space: +x = nose, +y = up, z = span
+    if (kind !== "109" && kind !== "190") return;
+    const fm = new THREE.MeshStandardMaterial({ color: kind === "190" ? 0x3e463a : 0x3a4036, roughness: 0.6, metalness: 0.2 });
+    const g = new THREE.Group(); g.name = "frames"; mesh.add(g);
+    const hoop = (x, w, h, y0, t, tilt) => { const m = new THREE.Mesh(new THREE.TorusGeometry(1, t, 5, 18, Math.PI), fm); m.rotation.y = Math.PI / 2; m.scale.set(w, h, 1); const o = new THREE.Group(); o.position.set(x, y0, 0); o.rotation.z = tilt || 0; o.add(m); g.add(o); return o; };
+    const rail = (x0, x1, y, z, t) => { const m = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0), t, t), fm); m.position.set((x0 + x1) / 2, y, z); g.add(m); };
+    if (kind === "109") { // the angular, heavily framed Bf 109 hood: windscreen, two hood hoops, the hinged rear frame, top + sill rails
+      for (const [x, k, tilt] of [[0.64, 0.62, -0.5], [0.5, 0.97, 0], [0.33, 1, 0], [0.16, 0.85, 0.15]]) hoop(x, 0.125 * k, 0.172 * k, 0.0, 0.009, tilt);
+      rail(0.15, 0.6, 0.172, 0, 0.012); for (const z of [-0.12, 0.12]) rail(0.13, 0.66, 0.035, z, 0.012);
+      const rm = new THREE.MeshStandardMaterial({ color: 0x485040, roughness: 0.7 }), mouth = new THREE.MeshStandardMaterial({ color: 0x101010, roughness: 1 });
+      for (const sd of [-1, 1]) { const r = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.07, 0.24), rm); r.position.set(0.42, -0.425, sd * 1.12); g.add(r);
+        const mo = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.2), mouth); mo.position.set(0.595, -0.425, sd * 1.12); g.add(mo);
+        const fl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.012, 0.22), rm); fl.position.set(0.22, -0.45, sd * 1.12); fl.rotation.z = 0.25; g.add(fl); } // the exit flap
+    } else { // Fw 190: framed windscreen, the bubble's front edge, rear frame
+      hoop(0.7, 0.19, 0.2, 0.02, 0.01, -0.6); hoop(0.56, 0.2, 0.25, 0.02, 0.008, -0.1);
+    }
+    g.traverse((o) => { o.userData.noHit = true; });
+  }
+  function addPropRig(mesh, kind) {
+    let at = null, r = 0.8, n = 3, normal = new THREE.Vector3(0, 0, -1);
+    if (mesh.userData.propAt) { at = new THREE.Vector3().fromArray(mesh.userData.propAt); r = mesh.userData.propR; n = mesh.userData.propN; }
+    else { let disc = null; mesh.traverse((o) => { if (!disc && /propdisc/i.test(o.name || "")) disc = o; });
+      if (!disc) return; mesh.updateMatrixWorld(true); const inv = new THREE.Matrix4().copy(mesh.matrixWorld).invert();
+      const bb = new THREE.Box3(); disc.traverse((o) => { if (o.isMesh) { o.geometry.computeBoundingBox(); const b = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld).applyMatrix4(inv); bb.union(b); o.visible = false; } });
+      const sz = bb.getSize(new THREE.Vector3()); at = bb.getCenter(new THREE.Vector3()); const ax = sz.x < sz.y && sz.x < sz.z ? 0 : sz.y < sz.z ? 1 : 2; normal.set(ax === 0 ? 1 : 0, ax === 1 ? 1 : 0, ax === 2 ? 1 : 0); r = Math.max(sz.x, sz.y, sz.z) / 2; n = 3; }
+    const rig = new THREE.Group(); rig.name = "propRig"; rig.position.copy(at); rig.quaternion.setFromUnitVectors(_pz, normal.normalize()); mesh.add(rig);
+    const spin = new THREE.Group(); rig.add(spin);
+    const d = new THREE.Mesh(new THREE.CircleGeometry(r, 40), fgPropDisc); d.renderOrder = 3; d.userData.noHit = true; spin.add(d);
+    for (let k = 0; k < n; k++) { const b = new THREE.Mesh(new THREE.BoxGeometry(r * 0.13, r * 0.94, r * 0.03), fgPropBlade); b.geometry.translate(0, r * 0.5, 0); b.rotation.z = k / n * Math.PI * 2; b.rotation.y = 0.35; b.userData.noHit = true; spin.add(b); }
+    if (!mesh.userData.propAt) { const sp = new THREE.Mesh(new THREE.ConeGeometry(r * 0.16, r * 0.42, 14), new THREE.MeshStandardMaterial({ color: kind === "190" ? 0x343a2c : 0x2e3428, roughness: 0.6 })); sp.rotation.x = Math.PI / 2; sp.position.z = r * 0.12; sp.userData.noHit = true; rig.add(sp); }
+    mesh.userData.propSpin = spin;
+    if (kind === "190") { // 1.6.9: the BMW 801's cooling fan behind the spinner — 12 dark blades inside the cowl ring (static)
+      const fan = new THREE.Group(); fan.position.z = -r * 0.02; const fm = new THREE.MeshStandardMaterial({ color: 0x1c1c1a, roughness: 0.8 });
+      const hubD = new THREE.Mesh(new THREE.CircleGeometry(r * 0.42, 24), new THREE.MeshStandardMaterial({ color: 0x0c0c0c, roughness: 1, side: THREE.DoubleSide })); fan.add(hubD);
+      for (let k = 0; k < 12; k++) { const b = new THREE.Mesh(new THREE.BoxGeometry(r * 0.05, r * 0.26, r * 0.02), fm); b.geometry.translate(0, r * 0.25, 0.002); b.rotation.z = k / 12 * Math.PI * 2; b.rotation.y = 0.5; fan.add(b); }
+      fan.traverse((o) => { o.userData.noHit = true; }); rig.add(fan); }
+  }
   function cloneFighter(kind) {
     const src = prototypes[kind] || prototypes["109"];
     if (!src) return null;
@@ -4205,6 +4280,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     });
     // World-ish readable scale (mesh span ~4.6–4.8u ≈ phone 35ft×~25). NOT 7–20× face-huggers.
     mesh.scale.setScalar(kind === "110" ? 2.45 : kind === "190" ? 2.15 : 2.0);
+    addPropRig(mesh, kind); // 1.6.9: spinning prop (blur disc + blades) on every fighter
+    addFrames(mesh, kind); // 1.6.9d: canopy frames (+ the 109's under-wing radiators)
     if (kind === "p51" && !src.userData.procedural) { // 1.5.0: no P-51 model (1.5.2: the procedural P-51D model skips this) — the 109 mesh painted natural metal (spec: 0xC5C2B4, metalness 0.55, roughness 0.38)
       mesh.traverse((o) => {
         if (!o.isMesh || !o.material) return;
@@ -5280,10 +5357,28 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     rideStats.builds++;
     return g;
   }
+  let _bailCan = null;
+  function bailCanopy(type) { // 1.6.9: the jettisoned hood — a framed glass shell (≈1.6 × 0.9 × 0.6 m)
+    if (_bailCan) return _bailCan;
+    const g = new THREE.Group();
+    const fm = new THREE.MeshStandardMaterial({ color: 0xe8d040, emissive: 0x302800, roughness: 0.6, metalness: 0.3 }); void type;
+    const gl = new THREE.MeshStandardMaterial({ color: 0x9fb4c0, roughness: 0.1, metalness: 0.2, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false });
+    const sh = new THREE.Mesh(new THREE.SphereGeometry(0.5, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), gl); sh.scale.set(0.62, 0.55, 1.15); g.add(sh); g.scale.setScalar(1.8); // 1.6.9: oversized a touch so it reads at 10 u
+    for (const z of [-0.45, 0, 0.45]) { const b = new THREE.Mesh(new THREE.TorusGeometry(0.31, 0.025, 4, 12, Math.PI), fm); b.position.z = z; g.add(b); }
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.05, 1.1), fm); g.add(rail);
+    scene.add(g); _bailCan = g; return g;
+  }
   function syncRide(R) { // R = opts.ride (null when not riding)
     for (const k in RIDE_CP) RIDE_CP[k].visible = false;
     rideStats.on = !!R; rideStats.type = R ? R.type : null;
-    if (!R) return;
+    if (!R) { if (_bailCan) _bailCan.visible = false; return; }
+    if (R.bail) { // 1.6.9 bail-out: outside camera (set by game.js), no cockpit; the jettisoned canopy tumbles away
+      const C = R.cam; camera.position.set(R.eye.x, R.eye.y, R.eye.z);
+      _rideM.makeBasis(_rideR.set(C.rx, C.ry, C.rz), _rideU.set(C.ux, C.uy, C.uz), _rideF.set(-C.fx, -C.fy, -C.fz)); camera.quaternion.setFromRotationMatrix(_rideM);
+      if (R.canopy) { const cn = bailCanopy(R.type); cn.visible = true; cn.position.set(R.canopy.x, R.canopy.y, R.canopy.z); cn.quaternion.setFromAxisAngle(_rideR.set(R.canopy.ax[0], R.canopy.ax[1], R.canopy.ax[2]).normalize(), R.canopy.a); }
+      return;
+    }
+    if (_bailCan) _bailCan.visible = false;
     const g = RIDE_CP[R.type] || (RIDE_CP[R.type] = buildRideCockpit(R.type));
     const P = R.pf, C = R.cam;
     camera.position.set(R.eye.x, R.eye.y, R.eye.z);
@@ -5345,6 +5440,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const RIDE = opts.ride || null; // 1.6.6 ride-along: the camera sits in a fighter's cockpit
     _conRide = !!RIDE;
     if (RIDE || rideStats.on) syncRide(RIDE);
+    const FPV = opts.flakPov || null; if (FPV) { FPOV.pose(FPV); skyMesh.position.copy(camera.position); } else if (FPOV.on) FPOV.off(); // 1.6.9 flak POV: camera on the ground at the battery
+    const RIDE_OR = RIDE || FPV;
     if (ownShip) updateOwnShip(opts);
     { // 1.3.8: under our own canopy
       const inChute = !!(FALL && FALL.phase === "chute");
@@ -5354,9 +5451,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       TOWN3D.update(camera, groundWY()); // 1.6.8 TOWN: 3D town ≤ ~15k ft AGL, bake above (and underneath)
 
       // 1.6.3: TAIL reuses TOP turret twin .50 barrel meshes (closer-spaced in updateGuns); hide cage/sightBox + old procedural tailGuns
-      turretAnchor.visible = !inChute && !window.__FG_FREECAM && !RIDE;
-      updateCage(pitch, inChute || !!window.__FG_FREECAM || atTail || !!RIDE); if (window.__FG_FREECAM || RIDE) arch.visible = false;
-      sightBox.visible = !inChute && !window.__FG_FREECAM && !atTail && !RIDE;
+      turretAnchor.visible = !inChute && !window.__FG_FREECAM && !RIDE_OR;
+      updateCage(pitch, inChute || !!window.__FG_FREECAM || atTail || !!RIDE_OR); if (window.__FG_FREECAM || RIDE_OR) arch.visible = false;
+      sightBox.visible = !inChute && !window.__FG_FREECAM && !atTail && !RIDE_OR;
       if (tailFrame) tailFrame.visible = false; // procedural cylinders retired
       // 1.6.1: at the Cheyenne opening, hide extreme aft tip skin once tagged so we look OUT (not into a tunnel)
       if (ownShip) {
@@ -5424,8 +5521,12 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       ensureKind(slot, e.type || "109");
       const mesh = slot.mesh;
       mesh.visible = true;
+      if (mesh.userData.propSpin) mesh.userData.propSpin.rotation.z = (((window.__FG_FREEZE && window.__FG_SIMT != null) ? window.__FG_SIMT : pnow() / 1000) * 23.7 + si * 1.3) % 6.2832; // 1.6.9: ~stroboscopic prop
       mesh.position.set(e.x, e.y, e.z);
-      if (RIDE && e.id === RIDE.id) { // 1.6.6: we're sitting in this one — the cockpit replaces its mesh, fire, smoke, contrail, flash and speck
+      if (slot.boomS) { const B = slot.boomS; const k = Math.max(0, (e.wreckAge || 0) - B.t0); B.sp.position.copy(mesh.position); B.sp.scale.setScalar(70 * Math.min(1, k / 0.5) + 25 * k); B.sp.material.opacity = Math.max(0, 1 - Math.max(0, k - 0.8) / 2.2); B.sp.material.color.setRGB(1, Math.max(0.35, 1 - k * 0.35), Math.max(0.1, 0.8 - k)); if (k > 3) { scene.remove(B.sp); slot.boomS = null; } }
+      if (e.boom2 && !slot.boom2Done && slot.mesh) { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); sp.renderOrder = 55; scene.add(sp); slot.boomS = { sp, t0: e.wreckAge || 0 }; spawnKillFx(mesh.position, e); spawnKillFx(mesh.position, e); for (let i = 0; i < 6; i++) emitSmoke(mesh.position, true, true, { life: 5, s0: 4, s1: 18, a: 0.85 }); } // 1.6.9: the wreck's tanks go up
+      if (!e.boom2) slot.boom2Done = false;
+      if (RIDE && e.id === RIDE.id && !RIDE.bail) { // 1.6.6: we're sitting in this one — the cockpit replaces its mesh, fire, smoke, contrail, flash and speck
         mesh.visible = false; if (slot.fire) slot.fire.visible = false; if (slot.trail) slot.trail.line.visible = false;
         if (slot.wasAlive && !e.alive) spawnKillFx(mesh.position, e);
         slot.wasAlive = e.alive; continue;
@@ -5688,22 +5789,26 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   const FARL = 2; let _farTag = 0, _frameN = 0;
   function tagFar() { earth.traverse((o) => { o.layers.set(FARL); }); skyMesh.layers.set(FARL); for (const L of [hemi, sun, fill, key2]) L.layers.enable(FARL); }
 
+  const _fpBox = new THREE.Vector3();
   function render() {
     prWatch();
     buildTracers();
     if (!window.__FG_NO2PASS) {
       if (_frameN++ % 30 === 0) tagFar();
-      camera.near = 30; camera.far = 320000; camera.updateProjectionMatrix();
+      const POV = FPOV.on; // 1.6.9: standing on the ground — a near plane for the guns 5 m away
+      camera.near = POV ? 1.0 : 30; camera.far = POV ? 120000 : 320000; camera.updateProjectionMatrix();
       camera.layers.set(FARL);
       renderer.render(scene, camera);
       renderer.autoClear = false;
       renderer.clearDepth();
-      camera.near = 0.05; camera.far = 30000; camera.updateProjectionMatrix();
+      camera.near = POV ? 1.0 : 0.05; camera.far = POV ? 60000 : 30000; camera.updateProjectionMatrix();
       camera.layers.set(0);
       renderer.render(scene, camera);
+      if (!POV) {
       renderer.clearDepth();
       camera.layers.set(OVL);
       renderer.render(scene, camera);
+      }
       camera.layers.set(0);
       renderer.autoClear = true;
       camera.far = 70000; camera.updateProjectionMatrix();
@@ -5764,6 +5869,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     townLayout: () => TL,
     townStrike,
     townReset,
+    get fpovStats() { return Object.assign({}, FPOV.stats, { me: FPOV.me }); },
     get rideStats() { const g = rideStats.type && RIDE_CP[rideStats.type]; let n = 0; if (g) g.traverse((o) => { if (o.isMesh) n++; }); return Object.assign({ meshes: n, built: Object.keys(RIDE_CP), cam: camera.position.toArray().map((v) => +v.toFixed(2)), ownVis: !!(ownShip && ownShip.visible), turretVis: turretAnchor.visible }, rideStats); }, // 1.6.6
     get bombStats() { return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) }); },
     bombPositions: () => bombs.filter((b) => b.t >= 0 && !b.landed).sort((p, q) => (q.own ? 1 : 0) - (p.own ? 1 : 0)).slice(0, 40).map((b) => ({ x: +(b._wx || 0).toFixed(1), y: +(b._wy || 0).toFixed(1), z: +(b._wz || 0).toFixed(1), t: +b.t.toFixed(2), y0: +b.y0.toFixed(1), own: !!b.own })), // 1.6.5: own-ship sticks first (test hook)
@@ -5800,7 +5906,6 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     get b17Stats() { const g = friendlyPool[0]; let meshes = 0, tris = 0; g.traverse((o) => { if (o.isMesh) { meshes++; const gg = o.geometry; tris += (gg.index ? gg.index.count : gg.attributes.position.count) / 3; } }); return { children: g.children.length, meshes, tris: Math.round(tris) }; },
     testBombAdvance(dt, geo) { if (geo) _geoNow = geo; updateBombs(dt); }, // test hook — pass mission.geo so sticks track under advance()
     get flameStats() { return flameStats; },
-    get flakStats() { return flakStats; },
     tearInfo(which) { const g = shipGroup(which); if (!g) return []; g.updateMatrixWorld(true); return (g.userData.tears || []).map((m) => { const v = new THREE.Vector3(), n = new THREE.Vector3(0, 0, 1); m.getWorldPosition(v); const q = new THREE.Quaternion(); m.getWorldQuaternion(q); n.applyQuaternion(q); return { x: v.x, y: v.y, z: v.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x }; }); },
     get friendlyInfo() { return friendlyPool.map((g, i) => { const v = new THREE.Vector3(); g.getWorldPosition(v); return { i, bay: g.userData.bay ? +g.userData.bay.open.toFixed(2) : null, vis: g.visible, x: v.x, y: v.y, z: v.z, qy: g.quaternion.y, qw: g.quaternion.w }; }); }, // test hook
     get townInfo() { const v = new THREE.Vector3(); town.getWorldPosition(v); return { x: v.x, y: v.y, z: v.z, smoke: impactSmoke.filter((p) => p.life > 0).length }; },

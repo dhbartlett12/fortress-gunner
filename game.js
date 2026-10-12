@@ -141,7 +141,7 @@
   const MISSION_DOORS_AT = 90;        // 1.3.8: bay doors open on the bomb run, 1:30 before release
   const GEO_LEAD = 120;               // 1.3.8: extra route (s) vs the 2:00 layout — the town is still under us at 0:00
   const MISSION_RELEASE_AT = 0;       // bombs away over the target (0:00)
-  const MISSION_EVAL_DELAY = 60;
+  const MISSION_EVAL_DELAY = 150; // 1.6.9d: the fight goes on through the rally and the turn home (was 60 s)
   const TURN_BANK = 0.36;             // 1.3.6: ~21° bank in the turn for home
   const TURN_TOTAL = Math.PI / 2;     // ~90° wheel in the 60 s after bombs away      // 1.3.5: ~60 s after release (the box turns for home) → debrief
   const MISSION_BOMBERS = 19;         // including player
@@ -2140,6 +2140,7 @@
       const phC = Math.atan2(ux * Sx + uy * Sy + uz * Sz, ux * L.x + uy * L.y + uz * L.z);
       let phT;
       if (o.invert) phT = (phC >= 0 ? 1 : -1) * (o.invBank || 2.95);
+      else if (o.push && Av < -0.15 * G_U) { phT = clamp(Math.atan2(-AsB, -Av), -0.9, 0.9); } // 1.6.9d: a bunt — push the nose down with negative g, wings near level (the lift sign flips the roll sense)
       else { phT = Math.atan2(AsB, Math.max(Av, 0.35 * G_U)); const mb = o.maxBank || 1.4; phT = clamp(phT, -mb, mb); } // never rolls inverted to push: pushes with negative g
       err = phT - phC; if (o.invert || Math.abs(phC) > 1.75) { if (err > Math.PI) err -= TAU; else if (err < -Math.PI) err += TAU; } // 1.6.8: outside a split-S the roll back to the wanted bank always goes through wings-level, never on round through inverted (no continuous rolls) // past ~100° (e.g. fell through the vertical): the short way home
       e.phT = phT;
@@ -2257,6 +2258,7 @@
       o.s -= tGo / (e.type === "190" ? 45 : 60); o.tGo = tGo;
     }
     opts.sort((a, b) => b.s - a.s);
+    if (!is190) return opts.find((o) => o.p === "headon" || o.p === "fq").p; // 1.6.9: 109s attack the bombers only from the frontal sector (10 to 2 o'clock): they reposition ahead first
     return opts[0].p;
   }
   function gEntryK(e, plan, side) {
@@ -2266,7 +2268,21 @@
     return { lat: side * rand(1500, 1900), up: rand(300, 550), dz: rand(-200, 300) };
   }
   function gEntry(e, plan, t, k) { const P = t && t.kind !== "x" && tgtLive(t) ? targetPoint(t) : BOX_C; return { x: P.x + k.lat, y: P.y + k.up, z: P.z + k.dz }; }
+  function g109Lead(e) { // 1.6.9 schwarm: a 109 whose leader died joins the nearest surviving leader of his Staffel; else he leads
+    if (e.type !== "109") return gLeader(e);
+    let L = gLeader(e);
+    if (L && L.phase === "rtb") L = null;
+    if (!L && (e.pos109 || 0) > 0) {
+      let best = null, bd = 4500;
+      for (const q of enemies) if (q !== e && q.alive && q.type === "109" && q.br && !q.hold && q.phase !== "rtb" && !gLeader(q)) { const d = Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z); if (d < bd && enemies.filter((w) => w.alive && w.leader === q).length < 3) { bd = d; best = q; } }
+      e.leader = best; if (best) { e.slotOff = null; e.pos109 = 1 + enemies.filter((w) => w.alive && w.leader === best && w !== e).length; brStat("schwarm_rejoin"); }
+      L = best;
+    }
+    return L;
+  }
   function gNewPlan(e, B) {
+    const L9 = e.type === "109" ? g109Lead(e) : null;
+    if (L9 && L9.br && L9.br.plan && L9.br.k) { B.plan = L9.br.plan; B.k = L9.br.k; B.tgt = L9.br.tgt; B.posT = 0; e.phase = "position"; e.phaseT = 0; e.mode = B.plan; brStat("plan_follow"); return; } // the wingmen fly the leader's plan
     B.plan = gPickPlan(e); const side = (e.x - BOX_C.x) >= 0 ? 1 : -1;
     B.k = gEntryK(e, B.plan, Math.random() < 0.8 ? side : -side);
     B.tgt = gPickTarget(e, B.plan, gEntry(e, B.plan, null, B.k)); B.posT = 0;
@@ -2278,12 +2294,14 @@
     if (t) B.tgt = t;
     if (!tgtLive(B.tgt)) B.tgt = gPickTarget(e, B.plan || "headon");
     if (!B.tgt) { e.phase = "rtb"; e.phaseT = 0; return; }
+    if (e.type === "109") { const Tf = targetPoint(B.tgt), fx = e.x - Tf.x, fz = e.z - Tf.z; if (fz < 0.5 * Math.hypot(fx, fz)) { e.phase = "position"; e.phaseT = 0; B.posT = 0; if (B.plan !== "headon" && B.plan !== "fq") gNewPlan(e, B); brStat("refuse_nonfrontal"); return; } } // 1.6.9: a 109 only goes in from 10 to 2 o'clock
     e.tgt = B.tgt; e.mode = B.plan || "headon";
-    e.phase = "attack"; e.phaseT = 0; e.invert = false; e.burst = null;
+    e.phase = "attack"; e.phaseT = 0; e.invert = false; e.burst = null; B.lf = null; // 1.6.9c: no stale LOS-rate memory from the last pass
     const brave = Math.random() < 0.18 * B.brave * 1.8;
-    B.openR = e.type === "190" ? rand(230, 300) : rand(250, 330);
+    const fwdPlan = B.plan === "headon" || B.plan === "fq";
+    B.openR = e.type === "190" ? rand(230, 300) : fwdPlan ? rand(390, 470) : rand(250, 330); // 1.6.9: head-on closure is ~300 u/s: a 109 opening at 250-330 u broke away before it ever fired
     B.breakR = brave ? rand(55, 75) : rand(85, 130);
-    B.tB = (B.plan === "headon" || B.plan === "fq") ? (brave ? rand(0.75, 0.95) : rand(0.95, 1.35)) : rand(0.8, 1.1);
+    B.tB = fwdPlan ? (brave ? rand(0.42, 0.55) : rand(0.55, 0.75)) : rand(0.8, 1.1); // 1.6.9: was 0.75-1.35 s to impact = break at ~300 u, i.e. before the guns opened
     B.aimK = Math.random() < 0.65 ? ((Math.random() * 4) | 0) : -1; // an engine, or the cockpit/centre section
     B.passes++; B.gap = 0;
     openPass(e, e.mode);
@@ -2352,18 +2370,19 @@
   }
   function gPosition(e, B, dt) {
     B.posT += dt;
-    const L = gLeader(e);
-    if (L && (L.phase === "inbound" || L.phase === "position") && Math.hypot(L.x - e.x, L.y - e.y, L.z - e.z) < 1700) { // wingman: fly the slot, matching the leader
+    const L = e.type === "109" ? g109Lead(e) : gLeader(e);
+    const dL = L ? Math.hypot(L.x - e.x, L.y - e.y, L.z - e.z) : 1e9;
+    if (L && (L.phase === "inbound" || L.phase === "position") && dL < (e.type === "109" ? 4500 : 1700)) { // wingman: fly the slot, matching the leader (1.6.9: a 109 closes up on his schwarm from up to 4.5 km)
       const S = gFormSlot(e, L), lead = 1.2, P = { x: S.x + L.vx * lead, y: S.y + L.vy * lead, z: S.z + L.vz * lead };
       const along = (S.x - e.x) * L.hx + (S.y - e.y) * L.hy + (S.z - e.z) * L.hz;
-      e.vT = clamp(L.V + clamp(along * 0.25, -25, 40), FAI.vMin, 470 * MPH);
+      e.vT = clamp(L.V + clamp(along * 0.3, -30, 75), FAI.vMin, 490 * MPH); // 1.6.9b: catch up harder
       let d = airDirTo(e, P.x, P.y, P.z); d = safeDir(e, d);
       flyCtl(e, d.x, d.y, d.z, dt, { gain: 1.4, maxBank: 1.1, nMax: 4.5 });
       B.plan = L.br.plan; B.k = L.br.k;
       return;
     }
-    if (L && L.phase === "attack" && (B.follow == null)) B.follow = rand(0.7, 2.2);
-    if (B.follow != null && L && L.phase === "attack") { B.follow -= dt; if (B.follow <= 0) { B.follow = null; const t = Math.random() < 0.6 && tgtLive(L.br.tgt) ? L.br.tgt : gPickTarget(e, L.br.plan, targetPoint(L.br.tgt || { kind: "player" })); B.plan = L.br.plan; gStartAttack(e, B, t); return; } }
+    if (L && L.phase === "attack" && (B.follow == null) && (e.type !== "109" || dL < 1000)) B.follow = rand(0.7, 2.2); // 1.6.9: only a wingman who is with him follows him in
+    if (B.follow != null && L && L.phase === "attack") { B.follow -= dt; if (B.follow <= 0 && e.type === "109") { const Tq = targetPoint(L.br.tgt || { kind: "player" }); const qx = Tq.x - e.x, qy = Tq.y - e.y, qz = Tq.z - e.z, qd = Math.hypot(qx, qy, qz) || 1; if ((qx * e.hx + qy * e.hy + qz * e.hz) / qd < 0.6) B.follow = 0.3; } if (B.follow <= 0) { B.follow = null; const t = Math.random() < 0.6 && tgtLive(L.br.tgt) ? L.br.tgt : gPickTarget(e, L.br.plan, targetPoint(L.br.tgt || { kind: "player" })); B.plan = L.br.plan; gStartAttack(e, B, t); return; } }
     if (!B.plan || !B.k) gNewPlan(e, B);
     if (!tgtLive(B.tgt)) B.tgt = gPickTarget(e, B.plan);
     if (!B.tgt) { gGoHome(e, B, "none"); return; }
@@ -2375,20 +2394,30 @@
       if (pd < 1100 && t0 > 0.02 && t0 < 0.98) { const side = Math.abs(px) > 40 ? Math.sign(px) : (Math.sign(E.x - C.x) || 1); W = { x: C.x + side * 1350, y: Math.max(E.y, e.y), z: clamp(e.z, C.z - 1200, C.z + 1200) + Math.sign(E.z - e.z) * 500 }; }
     }
     e.vT = FAI.vLev109 * 1.2;
+    if (e.type === "109" && !gLeader(e)) { // 1.6.9b: a schwarm leader runs hard for his entry point, but eases off while his flight is strung out
+      let n = 0, far = 0; for (const q of enemies) if (q.alive && q.leader === e && q.phase !== "rtb") { n++; if (Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z) > 700) far++; }
+      const dE = Math.hypot(E.x - e.x, E.z - e.z);
+      e.vT = far && B.posT < 25 ? FAI.vLev109 * 0.92 : dE > 1500 ? FAI.vLev109 * 1.4 : FAI.vLev109 * 1.2;
+    }
     let d = airDirTo(e, W.x, W.y, W.z);
-    d = slopeLimit(e, d, -0.35, 0.22);
+    d = slopeLimit(e, d, e.type === "109" && e.y - W.y > 450 ? -0.75 : -0.35, 0.22); // 1.6.9: a schwarm sitting 1,500 m above its entry point spirals down to it (it could only descend at 19°, so it orbited above the entry and never committed)
     d = safeDir(e, d);
     flyCtl(e, d.x, d.y, d.z, dt, { gain: 1.0, maxBank: 1.15, nMax: 4.5 });
     // commit when the geometry is there (not on a timer)
     const rx = T.x - e.x, ry = T.y - e.y, rz = T.z - e.z, R = Math.hypot(rx, ry, rz) || 1, dz = e.z - T.z, dl = Math.abs(e.x - T.x), up = e.y - T.y;
     const nose = (rx * e.hx + ry * e.hy + rz * e.hz) / R;
     let go = false;
-    if (B.plan === "headon") go = dz > 1150 && dz < 2700 && dl < 700 && up > 60 && nose > 0.3;
-    else if (B.plan === "fq") go = dz > 800 && dz < 2300 && dl > 350 && dl < 1500 && up > 80 && nose > 0.3;
+    if (B.plan === "headon") go = e.type === "109" ? dz > 900 && dz < 3400 && dl < 1400 && up > -250 && up < 1000 && nose > 0.05 : dz > 1000 && dz < 2900 && dl < 700 && up > 60 && up < 800 && nose > 0.3; // 1.6.9b: wider 109 window — he re-attacks instead of orbiting for minutes // 1.6.9: not from a mile above (a 60° dive at 600 mph closure never settles the nose on the lead point)
+    else if (B.plan === "fq") go = e.type === "109" ? dz > 700 && dz < 3000 && dl > 250 && dl < 2000 && up > -250 && up < 1000 && nose > 0.05 : dz > 800 && dz < 2400 && dl > 300 && dl < 1700 && up > 80 && up < 850 && nose > 0.3;
     else if (B.plan === "rear") go = dz < -650 && R < 1800 && dl < 900 && nose > 0.4;
     else go = dl > 1000 && R < 2300 && up > 60 && nose > 0.2;
+    if (go && e.type === "109" && L && L.phase !== "rtb" && dL < 3000) { go = false; } // 1.6.9: a 109 wingman with his leader in reach never starts his own attack: he goes in with the schwarm
+    if (go && e.type === "109" && !gLeader(e) && B.posT < 15) { // 1.6.9: the schwarm leader commits only with his flight closed up (or after 30 s of waiting)
+      let n = 0, close = 0; for (const q of enemies) if (q.alive && q.leader === e && q.phase !== "rtb") { n++; if (Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z) < 650) close++; }
+      if (n && close < Math.min(n, 2)) { go = false; brStat("lead_wait"); }
+    }
     if (go) { gStartAttack(e, B); return; }
-    if (B.posT > 55) { gNewPlan(e, B); brStat("replan"); } // it is not working out from here: re-plan from where he is now
+    if (B.posT > (e.type === "109" ? 35 : 55)) { gNewPlan(e, B); B.posT = 0; brStat("replan"); } // it is not working out from here: re-plan from where he is now
   }
   function gAttack(e, B, dt) {
     if (!tgtLive(B.tgt)) { const t = gPickTarget(e, B.plan, { x: e.x + e.vx * 3, y: e.y + e.vy * 3, z: e.z + e.vz * 3 }); const P = t && targetPoint(t); if (t && ((P.x - e.x) * e.hx + (P.y - e.y) * e.hy + (P.z - e.z) * e.hz) > 400) { B.tgt = t; e.tgt = t; } else { gStartBreak(e, B, "lost"); return; } }
@@ -2399,9 +2428,9 @@
     const Lg = gunLead(e, EP.x, EP.y, EP.z, sv.x, sv.y, sv.z) || airDirTo(e, EP.x, EP.y, EP.z);
     e.gunRun = R < 600; e.avShip = ship;
     let d = safeDir(e, Lg); const avoiding = e.avoidT != null && nowT() - e.avoidT < 0.3;
-    const ff = losFF(B, "lf", Lg, dt);
+    const ff = R > 700 ? null : losFF(B, "lf", Lg, dt); // 1.6.9: the LOS-rate feed-forward far out held a re-attacking 109 in a 75° bank with the nose 70° off the lead point (no shots on pass 2+); it only helps inside ~1 km
     if (B.plan === "rear" || B.plan === "beam") e.vT = R > 480 ? FAI.vLev109 * 1.2 : VF + 125 * MPH; else e.vT = FAI.vLev109 * 1.2;
-    flyCtl(e, d.x, d.y, d.z, dt, { gain: 2.0, ff: avoiding ? null : ff, maxBank: 1.3, nMax: 6 });
+    flyCtl(e, d.x, d.y, d.z, dt, { gain: 2.0, ff: avoiding ? null : ff, maxBank: 1.3, nMax: 6, push: true });
     const cosA = leadCos(e, Lg);
     if (e.ps && R < e.ps.minR) e.ps.minR = R;
     // fire discipline: short bursts with the nose on the lead point, inside the opening range
@@ -2444,9 +2473,9 @@
     d = safeDir(e, d);
     flyCtl(e, d.x, d.y, d.z, dt, { gain: 1.0, maxBank: 1.0, nMax: 4 });
     const dist = Math.hypot(ax, e.y - BOX_C.y, az);
-    if ((dist > (B.extR || 1800) && e.phaseT > 3) || e.phaseT > 11) {
+    if ((dist > (B.extR || 1800) && e.phaseT > 3) || e.phaseT > 11 || (e.type === "109" && e.phaseT > 4)) { // 1.6.9b: a 109 does not run off for 11 s — the overtake back to the front is long enough
       if (B.ammo <= 0.4) { gGoHome(e, B, "ammo"); return; }
-      if (L && (L.phase === "extend" || L.phase === "position" || L.phase === "inbound") && Math.hypot(L.x - e.x, L.y - e.y, L.z - e.z) < 2500 && Math.random() < 0.75) { e.phase = "position"; e.phaseT = 0; B.posT = 0; B.plan = L.br.plan; B.k = L.br.k; return; } // rejoin the leader
+      if (L && (L.phase === "extend" || L.phase === "position" || L.phase === "inbound") && (e.type === "109" || (Math.hypot(L.x - e.x, L.y - e.y, L.z - e.z) < 2500 && Math.random() < 0.75))) { e.phase = "position"; e.phaseT = 0; B.posT = 0; B.plan = L.br.plan; B.k = L.br.k; return; } // rejoin the leader
       gNewPlan(e, B);
     }
   }
@@ -2555,8 +2584,8 @@
         const lead = pLeadOf(e);
         if (!lead || lead.phase === "intercept") {
           let best = null, bs = 0.4;
-          for (const q of enemies) { const s = pScore(e, q); if (s > bs) { bs = s; best = q; } }
-          if (best) { if (B.react <= 0) B.react = rand(0.3, 1.1); B.cand = best; } else B.react = 0;
+          for (const q of enemies) { if ((q.p51n || 0) >= 2) continue; const s = pScore(e, q); if (s > bs) { bs = s; best = q; } }
+          if (best && Math.random() < 0.45) { if (B.react <= 0) B.react = rand(2.0, 6.0); B.cand = best; } else if (!best) B.react = 0; // 1.6.9c: spotting odds per look + a few seconds to react; two Mustangs per German at most
         }
       }
     }
@@ -2629,6 +2658,7 @@
   function brainStep(e, dt) { if (e.type === "p51") pStep(e, dt); else gStep(e, dt); }
   function updateFighterAI(e, dt) {
     if (e.mf > 0) e.mf -= dt;
+    if (ride && ride.e === e && ride.fly && ride.deadT == null && e.alive) return playerFly(e, dt); // 1.6.9: the player flies this one
     if (BR.on && mission) return brainStep(e, dt); // 1.6.8: the pilot brain flies every mission fighter (the 1.6.7 tactics below are kept only for non-mission modes)
     if (e.type === "p51") return updateP51(e, dt);
     if (e.phase === "duel") { if (e.evadeT > 0) e.evadeT -= dt; return duelStep(e, dt); }
@@ -3665,6 +3695,7 @@
     if (rb) rb.addEventListener("click", rideBtnAct(rideToggle));
     if (rp) rp.addEventListener("click", rideBtnAct(() => rideCycle(-1)));
     if (rn) rn.addEventListener("click", rideBtnAct(() => rideCycle(1)));
+    const fk = document.getElementById("flakBtn"); if (fk) fk.addEventListener("click", rideBtnAct(() => { if (fpov) endFlakPov(); else startFlakPov(); }));
     for (const el of [rb, rp, rn]) if (el) el.addEventListener("pointerdown", (ev) => ev.stopPropagation()); }
   const gunner = {
     yaw: 0.15,
@@ -3792,6 +3823,7 @@
           station: gunner.station || "top",
           stationEye: gunStation().eye,
           ride: rideOpts(), // 1.6.6: null unless riding in a fighter
+          flakPov: fpov ? { yaw: fpov.yaw, pitch: fpov.pitch, t: fpov.t } : null, // 1.6.9
         });
       },
       render() { api.render(); },
@@ -3799,6 +3831,7 @@
       dropBombs: api.dropBombs ? (l) => api.dropBombs(l) : null,
       testBombAdvance: api.testBombAdvance ? (dt, geo) => api.testBombAdvance(dt, geo) : null,
       crashFx: api.crashFx ? (x, z, sz) => api.crashFx(x, z, sz) : null, groundWY: api.groundWY ? () => api.groundWY() : null,
+      get fpovStats() { return api.fpovStats || null; }, // 1.6.9
       townGeom: api.townGeom || null, townLayout: api.townLayout ? () => api.townLayout() : null, townStrike: api.townStrike ? (e) => api.townStrike(e) : null, groundBurst: api.groundBurst ? (u, v) => api.groundBurst(u, v) : null, townReset: api.townReset ? () => api.townReset() : null, // 1.5.3: real bomb landings on the town
       rayShip: api.rayShip ? (w, a, b, c, d, e, f, p) => api.rayShip(w, a, b, c, d, e, f, p) : null,
       addHole: api.addHole ? (w, h, sz) => api.addHole(w, h, sz) : null,
@@ -4636,7 +4669,7 @@
     syncEye();
     setStationUI();
   }
-  function toggleStation() { if (ride) { endRide(); return; } setStation(gunner.station === "tail" ? "top" : "tail"); }
+  function toggleStation() { if (fpov) { endFlakPov(); return; } if (ride) { endRide(); return; } setStation(gunner.station === "tail" ? "top" : "tail"); }
   function setStationUI() {
     const btn = document.getElementById("stationBtn");
     if (!btn) return;
@@ -4645,10 +4678,11 @@
     btn.classList.toggle("tail", st.id === "tail");
     btn.classList.remove("chin");
     btn.classList.toggle("hidden", state !== "PLAYING" || !!(downSeq));
-    if (ride) { btn.textContent = "B-17"; btn.classList.remove("tail"); btn.classList.add("rideback"); } else btn.classList.remove("rideback");
+    if (ride || fpov) { btn.textContent = "B-17"; btn.classList.remove("tail"); btn.classList.add("rideback"); } else btn.classList.remove("rideback");
+    { const fb = document.getElementById("flakBtn"); if (fb) fb.classList.toggle("hidden", state !== "PLAYING" || !!downSeq || !!ride || !!fpov); }
     const rb = document.getElementById("rideBtn"), rp = document.getElementById("ridePrev"), rn = document.getElementById("rideNext");
     const off = state !== "PLAYING" || !!(downSeq);
-    if (rb) { rb.classList.toggle("hidden", off || !!ride); }
+    if (rb) { rb.classList.toggle("hidden", off || !!ride || !!fpov); }
     if (rp) rp.classList.toggle("hidden", off || !ride);
     if (rn) rn.classList.toggle("hidden", off || !ride);
     if (!ride) { const rl = document.getElementById("rideLabel"); if (rl) rl.classList.add("hidden"); }
@@ -4700,8 +4734,9 @@
   function startRide(e) {
     if (!rideOk(e) || state !== "PLAYING" || downSeq) return false;
     const keep = ride && ride.e !== e ? { yaw: 0, pitch: 0 } : null;
-    ride = { e, id: e.id, yaw: 0, pitch: 0, acc: [0, 0, 0, 0, 0, 0], flash: 0, trc: 0, snd: 0, deadT: null, tapT: 0, basis: null, eye: null, pf: null };
+    ride = { e, id: e.id, yaw: 0, pitch: 0, acc: [0, 0, 0, 0, 0, 0], flash: 0, trc: 0, snd: 0, deadT: null, tapT: 0, basis: null, eye: null, pf: null, fly: !window.__FG_RIDE_AUTO, stickR: 0, stickP: 0, rollId: null, pitchId: null }; // 1.6.9: you fly it (F = autopilot)
     void keep;
+    if (ride.fly && e.hx != null) { const hl = Math.hypot(e.hx, e.hz) || 1; e.hx /= hl; e.hz /= hl; e.hy = 0; e.ux = 0; e.uy = 1; e.uz = 0; e.p = 0; e.bank = 0; e.phi = 0; e.vx = e.V * e.hx; e.vy = 0; e.vz = e.V * e.hz - VF; } // 1.6.9: you take it over wings-level
     input.fire = false; input.fireId = null; guns.cooldown = 0;
     rideCallsign(e);
     if (mission) { const R = mission.rideLog || (mission.rideLog = []); if (R.length < 200) R.push({ t: +mission.t.toFixed(1), id: e.id, type: e.type, cs: e.cs }); }
@@ -4712,10 +4747,11 @@
   function endRide() {
     if (!ride) return;
     ride = null; input.fire = false; input.fireId = null;
-    setStationUI();
+    setStationUI(); flyBridgeSync();
   }
   function ridePose() { // eye + plane frame + head frame for the ridden fighter (also called by draw so frozen stills are exact)
     if (!ride) return;
+    if (ride.bail && ride.deadT >= 0.9) return; // 1.6.9: bail-out camera is set by rideBailTick
     const e = ride.e;
     let fx = e.hx, fy = e.hy, fz = e.hz;
     if (!e.alive && (e.vx || e.vy || e.vz)) { const l = Math.hypot(e.vx, e.vy, e.vz + VF) || 1; fx = e.vx / l; fy = e.vy / l; fz = (e.vz + VF) / l; }
@@ -4735,23 +4771,127 @@
   }
   function viewBasis() { return ride && ride.basis ? ride.basis : lookBasis(); }
   function viewEye() { return ride && ride.eye ? ride.eye : EYE; }
+  // ===== 1.6.9 FLAK POV: stand at an 88 battery by the airfield outside the town and watch the raid come over (drag to look round)
+  let fpov = null;
+  function startFlakPov() { if (state !== "PLAYING" || downSeq) return false; if (ride) endRide(); fpov = { yaw: 0, pitch: 0.55, t: 0, shoutT: 2 }; input.fire = false; setStationUI(); if (window.FGVoice && window.FGVoice.flakCrew) window.FGVoice.flakCrew("start"); return true; }
+  function endFlakPov() { fpov = null; setStationUI(); }
+  function fpovLook(dxPx, dyPx, k) { fpov.yaw = wrapYaw(fpov.yaw + dxPx * k); fpov.pitch = clamp(fpov.pitch - dyPx * k, -0.12, 1.5); }
+  function fpovTick(dt) {
+    if (!fpov) return; fpov.t += dt;
+    if (downSeq || state !== "PLAYING") { endFlakPov(); return; }
+    fpov.shoutT -= dt; if (fpov.shoutT <= 0) { fpov.shoutT = rand(3.5, 7); if (window.FGVoice && window.FGVoice.flakCrew) window.FGVoice.flakCrew("fire"); }
+  }
   function rideLook(dxPx, dyPx, k) {
     ride.yaw = clamp(ride.yaw + dxPx * k, -RIDE_YAW, RIDE_YAW); // drag right → look right
     ride.pitch = clamp(ride.pitch - dyPx * k, RIDE_PMIN, RIDE_PMAX);
     ridePose();
   }
   function rideRecenter() { if (!ride) return; ride.yaw = 0; ride.pitch = 0; ridePose(); }
+  // ===== 1.6.9 FLYABLE FIGHTER: left thumb = roll (drag sideways), right thumb = pitch (drag down = nose up), Volume Up / FIRE / Space = guns.
+  // Same airframe numbers as the AI (roll rate/acceleration, nMax, level and dive speeds); neutral stick holds ~1 g so the nose stays put.
+  function flyStick() {
+    let r = ride.stickR || 0, p = ride.stickP || 0;
+    const K = input.keys || {};
+    if (K["a"] || K["arrowleft"]) r -= 1; if (K["d"] || K["arrowright"]) r += 1;
+    if (K["s"] || K["arrowdown"]) p += 1; if (K["w"] || K["arrowup"]) p -= 1; // stick back (S / down) = nose up
+    return { r: clamp(r, -1, 1), p: clamp(p, -1, 1) };
+  }
+  function playerFly(e, dt) {
+    const S = flyStick(), RP = ROLLP[e.type] || ROLLP["109"], nMax = e.type === "p51" ? 6.5 : 6;
+    e.phase = e.phase === "rtb" ? "rtb" : (e.phase || "cap");
+    let hx = e.hx, hy = e.hy, hz = e.hz, ux = e.ux, uy = e.uy, uz = e.uz;
+    const V = Math.max(e.V || 100, 40);
+    // roll: rate-commanded, acceleration-limited (the same RP.p / RP.a the AI is held to)
+    const pc = S.r * RP.p; let p = e.p || 0; p += clamp(pc - p, -RP.a * dt, RP.a * dt); e.p = p;
+    { const a = p * dt, ca = Math.cos(a), sa = Math.sin(a), kx = hy * uz - hz * uy, ky = hz * ux - hx * uz, kz = hx * uy - hy * ux; ux = ux * ca + kx * sa; uy = uy * ca + ky * sa; uz = uz * ca + kz * sa; }
+    // pitch: load factor from the stick, 1 g trim (canopy-up component) at neutral
+    const trim = Math.max(0, uy);
+    let n = S.p >= 0 ? trim + S.p * (nMax - trim) : trim + S.p * (trim + 1.5);
+    { const vC = (FAI.vMin || 120) * 1.9, nAv = Math.max(0.15, nMax * (V / vC) * (V / vC)); n = clamp(n, -Math.min(1.5, nAv), Math.min(nMax, nAv)); } // no lift without airspeed: slow, the nose falls through
+    const lift = n * G_U;
+    const gpx = G_U * hy * hx, gpy = -G_U + G_U * hy * hy, gpz = G_U * hy * hz;
+    hx += ((ux * lift + gpx) / V) * dt; hy += ((uy * lift + gpy) / V) * dt; hz += ((uz * lift + gpz) / V) * dt;
+    const hl = Math.hypot(hx, hy, hz) || 1; hx /= hl; hy /= hl; hz /= hl;
+    const du = ux * hx + uy * hy + uz * hz; ux -= du * hx; uy -= du * hy; uz -= du * hz; const ul = Math.hypot(ux, uy, uz) || 1;
+    e.hx = hx; e.hy = hy; e.hz = hz; e.ux = ux / ul; e.uy = uy / ul; e.uz = uz / ul;
+    // energy: full throttle; dives gain, climbs and hard turns bleed
+    const vLv = e.type === "190" ? FAI.vLev190 : e.type === "p51" ? FAI.vLevP51 : FAI.vLev109, vDv = e.type === "190" ? FAI.vDiv190 : e.type === "p51" ? FAI.vDivP51 : FAI.vDiv109;
+    let dV = -G_U * hy + Math.min(0.32 * G_U, 0.09 * (vLv * 1.1 - V)) - 0.35 * Math.max(0, Math.abs(n) - 2);
+    if (V > vDv) dV -= 1.2 * (V - vDv);
+    e.V = Math.max(FAI.vMin * 0.8, V + dV * dt);
+    e.gLoad = n;
+    e.vx = e.V * e.hx; e.vy = e.V * e.hy; e.vz = e.V * e.hz - VF;
+    const L2 = levelUpOf(e.hx, e.hy, e.hz);
+    if (L2) { const cx2 = e.uy * L2.z - e.uz * L2.y, cy2 = e.uz * L2.x - e.ux * L2.z, cz2 = e.ux * L2.y - e.uy * L2.x; e.bank = Math.atan2(cx2 * e.hx + cy2 * e.hy + cz2 * e.hz, e.ux * L2.x + e.uy * L2.y + e.uz * L2.z); }
+    e.phi = e.bank; e.burst = null;
+    if (e.y < GROUND_Y_FLY()) { e.hp = 0; if (e.alive) { if (e.team === "allied") killP51(e, "cpu"); else killEnemy(e, true); } return; } // flew it into the ground
+  }
+  function GROUND_Y_FLY() { return CAM.y - 25000 / FT_PER_UNIT + 30; }
+  // ===== 1.6.9 BAIL-OUT: canopy off (0.9 s), the pilot goes over the side (1.5 s), the chute opens; the camera hangs with him and watches
+  // the burning, spinning wreck fall away until its tanks go up (8 s). Then the next fighter.
+  function rideBailTick(e, dt) {
+    const B = ride.bail, t = ride.deadT, P = ride.pf || { fx: 0, fy: 0, fz: 1, ux: 0, uy: 1, uz: 0, rx: 1, ry: 0, rz: 0 };
+    if (B.st === 0 && t >= 0.9) { B.st = 1; rideVoice("bail"); const E0 = ride.eye || e; B.can = { x: E0.x, y: E0.y + 0.4, z: E0.z, vx: e.vx * 0.85 + P.ux * 22 - P.fx * 10, vy: e.vy * 0.85 + P.uy * 22 - P.fy * 10, vz: e.vz * 0.85 + P.uz * 22 - P.fz * 10, a: 0, wa: rand(5, 9), ax: [Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5] }; if (window.FGAudio && window.FGAudio.boom) {} }
+    if (B.st === 1 && t >= 1.5) { B.st = 2; const E0 = ride.eye || e; spawnChute(E0.x, E0.y + 0.6, E0.z, e.vx * 0.55 + P.ux * 6, e.vy * 0.55 + P.uy * 6, e.vz * 0.55 + P.uz * 6, "bail", 1.1); B.chId = chuteSeq; }
+    if (B.st === 2 && t >= 8.0) { B.st = 3; e.boom2 = true; if (window.FGAudio) window.FGAudio.boom(e.x, e.y, e.z, true); }
+    if (B.can) { const C = B.can; C.vy -= 14 * dt; C.vx *= 1 - 0.6 * dt; C.vz += (-VF - C.vz) * 0.6 * dt; C.x += C.vx * dt; C.y += C.vy * dt; C.z += C.vz * dt; C.a += C.wa * dt; }
+    if (e.spinW) e.bank = (e.bank || 0) + e.spinW * dt; // the wreck winds up into a spin
+    // camera: 0–0.9 s still in the seat (shaking); then outside — first off the wingtip watching the canopy go and the pilot jump, then hanging under the chute
+    if (t < 0.9) { ride.flash = 0.6 * Math.random(); ridePose(); return; }
+    let ex, ey, ez;
+    // 0.9–3.2 s: off the wingtip, moving with the plane (canopy and pilot go); then a chase camera riding down with the burning, spinning wreck;
+    // after the tanks go (8 s) it stops and lets the fireball fall away
+    if (t < 2.6 || B.chId == null) { const k = Math.min(1, (t - 0.9) / 0.6); B.off = { x: P.rx * 9 * k + P.ux * 3.5 * k - P.fx * 5 * k, y: P.ry * 9 * k + P.uy * 3.5 * k - P.fy * 5 * k, z: P.rz * 9 * k + P.uz * 3.5 * k - P.fz * 5 * k }; ex = e.x + B.off.x; ey = e.y + B.off.y; ez = e.z + B.off.z; }
+    const ch = B.chId != null ? chutes.find((c) => c.id === B.chId) : null;
+    if (!(t < 2.6 || B.chId == null)) { // 1.6.9d: a CHASE camera on the pilot under his canopy — beside and a little above him, drifting down with him
+      if (ch) { const w = clamp((t - 2.6) / 1.4, 0, 1), O = B.off || { x: 9, y: 3, z: -5 }, Cx = ch.x + 13, Cy = ch.y + 1.5, Cz = ch.z - 17;
+        const sx = e.x + O.x, sy = e.y + O.y, sz = e.z + O.z; ex = sx + (Cx - sx) * w; ey = sy + (Cy - sy) * w; ez = sz + (Cz - sz) * w; B.last = { x: ex, y: ey, z: ez }; }
+      else { ex = B.last.x; ey = B.last.y; ez = B.last.z; } }
+    let tx0 = e.x, ty0 = e.y, tz0 = e.z;
+    if (ch) { const w = clamp((t - 1.5) / 0.5, 0, 1); const py = ch.y + 3.6; // frame him AND the canopy above him
+      tx0 += (ch.x - tx0) * w; ty0 += (py - ty0) * w; tz0 += (ch.z - tz0) * w;
+      const b = clamp((t - 6.9) / 0.8, 0, 1) * (1 - clamp((t - 10.8) / 1.0, 0, 1)); // the wreck's fireball below him: swing the view between the two
+      if (b > 0) { tx0 += (e.x - tx0) * b * 0.92; ty0 += (e.y - ty0) * b * 0.92; tz0 += (e.z - tz0) * b * 0.92; } } /* 1.6.9e: swing onto the wreck for the tanks going (8 s) */
+    let fx = tx0 - ex, fy = ty0 - ey, fz = tz0 - ez; const fl = Math.hypot(fx, fy, fz) || 1; fx /= fl; fy /= fl; fz /= fl;
+    let ux = -fx * fy, uy = 1 - fy * fy, uz = -fz * fy; const ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
+    const rx = fy * uz - fz * uy, ry = fz * ux - fx * uz, rz = fx * uy - fy * ux;
+    ride.eye = { x: ex, y: ey, z: ez }; ride.basis = { fx, fy, fz, rx, ry, rz, ux, uy, uz };
+  }
+  // 1.6.9 VOICES by seat: German pilots in a 109/190, P-51 pilots in a Mustang, the gun crew at the battery, the B-17 crew otherwise
+  function rideSide() { return ride ? (ride.e.team === "allied" ? "us" : "de") : null; }
+  function rideVoice(ev) { if (!ride || !window.FGVoice || !window.FGVoice.rideCall) return; if (ev === "hit" && Math.random() < 0.7) return; window.FGVoice.rideCall(rideSide(), ev); }
+  let _vctx = "b17", _rvPh = null, _rvHp = null, _rvId = null, _fpImp = null, _fpLost = null;
+  function voiceCtxTick() {
+    const V = window.FGVoice; if (!V || !V.setCtx) return;
+    const c = fpov ? "flak" : ride ? rideSide() : "b17"; if (c !== _vctx) { _vctx = c; V.setCtx(c); }
+    if (ride && ride.e) { const e = ride.e; if (_rvId !== e.id) { _rvId = e.id; _rvPh = e.phase; _rvHp = e.hp; }
+      if (e.alive && e.phase !== _rvPh) { const p = e.phase; const ev = p === "attack" || p === "intercept" ? "attack" : p === "break" ? "brk" : p === "evade" ? "evade" : p === "rtb" ? "rtb" : (p === "position" && _rvPh === "extend") || p === "cap" ? "reform" : null; if (ev) rideVoice(ev); _rvPh = p; }
+      if (e.alive && e.hp < _rvHp - 0.5) { if (e.hp < (e.maxHp || 10) * 0.6) rideVoice("hurt"); } _rvHp = e.hp; }
+    if (fpov && World3D && World3D.fpovStats) { const S = World3D.fpovStats; const L = S && S.lastImpact; if (L && L !== _fpImp && _fpImp !== undefined) { if (L.dM < 3000 && V.flakCrew) V.flakCrew("bombs"); } _fpImp = L;
+      const lost = mission ? mission.friendliesLost || 0 : 0; if (_fpLost != null && lost > _fpLost && V.flakCrew) V.flakCrew("burn"); _fpLost = lost; } else { _fpLost = null; }
+  }
+  function rideFlying() { return !!(ride && ride.fly && ride.deadT == null); }
+  let _flyBridge = null;
+  function flyBridgeSync() { const f = rideFlying(); if (f !== _flyBridge) { _flyBridge = f; try { if (window.AndroidFG && window.AndroidFG.setFlying) window.AndroidFG.setFlying(f); } catch (er) {} const b = document.getElementById("flyFire"); if (b) b.classList.toggle("hidden", !f); } }
+  { const fb = document.getElementById("flyFire"); if (fb) { // 1.6.9: on-screen trigger (web/desktop fallback)
+    const dn = (ev) => { ev.preventDefault(); ev.stopPropagation(); if (rideFlying()) { input.fire = true; fb.classList.add("on"); } };
+    const up = (ev) => { ev.stopPropagation(); input.fire = false; fb.classList.remove("on"); };
+    fb.addEventListener("pointerdown", dn); fb.addEventListener("pointerup", up); fb.addEventListener("pointercancel", up); fb.addEventListener("pointerleave", up);
+  } }
+  window.addEventListener("fg-volkey", (ev) => { const d = ev.detail || {}; if (d.key === "up" && rideFlying()) { input.fire = !!d.down; input.fireId = d.down ? "vol" : null; } });
   function rideTick(dt) { // after the sim moved everything: follow the fighter, handle its loss
     if (!ride) return;
     if (state !== "PLAYING" || downSeq) { endRide(); return; }
     const e = ride.e;
     if (!rideOk(e) || enemies.indexOf(e) < 0) {
-      if (ride.deadT == null) { ride.deadT = 0; input.fire = false; pushCallout((RIDE_TYPE[e.type] || "FIGHTER").toUpperCase() + " " + (e.cs || "").toUpperCase() + " — SHOT DOWN", 1.6, true); if (mission) mission.rideLost = (mission.rideLost || 0) + 1; }
+      if (ride.deadT == null) { ride.deadT = 0; input.fire = false; pushCallout((RIDE_TYPE[e.type] || "FIGHTER").toUpperCase() + " " + (e.cs || "").toUpperCase() + " — SHOT DOWN", 1.6, true); if (mission) mission.rideLost = (mission.rideLost || 0) + 1;
+        if (!e.alive && enemies.indexOf(e) >= 0) { ride.bail = { st: 0 }; e.bailAt = -1; e.wreckT = Math.max(e.wreckT || 0, 13); e.spinW = rand(2.2, 3.4) * (Math.random() < 0.5 ? -1 : 1); } } // 1.6.9: you were in it — bail-out sequence
       ride.deadT += dt;
-      if (ride.deadT > 1.6) { const n = rideStep(1, e); if (n && n !== e) startRide(n); else { endRide(); pushCallout("NO FIGHTERS LEFT — BACK TO THE B-17", 1.4, true); } return; }
+      if (ride.bail) { rideBailTick(e, dt); if (ride.deadT < 11.5) return; }
+      if (ride.deadT > (ride.bail ? 11.5 : 1.6)) { const n = rideStep(1, e); if (n && n !== e) startRide(n); else { endRide(); pushCallout("NO FIGHTERS LEFT — BACK TO THE B-17", 1.4, true); } return; }
     }
     ride.flash = Math.max(0, ride.flash - dt * 14);
-    ridePose();
+    ridePose(); flyBridgeSync();
   }
   function rideFire(dt) {
     if (!ride || ride.deadT != null || !input.fire || guns.overheated) return;
@@ -4785,7 +4925,7 @@
   }
   function rideOpts() {
     if (!ride || !ride.eye) return null;
-    return { id: ride.id, type: ride.e.type, eye: ride.eye, pf: ride.pf, cam: ride.basis, flash: ride.flash, dead: ride.deadT != null, eyeL: RIDE_EYE, hd: mission ? (mission.heading || 0) : 0, mph: (ride.e.V || 0) / MPH, ft: 25000 + (ride.e.y - CAM.y) * FT_PER_UNIT, guns: RIDE_GUNS[ride.e.type].map((G) => [G.p[0], G.p[1], G.p[2], G.g === "mg151" ? 0.34 : G.g === "mg131" ? 0.1 : 0.22]) };
+    return { id: ride.id, type: ride.e.type, eye: ride.eye, pf: ride.pf, cam: ride.basis, flash: ride.flash, dead: ride.deadT != null, bail: !!(ride.bail && ride.deadT >= 0.9), canopy: ride.bail && ride.bail.can ? ride.bail.can : null, eyeL: RIDE_EYE, hd: mission ? (mission.heading || 0) : 0, mph: (ride.e.V || 0) / MPH, ft: 25000 + (ride.e.y - CAM.y) * FT_PER_UNIT, guns: RIDE_GUNS[ride.e.type].map((G) => [G.p[0], G.p[1], G.p[2], G.g === "mg151" ? 0.34 : G.g === "mg131" ? 0.1 : 0.22]) };
   }
   function rideHud() {
     const el = document.getElementById("rideLabel"); if (!el) return;
@@ -5257,7 +5397,7 @@
         if (b.ride && mission) { mission.rideHits = (mission.rideHits || 0) + 1; mission.rideDmg = (mission.rideDmg || 0) + pd; }
         if (mission) { const L = mission.hitLog || (mission.hitLog = {}), hk = "you:" + (b.ride ? b.gun : "m2") + ">" + e.type, m = L[hk] || (L[hk] = {}); m[part] = (m[part] || 0) + 1; }
         if (e.ps && e.phase === "attack") { e.ps.hit = true; if (!e.firedPass) e.ps.hitFirst = true; }
-        e.hp -= pd;
+        e.hp -= pd; if (b.ride && ride) rideVoice(e.hp <= 0 && e.alive ? "kill" : "hit"); // 1.6.9
         e.pHits = (e.pHits || 0) + pd; // damage, same unit as e.cHits
         e.flash = 1;
         e.smoke = Math.min(1, e.smoke + 0.25);
@@ -5785,7 +5925,7 @@
     applyAim(dt);
     onTarget = MISSION_MODE ? false : !!screenHitscan();
     if (downSeq) input.fire = false;
-    if (ride) { ridePose(); rideFire(dt); } else tryFire(dt); // 1.6.6: on a ride-along the trigger works that fighter's guns
+    if (fpov) { input.fire = false; } else if (ride) { ridePose(); rideFire(dt); } else tryFire(dt); // 1.6.6: on a ride-along the trigger works that fighter's guns
     { const firingNow = !!(input.fire && !guns.overheated && !ride); if (guns.fireWas && !firingNow && window.FGAudio && window.FGAudio.gunRelease) window.FGAudio.gunRelease(); guns.fireWas = firingNow; } // 1.5.6: trigger released / jammed / cut → the gun's end sound (audio plays it once, and only if rounds were fired)
     for (let i = 0; i < 2; i++) {
       guns.recoilLR[i] = Math.max(0, guns.recoilLR[i] - dt * 9);
@@ -5866,7 +6006,7 @@
     if (window.FGVoice && mission && !update._inAdvance) { try { if (VX.bailed && downSeq && downSeq.chute && downSeq.chute.t > 3.2 && !window.FGVoice.silenced && (downSeq.chute.t > 7 || !window.FGVoice.state().cur)) window.FGVoice.silence(true); /* 1.6.0: the last line ("You're out!") is allowed to finish before the radio goes quiet */ vTimeline(); window.FGVoice.gunsFiring = !!input.fire; window.FGVoice.tick(mission.t); } catch (e) { window.FGVoice.stats.errors++; } }
     if (downSeq && state === "PLAYING") updateDownSeq(dt);
     updateWorld(dt, false);
-    rideTick(dt);
+    rideTick(dt); fpovTick(dt); voiceCtxTick();
     updateHud();
     rideHud();
     if (callouts.length) {
@@ -5899,6 +6039,7 @@
   }
   function applyLookDelta(dxPx, dyPx) {
     const k = lookRadPerPx();
+    if (fpov) { fpovLook(dxPx, dyPx, k); return; } // 1.6.9: flak POV
     if (ride) { rideLook(dxPx, dyPx, k); return; } // 1.6.6: head movement inside the fighter cockpit
     // lookXSign = -1: drag right → look right (3D camera-right = world -X)
     gunner.yaw = wrapYaw(gunner.yaw - dxPx * k);
@@ -5913,7 +6054,7 @@
     if (input.keys["arrowup"] || input.keys["w"]) ay += 1;
     if (input.keys["arrowdown"] || input.keys["s"]) ay -= 1;
     gunner.yawV = 0; gunner.pitchV = 0;
-    if (ride) { if (ax || ay) { ride.yaw = clamp(ride.yaw - ax * 1.4 * dt, -RIDE_YAW, RIDE_YAW); ride.pitch = clamp(ride.pitch + ay * 1.0 * dt, RIDE_PMIN, RIDE_PMAX); ridePose(); } return; }
+    if (ride) { if (!ride.fly && (ax || ay)) { ride.yaw = clamp(ride.yaw - ax * 1.4 * dt, -RIDE_YAW, RIDE_YAW); ride.pitch = clamp(ride.pitch + ay * 1.0 * dt, RIDE_PMIN, RIDE_PMAX); ridePose(); } return; }
     if (ax || ay) {
       gunner.yaw = wrapYaw(gunner.yaw + ax * 1.4 * dt);
       gunner.pitch = clampPitch(gunner.pitch + ay * 1.0 * dt);
@@ -6113,20 +6254,20 @@
     // 2D wing only as subtle cue when pitched down — never cover 3D turret
     if (!models3d) drawBomber();
     if (!models3d) drawBullets(); // 1.3.7: 3D mode draws tracers in world3d (depth-tested)
-    drawParticles();
+    if (!fpov) drawParticles();
     if (!models3d) drawEnemyTracers();
     if (!models3d) {
       drawCanopy();
       drawTurretInterior();
       drawGuns();
-    } else if (!inChute && !ride) {
+    } else if (!inChute && !(ride || fpov)) {
       // light plexi dirt + vignette only — metal/glass come from GLTF
       drawPlexiOverlay();
     }
-    if (!ride) drawMuzzleGrit(); // 1.6.6: the turret's own overlays stay off while you ride in a fighter
+    if (!(ride || fpov)) drawMuzzleGrit(); // 1.6.6: the turret's own overlays stay off while you ride in a fighter
     if (!models3d) drawBrass();
-    if (!inChute && !ride) drawCabinFx();
-    if (!downSeq && !ride) drawCrosshair(models3d && !inChute);
+    if (!inChute && !(ride || fpov)) drawCabinFx();
+    if (!downSeq && !(ride || fpov)) drawCrosshair(models3d && !inChute);
     if (!inChute) drawHitMarks();
     if (!models3d) drawFarFighters(); // 1.3.6: 3D mode draws far 109s as depth-tested GL specks
     if (!downSeq) { if (!ride) drawIncoming(); if (!mouse.desktop) drawControls(); } // 1.4.0-web: no touch hints on desktop
@@ -6875,7 +7016,7 @@
       if (t.team === "allied" ? nA >= capA : nX >= capX) continue;
       const allied = t.team === "allied";
       if (t.life < 0.05) continue;
-      const sp = Math.hypot(t.vx, t.vy, t.vz) || 1, tail = Math.min(t.trav || 0, t.ftr ? 15 : ride ? 12 : 22); // 1.6.8: fighter rounds = short dashes; from a ridden cockpit the box gunners' rounds too
+      const sp = Math.hypot(t.vx, t.vy, t.vz) || 1, tail = t.ftr ? Math.min(15, 0.6 * (t.trav || 0)) : Math.min(t.trav || 0, ride ? 12 : 22); // 1.6.9: a fighter round seen from outside is the same dash as in the ride view: it grows out of its own muzzle // 1.6.8: fighter rounds = short dashes; from a ridden cockpit the box gunners' rounds too
       if (tail < 0.5) continue;
       let a = clamp(t.life / TRACER_BURN, 0, 1); // 1.3.9: same burnout for everyone
       // 1.3.7: rounds whipping past within a few spans of the eye (e.g. our own ship's waist/tail guns)
@@ -7481,6 +7622,7 @@
         const col = (c0, c1) => Math.round(c0 + (c1 - c0) * bx.k);
         const lw = 0.8 + 1.7 * bx.k;
         if (window.__FG_BOXLOG) window.__FG_BOXLOG.push({ id: e.id, type: e.type, yd: Math.round(rangeYd), a: +bx.a.toFixed(3), lw: +lw.toFixed(2), h: +bx.h.toFixed(1), k: +bx.k.toFixed(3) });
+        if (window.__FG_FREECAM || window.__FG_NOBRACKETS || fpov || (ride && ride.deadT != null)) continue; // 1.6.9d: no target brackets in outside / recording views
         ctx.save();
         ctx.lineJoin = "miter";
         ctx.strokeStyle = "rgba(10,6,6," + (0.35 * bx.a).toFixed(3) + ")"; ctx.lineWidth = lw + 1.4;     // thin dark keyline so it reads on bright sky
@@ -7958,6 +8100,7 @@
   function mouseLook(dx, dy) {
     if (!dx && !dy) return;
     const k = mouseRadPerPx();
+    if (fpov) { fpovLook(dx, dy, k); return; }
     if (ride) { rideLook(dx, dy, k); return; } // 1.6.6
     gunner.yaw = wrapYaw(gunner.yaw - dx * k); // continuous yaw, wraps forever (tail clamps via clampStationAim)
     gunner.pitch = clampPitch(gunner.pitch - dy * k);
@@ -8027,6 +8170,12 @@
     }
     // PERMANENT: LEFT HALF = FIRE anywhere; RIGHT HALF = LOOK/AIM anywhere
     // Circles are visual hints only — never the hit targets.
+    if (rideFlying()) { // 1.6.9: two-thumb flying — left half rolls, right half pitches (fire: Volume Up / the FIRE button)
+      if (x < W * 0.5) { ride.rollId = ev.pointerId; ride.rollX0 = x; ride.stickR = 0; }
+      else { ride.pitchId = ev.pointerId; ride.pitchY0 = y; ride.stickP = 0; }
+      ev.preventDefault();
+      return;
+    }
     if (x < W * 0.5) {
       input.fire = true;
       input.fireId = ev.pointerId;
@@ -8045,6 +8194,7 @@
   window.addEventListener("pointermove", (ev) => {
     if (ev.pointerType === "mouse") return; // 1.4.0-web: mouse is handled by the mousemove path above
     if (state !== "PLAYING") return;
+    if (ride && ride.fly) { const FS = Math.max(60, Math.min(W, H) * 0.16); if (ev.pointerId === ride.rollId) { ride.stickR = clamp((ev.clientX - ride.rollX0) / FS, -1, 1); return; } if (ev.pointerId === ride.pitchId) { ride.stickP = clamp((ev.clientY - ride.pitchY0) / FS, -1, 1); return; } }
     if (input.stickActive && ev.pointerId === input.stickId) {
       // 1.3.3: direct drag-to-rotate — camera moves exactly with the finger, nothing after
       const dx = ev.clientX - input.lastX;
@@ -8064,6 +8214,7 @@
       // 1.4.0: no tap-to-skip any more — the END MISSION button ends it (a stray tap while looking around must not)
     }
     if (ev.pointerId === input.fireId) { input.fire = false; input.fireId = null; }
+    if (ride) { if (ev.pointerId === ride.rollId) { ride.rollId = null; ride.stickR = 0; } if (ev.pointerId === ride.pitchId) { ride.pitchId = null; ride.stickP = 0; } }
     if (ev.pointerId === input.stickId) {
       input.stickActive = false; input.stickId = null;
       input.stickVX = 0; input.stickVY = 0;
@@ -8094,6 +8245,7 @@
       else if (ride && (k === "," || k === "q")) rideCycle(-1);
       else if (ride && (k === "." || k === "e")) rideCycle(1);
       else if (ride && k === "c") rideRecenter();
+      else if (ride && k === "f") { ride.fly = !ride.fly; ride.stickR = ride.stickP = 0; pushCallout(ride.fly ? "YOU HAVE CONTROL" : "AUTOPILOT", 1.0, true); flyBridgeSync(); }
     }
     if (k === " " || k === "enter") {
       if (state === "TITLE") startGame();
@@ -8261,6 +8413,8 @@
     friendlies: () => friendlies.map((f) => ({ name: f.name, x: f.x, y: f.y, z: f.z, yaw: f.yaw, bank: f.bank || 0, health: f.health, ok: friendlyOk(f), eng: f.engines.map((q) => +q.fire.toFixed(2) + (q.out ? "X" : "")) })),
     cam: () => ({ x: CAM.x, y: CAM.y, z: CAM.z }),
     aiMetrics: { reset: aimReset, report: aimReport },
+    flakSeqN: () => flakSeq, // 1.6.9 test hook: bursts spawned so far
+    w3dFlak: () => (window.__FG_WORLD && window.__FG_WORLD.flakStats) || null, // 1.6.9 test hook: live flak bursts + lingering ghost puffs
     ents: () => enemies, // 1.6.8 test hook: the live fighter objects (brain state, targets) for the ride-video harness
     fighters: () => enemies.map((e) => ({ sweep: e.sweep || 0, id: e.id, type: e.type, team: e.team, alive: e.alive, phase: e.phase, x: e.x, y: e.y, z: e.z, vx: e.vx, vy: e.vy, vz: e.vz, hx: e.hx, hy: e.hy, hz: e.hz, V: e.V, g: e.gLoad, bank: e.bank, p: e.p, ux: e.ux, uy: e.uy, uz: e.uz, w: e.turnW, mode: e.mode, diveT: e.diveT, dbg: e.dbg, dbg2: e.dbg2, tk: e.tgt ? e.tgt.kind : null, tt: e.target ? e.target.type : null, foe: e.foe ? e.foe.id : null, role: e.duelRole || null, hp: e.hp, sturm: !!e.sturm, fl: e.fl, slot: e.slot, f109: e.flight109, f190: e.flight190, hold: !!e.hold, strag: !!(e.tgt && isStragTgt(e.tgt)), drives: e.drives || 0, chLead: !!e.chLead, phT: e.phaseT, pair: e.pairIdx, pslot: e.slot, mate: e.mate && e.mate.alive ? e.mate.id : null, esc: !!e.esc, goHome: e.goHome != null ? e.goHome : null, tgtId: e.target ? e.target.id : null, ammo: e.ammo, vT: e.vT, runN: e.runN, rgN: e.rg ? e.rg.members.filter((q) => q.alive && q.rg === e.rg).length : 0, surgeP: !!e.surgeP, fin: !!e.final, hunt: !!e.hunt, tx: e.tgt && e.tgt.kind === 'friendly' ? e.tgt.f.x : 0, tz: e.tgt && e.tgt.kind === 'friendly' ? e.tgt.f.z : 0, ty: e.tgt && e.tgt.kind === 'friendly' ? e.tgt.f.y : 0 })),
     aimBlocked: () => aimHitsOwnShip(),
@@ -8532,6 +8686,12 @@
       fire: (on) => { input.fire = !!on; input.fireId = on ? "test" : null; },
       kill: () => { if (!ride) return false; const e = ride.e; if (e.team === "allied") { e.hp = 0; killP51(e, "cpu"); } else killEnemy(e, true); return true; },
       fighter: () => ride ? ride.e : null,
+      flak: (on) => on ? startFlakPov() : (endFlakPov(), false),
+      flakLook: (yawDeg, pitchDeg) => { if (!fpov) return false; fpov.yaw = yawDeg * Math.PI / 180; fpov.pitch = pitchDeg * Math.PI / 180; return true; },
+      flakState: () => fpov ? Object.assign({}, fpov) : null,
+      stick: (r, p) => { if (!ride) return false; ride.stickR = r; ride.stickP = p; return true; },
+      fly: (on) => { if (!ride) return false; ride.fly = !!on; return ride.fly; },
+      bail: () => ride && ride.bail ? { st: ride.bail.st, t: ride.deadT, can: !!ride.bail.can, chId: ride.bail.chId, eye: ride.eye } : null,
       stats: () => mission ? { rounds: mission.rideRounds || 0, hits: mission.rideHits || 0, dmg: mission.rideDmg || 0, lost: mission.rideLost || 0, log: mission.rideLog || [] } : null,
     },
     twinRound: (dx, dy, dz) => { const L = Math.hypot(dx, dy, dz); const o = { x: CAM.x, y: CAM.y + 3, z: CAM.z, vx: dx / L * BULLET_UPS, vy: dy / L * BULLET_UPS, vz: dz / L * BULLET_UPS }; const bl = Object.assign({ life: BULLET_LIFE, tracer: true, side: 0, trav: 0, twin: 1 }, o); bullets.push(bl); const tr = Object.assign({ life: BULLET_LIFE, maxLife: BULLET_LIFE, trav: 0, team: "allied", twin: 1 }, o); tracers.push(tr); window.__twin = [bl, tr]; return true; },

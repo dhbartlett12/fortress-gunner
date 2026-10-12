@@ -9,7 +9,7 @@
   let enabled = true; try { enabled = localStorage.getItem(KEY) !== "off"; } catch (e) {}
   const V = { enabled, virtual: false, ready: false, failed: false, idx: null, log: [], stats: { said: 0, dropped: {}, interrupts: 0, decodeMs: 0, decodes: 0, errors: 0 }, silenced: false, gunsFiring: false, deadFn: null };
   V.virtual = !!window.__FG_VOICE_VIRTUAL; // test hook: director runs on the sim clock but plays nothing
-  let blob = null, A = null, now = 0;
+  let blob = null, blob2 = null, A = null, now = 0; // 1.6.9: blob2 = voices2 pack (German pilots, P-51 pilots, flak crew)
   const cache = new Map(); // id → {buf, secs, t}
   let cacheSecs = 0; const CACHE_MAX = 110;
   const lastId = {}, trgLast = {}, onceDone = {};
@@ -26,8 +26,10 @@
       const loadPack = (name, done) => get("assets/voices/" + name + ".json", "json", (j) => get("assets/voices/" + name + ".bin", "arraybuffer", (b) => done(j, b)));
       const useMp3 = () => { if (V.fmt === "mp3" || V.fbLoading) return; V.fbLoading = true; loadPack("voices_mp3", (j, b) => { V.idx = j; blob = b; cache.clear(); cacheSecs = 0; V.fmt = "mp3"; V.fbLoading = false; V.ready = true; }); };
       V.useMp3 = useMp3;
+      const load2 = (mp3) => loadPack(mp3 ? "voices2_mp3" : "voices2", (j2, b2) => { blob2 = b2; if (V.idx) Object.assign(V.idx, j2); V.idx2 = j2; V.ready2 = true; }); // 1.6.9
+      V._load2 = load2;
       loadPack("voices", (j, b) => {
-        V.idx = j; blob = b; V.fmt = "opus"; V.ready = true;
+        V.idx = j; blob = b; V.fmt = "opus"; V.ready = true; if (V.idx2) Object.assign(V.idx, V.idx2); else load2(false);
         if (window.__FG_VOICE_FORCE_MP3) { V.ready = false; useMp3(); return; } // test hook
         try {
           const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext; let k0 = null; for (const k in j) { if (k0 == null || j[k].n < j[k0].n) k0 = k; }
@@ -47,11 +49,11 @@
   // ---- decode (cache by seconds) ----
   function decode(id) {
     const hit = cache.get(id); if (hit) { hit.t = now; return Promise.resolve(hit.buf); }
-    const e = V.idx && V.idx[id]; if (!e || !blob || !A) return Promise.resolve(null);
+    const e = V.idx && V.idx[id]; const src = e && e.b === 2 ? blob2 : blob; if (!e || !src || !A) return Promise.resolve(null);
     const t0 = performance.now();
     return new Promise((res) => {
       try {
-        A.ctx.decodeAudioData(blob.slice(e.o, e.o + e.n), (buf) => {
+        A.ctx.decodeAudioData(src.slice(e.o, e.o + e.n), (buf) => {
           V.stats.decodeMs += performance.now() - t0; V.stats.decodes++;
           cache.set(id, { buf, secs: buf.duration, t: now }); cacheSecs += buf.duration;
           if (cacheSecs > CACHE_MAX) { const arr = [...cache.entries()].sort((a, b) => a[1].t - b[1].t); for (const [k, v] of arr) { if (cacheSecs <= CACHE_MAX * 0.8) break; if (k === id) continue; cache.delete(k); cacheSecs -= v.secs; } }
@@ -81,8 +83,25 @@
     const it = { id: "phrase:" + pre + ":" + num + ":" + (mod || "level"), spk, prio: o.prio != null ? o.prio : 2, trg: o.trg || "bandit", cd: o.cd, ttl: o.ttl, resp: false, dur, parts, at: now, minDelay: 0, phraseKey: pre + num + mod };
     return enqueue(it, o);
   };
+  // 1.6.9 voice context: who you are listening as. "b17" = the crew on the intercom; "de" = riding a German fighter (German pilots only);
+  // "us" = riding a Mustang (P-51 pilots only); "flak" = at the battery (the gun crew only)
+  V.ctx = "b17";
+  const ctxOf = (spk) => { const p = String(spk || "").slice(0, 3); return p === "de_" ? "de" : p === "us_" ? "us" : p === "fk_" ? "flak" : "b17"; };
+  V.setCtx = function (c) { if (c === V.ctx) return; V.ctx = c; queue = []; V.cut(false, "ctx"); };
+  const pick = (a) => a[(Math.random() * a.length) | 0];
+  const RV = { de: { attack: ["de_pauke", "de_pauke2", "de_viermot", "de_dicke"], close: ["de_ranhalten"], brk: ["de_abschwung", "de_weg"], evade: ["de_indianer", "de_mustang", "de_kurbeln"], kill: ["de_horrido", "de_abschuss"], hit: ["de_treffer"], hurt: ["de_getroffen"], bail: ["de_aussteigen"], rtb: ["de_munition"], reform: ["de_sammeln", "de_noch_einmal"] },
+    us: { attack: ["us_bogeys", "us_bandits_bombers", "us_tallyho", "us_tanks"], close: ["us_on_him"], brk: [], evade: ["us_break_left", "us_break_right", "us_check6"], kill: ["us_splash", "us_got_him"], hit: ["us_on_him"], hurt: ["us_hit"], bail: ["us_bail"], rtb: [], reform: ["us_reform", "us_stay"] } };
+  V.rideCall = function (side, ev) { const L = RV[side] && RV[side][ev]; if (!L || !L.length) return false; const id = pick(L); return V.say(id, { trg: "ride_" + ev, cd: ev === "kill" || ev === "bail" || ev === "hurt" ? 0.5 : 5, prio: ev === "reform" ? 1 : 3, noIdCd: ev === "kill" || ev === "bail", resp: ev === "reform" }); };
+  const FKSEQ = ["fk_richtung", "fk_zuender", "fk_laden", "fk_fertig", "fk_gruppe", "fk_feuer", "fk_schneller", "fk_munition", "fk_ziel", "fk_feuer"]; let fkI = 0;
+  V.flakCrew = function (ev) {
+    if (ev === "start") return V.say(pick(["fk_achtung", "fk_viermots"]), { trg: "fk_start", cd: 0, prio: 2, noIdCd: true });
+    if (ev === "bombs") return V.say("fk_deckung", { trg: "fk_bombs", cd: 6, prio: 3, noIdCd: true });
+    if (ev === "burn") return V.say("fk_brennt", { trg: "fk_burn", cd: 4, prio: 3, noIdCd: true });
+    const id = FKSEQ[fkI++ % FKSEQ.length]; return V.say(id, { trg: "fk_fire", cd: 2.5, prio: 2, noIdCd: true, resp: true });
+  };
   function enqueue(it, o) {
     if (!V.enabled) return drop("off");
+    if (ctxOf(it.spk) !== V.ctx) return drop("ctx");
     if (V.silenced && !o.allowSilenced) return drop("silenced");
     if (!speakerOk(it.spk)) return drop("dead:" + it.spk);
     if (o.once) { if (onceDone[o.once]) return drop("once"); }
