@@ -2587,6 +2587,7 @@ export function createWorld3D(canvas) {
   // drifting smoke for 20–30 s. Pooled Points (2 draw calls), screen-size clamped, fog-exempt, drawn over the ground in the Earth pass.
   // (1.6.4's sprites sat directly under the sky burst — i.e. under our own box — and their updater was never called.)
   const FLAKG = createFlakGround({ landG, TOWN_X, TOWN_Z, TOWN_S, renderer, camera, clock: () => (window.__FG_FREEZE && window.__FG_SIMT != null ? window.__FG_SIMT : pnow() / 1000) });
+  let _fpCullOff = false;
   const FPOV = createFlakPov({ landG, TOWN_X, TOWN_Z, TOWN_S, AF: { x: TOWN3D.airfield[0], z: TOWN3D.airfield[1], rx: 6.3, rz: 5.0, rot: 0.28 }, camera, flakG: FLAKG, fireTex, smokeTex, audio: window.FGAudio || null, ground }); // 1.6.9 (1.7.0: + ground, hidden at the battery)
   function flakMuzzle() { FLAKG.muzzle(); }
   function bombBurst(lx, lz, big) { // ground-frame local coords (landG). 1.6.1: much bigger so a stick reads from a straggler several km back
@@ -4839,7 +4840,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       h = window.innerHeight;
     // 1.4.0-web: also a pixel budget (~3.2 MP drawn) so big desktop windows / 4K screens stay smooth; phones are under it
     const budget = Math.sqrt(3.2e6 / Math.max(1, w * h));
-    renderer.setPixelRatio(window.__FG_PR || Math.max(0.75, Math.min(window.devicePixelRatio || 1, prCap, budget)));
+    renderer.setPixelRatio(window.__FG_PR || Math.max(0.75, Math.min(window.devicePixelRatio || 1, prCap, budget, window.__FG_FPOV_ON ? 1.0 : 9)));
     renderer.setSize(w, h, false);
     camera.aspect = w / Math.max(1, h);
     camera.updateProjectionMatrix();
@@ -5440,7 +5441,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const RIDE = opts.ride || null; // 1.6.6 ride-along: the camera sits in a fighter's cockpit
     _conRide = !!RIDE;
     if (RIDE || rideStats.on) syncRide(RIDE);
-    const FPV = opts.flakPov || null; if (FPV) { FPOV.pose(FPV); skyMesh.position.copy(camera.position); } else if (FPOV.on) FPOV.off(); // 1.6.9 flak POV: camera on the ground at the battery
+    const FPV = opts.flakPov || null; if (FPV) { FPOV.pose(FPV); skyMesh.position.copy(camera.position); } else if (FPOV.on) FPOV.off();
+    if (!!FPV !== _fpCullOff) { _fpCullOff = !!FPV; window.__FG_FPOV_ON = _fpCullOff; resize(); /* 1.7.1: the flak view looks up through the whole sky (sky dome + cloud billboards + every burst) — fill-rate bound on phones: render it at 1x */ const fc = !_fpCullOff; for (const g of friendlyPool) g.traverse((o) => { if (o.isMesh) o.frustumCulled = fc; }); for (const F of flakMeshes) { F.m.frustumCulled = fc; if (F.fl) F.fl.frustumCulled = fc; } } // 1.7.1: seen from the ground, three's frustum test dropped every B-17 and sky burst (stale bounds) — draw them unculled in the flak view // 1.6.9 flak POV: camera on the ground at the battery
     const RIDE_OR = RIDE || FPV;
     if (ownShip) updateOwnShip(opts);
     { // 1.3.8: under our own canopy
@@ -5802,7 +5804,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       renderer.render(scene, camera);
       renderer.autoClear = false;
       renderer.clearDepth();
-      camera.near = POV ? 1.0 : 0.05; camera.far = POV ? 60000 : 30000; camera.updateProjectionMatrix();
+      camera.near = POV ? 0.3 : 0.05; camera.far = POV ? 60000 : 30000; camera.updateProjectionMatrix();
       camera.layers.set(0);
       renderer.render(scene, camera);
       if (!POV) {

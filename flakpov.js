@@ -13,7 +13,7 @@ export function createFlakPov(env) {
   const BAT = []; // { x, z, guns:[{g, barrel, cradle, x, z}], mine }
   const men = []; const flashes = []; const puffs = []; const blasts = [];
   const stats = { on: false, salvos: 0, impacts: { farm: 0, airfield: 0, town: 0, target: 0 }, lastImpact: null, batteries: 0, near: 0 };
-  let me = null; // my battery (landG coords)
+  let me = null, myGun = null; // my battery (landG coords); 1.7.1: the gun the player crews
   const mat = (c, o) => new THREE.MeshLambertMaterial(Object.assign({ color: c }, o || {}));
   const olive = mat(0x5a5e3e), dark = mat(0x2c2e26), sand = mat(0x8c7b58), conc = mat(0x8a877c), crate = mat(0x6a5634), grey = mat(0x6d726c), glass = mat(0x8fb0c0, { transparent: true, opacity: 0.55 });
   const uniG = mat(0x4f5a48), skin = mat(0xc49a78), helm = mat(0x3c4232);
@@ -32,7 +32,7 @@ export function createFlakPov(env) {
     // sandbag ring (low torus) and a few ready-round crates
     for (let i = 0; i < 18; i++) { if (i === 4 || i === 5) continue; const a = i / 18 * 6.283, bag = new THREE.Mesh(new THREE.BoxGeometry(1.9 * M, 0.9 * M, 0.7 * M), sand); bag.position.set(Math.cos(a) * 5.4 * M, 0.45 * M, Math.sin(a) * 5.4 * M); bag.rotation.y = -a + Math.PI / 2; g.add(bag); } // sandbag wall, a gap for the ammo run
     for (let i = 0; i < 4; i++) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.9 * M, 0.35 * M, 0.45 * M), crate); const a = RR(0, 6.28); c.position.set(Math.cos(a) * 3.6 * M, 0.18 * M, Math.sin(a) * 3.6 * M); c.rotation.y = a; g.add(c); }
-    return { g, cr, br, tip, x, z, el: RR(0.9, 1.1), az: 0, rec: 0 };
+    return { g, cr, br, tip, sh, x, z, el: RR(0.9, 1.1), az: 0, rec: 0 };
   }
   function bomber(parent, x, z, yaw, kind) { // parked Ju 88 / Do 217 — glazed nose, two nacelles, single (88) or twin (217) fins
     const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = yaw; parent.add(g);
@@ -54,8 +54,10 @@ export function createFlakPov(env) {
   }
   function man(parent, x, z) {
     const g = new THREE.Group(); g.position.set(x, 0, z); parent.add(g);
-    const legs = []; for (const s of [-1, 1]) { const l = new THREE.Mesh(new THREE.BoxGeometry(0.16 * M, 0.85 * M, 0.18 * M), uniG); l.position.set(s * 0.11 * M, 0.43 * M, 0); g.add(l); legs.push(l); }
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.46 * M, 0.7 * M, 0.26 * M), uniG); body.position.y = 1.2 * M; g.add(body);
+    // 1.7.1: rounded crewmen — tapered limbs, a torso with shoulders, arms, boots (were boxes)
+    const legs = []; for (const s of [-1, 1]) { const l = new THREE.Mesh(new THREE.CylinderGeometry(0.085 * M, 0.07 * M, 0.85 * M, 7), uniG); l.position.set(s * 0.11 * M, 0.43 * M, 0); g.add(l); legs.push(l); const b = new THREE.Mesh(new THREE.BoxGeometry(0.13 * M, 0.1 * M, 0.26 * M), dark); b.position.set(0, -0.4 * M, 0.04 * M); l.add(b); }
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * M, 0.17 * M, 0.72 * M, 9), uniG); body.position.y = 1.2 * M; body.scale.z = 0.62; g.add(body);
+    for (const s of [-1, 1]) { const a = new THREE.Mesh(new THREE.CylinderGeometry(0.06 * M, 0.05 * M, 0.66 * M, 6), uniG); a.position.set(s * 0.27 * M, 1.22 * M, 0.04 * M); a.rotation.z = s * 0.18; a.rotation.x = -0.35; g.add(a); }
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.12 * M, 8, 6), skin); head.position.y = 1.68 * M; g.add(head);
     const h = new THREE.Mesh(new THREE.SphereGeometry(0.15 * M, 8, 5, 0, 6.29, 0, 1.4), helm); h.position.y = 1.72 * M; g.add(h);
     return { g, legs, x, z, tx: x, tz: z, sp: RR(2.4, 4.2) * M, ph: R() * 6, wait: RR(0, 2) };
@@ -89,7 +91,7 @@ export function createFlakPov(env) {
     const af = tl(AF.x, AF.z), myC = [af[0] + 0.3 * TOWN_S, af[1] + (AF.rz + 3.2) * TOWN_S];
     me = { x: myC[0], z: myC[1] }; farFields(myC[0], myC[1]); groundPatch(myC[0], myC[1]);
     const add = (cx, cz, n, mine) => { const B = { x: cx, z: cz, guns: [], mine, next: RR(0, 3) }; const rot = R() * 6.28, rad = (mine ? 30 : RR(25, 40)) * M; for (let i = 0; i < n; i++) { const a = rot + i / n * 6.28; B.guns.push(gun88(root, cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, RR(0, 6.28))); } BAT.push(B); return B; };
-    add(myC[0], myC[1], 4, true);
+    add(myC[0], myC[1], 4, true); myGun = BAT[0].guns[0]; myGun.sh.visible = false; // 1.7.1: the player's gun (shield off: the layer's eye is right behind it)
     // command post + range-finder pit at the centre, an ammo bunker
     { for (let i = 0; i < 12; i++) { const a = i / 12 * 6.283, bag = new THREE.Mesh(new THREE.BoxGeometry(1.7 * M, 1.0 * M, 0.7 * M), sand); bag.position.set(myC[0] + Math.cos(a) * 3.4 * M, 0.5 * M, myC[1] + Math.sin(a) * 3.4 * M); bag.rotation.y = -a + Math.PI / 2; root.add(bag); } const rf = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * M, 0.12 * M, 4 * M, 8), dark); rf.rotation.z = Math.PI / 2; rf.position.set(myC[0], 1.7 * M, myC[1]); root.add(rf); const rfp = new THREE.Mesh(new THREE.CylinderGeometry(0.1 * M, 0.15 * M, 1.4 * M, 6), dark); rfp.position.set(myC[0], 1.0 * M, myC[1]); root.add(rfp); const bk = new THREE.Mesh(new THREE.BoxGeometry(6 * M, 2 * M, 4 * M), conc); bk.material = mat(0x6f6a4c); bk.position.set(myC[0] + 22 * M, 0.35 * M, myC[1] - 62 * M); bk.scale.y = 0.5; root.add(bk); /* 1.7.0: sod-covered, dug in, 16 m behind the eye (was 4 m: its grey roof filled the view toward the town) */ }
     // nearby batteries (the airfield ring) and several more along the approach (box comes in from −z)
@@ -108,15 +110,19 @@ export function createFlakPov(env) {
     for (let i = 0; i < 30; i++) { const f = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })); const d = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x5a4a38, transparent: true, depthWrite: false })); f.visible = d.visible = false; root.add(f); root.add(d); blasts.push({ f, d, t: 99, x: 0, z: 0, k: 1 }); }
   }
   function eyeLocal() { return { x: me.x + 22 * M, y: 2.4 * M, z: me.z - 46 * M }; } // standing on the ammo-bunker berm, just outside the gun ring
-  const _v = new THREE.Vector3(), _w = new THREE.Vector3();
+  const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _pj = new THREE.Vector3();
   function pose(P) { // place the camera at the battery, looking yaw / pitch (world frame)
     if (!built) build();
     on = true; root.visible = true; stats.on = true; if (ground) ground.visible = false; // 1.7.0: at 2 m the Earth plane z-fights the field ring (grey sheet toward the town) — the ring + near patch are the ground here
     landG.updateWorldMatrix(true, false);
-    const E = eyeLocal(); landG.localToWorld(_v.set(E.x, E.y, E.z));
+    // 1.7.1: the view direction in landG (landG turns with the box heading) lays my gun; the eye sits at the sight, 1.4 m behind and 0.5 m above the trunnions
+    const cp = Math.cos(P.pitch), wd = _w.set(Math.sin(P.yaw) * cp, Math.sin(P.pitch), Math.cos(P.yaw) * cp);
+    landG.getWorldQuaternion(_q); _q.invert(); wd.applyQuaternion(_q); const hl = Math.hypot(wd.x, wd.z) || 1, az = Math.atan2(wd.x, wd.z), el = Math.atan2(wd.y, hl);
+    const G = myGun; G.cr.rotation.y = az - G.g.rotation.y; G.br.rotation.x = -Math.max(-0.05, Math.min(1.5, el)); G.lay = true;
+    const E = { x: G.x - wd.x / hl * 1.4 * M, y: 2.35 * M, z: G.z - wd.z / hl * 1.4 * M }; landG.localToWorld(_v.set(E.x, E.y, E.z));
     camera.position.copy(_v);
     camera.rotation.order = "YXZ"; camera.rotation.set(P.pitch, P.yaw + Math.PI, 0);
-    if (camera.fov !== 52) { camera.fov = 52; camera.updateProjectionMatrix(); } // a gunner's eye, a touch narrower than the turret view so a box at 7.6 km reads
+    const FOVW = window.__FG_FPOVFOV || 52; if (camera.fov !== FOVW) { camera.fov = FOVW; camera.updateProjectionMatrix(); } // a gunner's eye, a touch narrower than the turret view so a box at 7.6 km reads
     camera.updateMatrixWorld();
   }
   function off() { on = false; stats.on = false; if (root) root.visible = false; if (ground) ground.visible = true; }
@@ -135,6 +141,7 @@ export function createFlakPov(env) {
   function salvo(B, boxL, t) {
     stats.salvos++;
     for (const G of B.guns) {
+      if (G === myGun) continue; // 1.7.1: the player's gun fires only on the player's trigger
       G.rec = 1;
       const F = flashes.find((f) => f.t > 0.4) || flashes[0]; F.t = -Math.random() * 0.25; F.g = G;
       const P = puffs.find((p) => p.t > p.life) || puffs[0]; P.t = F.t - 0.05; P.life = RR(8, 12); P.g = G; P.vx = RR(1.5, 3) * M; P.vz = RR(-0.5, 0.5) * M;
@@ -150,7 +157,7 @@ export function createFlakPov(env) {
     for (const B of BAT) {
       const dx = bl.x - B.x, dz = bl.z - B.z, dh = Math.hypot(dx, dz), az = Math.atan2(dx, dz), el = Math.atan2(bl.y, dh);
       const lead = Math.atan2(dz < 0 ? 1 : -1, 6) * 0.0; void lead;
-      for (const G of B.guns) { G.az += Math.atan2(Math.sin(az - G.az - G.g.rotation.y), Math.cos(az - G.az - G.g.rotation.y)) * Math.min(1, dt * 0.8); G.cr.rotation.y = G.az; G.br.rotation.x = -Math.min(1.45, Math.max(0.2, el * G.el + 0.08)); G.rec = Math.max(0, G.rec - dt * 2.2); G.br.position.z = -G.rec * 0.9 * M; }
+      for (const G of B.guns) { if (G === myGun) { G.rec = Math.max(0, G.rec - dt * 2.2); G.br.position.z = -G.rec * 0.9 * M; continue; } G.az += Math.atan2(Math.sin(az - G.az - G.g.rotation.y), Math.cos(az - G.az - G.g.rotation.y)) * Math.min(1, dt * 0.8); G.cr.rotation.y = G.az; G.br.rotation.x = -Math.min(1.45, Math.max(0.2, el * G.el + 0.08)); G.rec = Math.max(0, G.rec - dt * 2.2); G.br.position.z = -G.rec * 0.9 * M; }
       const slant = Math.hypot(dh, bl.y) / M; // metres
       B.next -= dt; if (slant < 11500 && B.next <= 0) { B.next = RR(3.6, 4.8) * (B.mine ? 1 : 1.15); salvo(B, bl, t); }
     }
@@ -170,5 +177,7 @@ export function createFlakPov(env) {
     }
     void flakG;
   }
-  return { pose, off, update, impact, stats, get on() { return on; }, get me() { return me; }, get _root() { return root; }, get _camera() { return camera; } };
+  function fireMine() { if (!myGun) return; const G = myGun; G.rec = 1; const F = flashes.find((f) => f.t > 0.4) || flashes[0]; F.t = 0; F.g = G; const P = puffs.find((p) => p.t > p.life) || puffs[0]; P.t = -0.05; P.life = RR(8, 12); P.g = G; P.vx = RR(1.5, 3) * M; P.vz = RR(-0.5, 0.5) * M; stats.mine = (stats.mine || 0) + 1; const A = audio || window.FGAudio; if (A && A.gun88) A.gun88(4); }
+  function project(x, y, z) { _pj.set(x, y, z).project(camera); return { x: _pj.x, y: _pj.y, ok: _pj.z < 1 && Math.abs(_pj.x) < 1.2 && Math.abs(_pj.y) < 1.2 }; }
+  return { pose, off, update, impact, stats, fireMine, project, get on() { return on; }, get me() { return me; }, get _root() { return root; }, get _camera() { return camera; } };
 }
