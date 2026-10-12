@@ -34939,6 +34939,93 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       root.add(m);
       return m;
     }
+    function grassNear(cx, cz) {
+      const N = 512, c = document.createElement("canvas");
+      c.width = c.height = N;
+      const x = c.getContext("2d");
+      x.fillStyle = "#4f6a2c";
+      x.fillRect(0, 0, N, N);
+      for (let i = 0; i < 2600; i++) {
+        const px2 = R() * N, py2 = R() * N, l = RR(3, 11), a = RR(-0.6, 0.6) - 1.57, g = R() * 60 | 0;
+        x.strokeStyle = "rgba(" + (60 + g * 0.6 | 0) + "," + (95 + g) + "," + (35 + g * 0.3 | 0) + ",0.8)";
+        x.lineWidth = RR(0.8, 1.8);
+        x.beginPath();
+        x.moveTo(px2, py2);
+        x.lineTo(px2 + Math.cos(a) * l, py2 + Math.sin(a) * l);
+        x.stroke();
+      }
+      for (let i = 0; i < 90; i++) {
+        x.fillStyle = R() < 0.5 ? "rgba(40,58,22,0.35)" : "rgba(120,130,60,0.25)";
+        x.beginPath();
+        x.arc(R() * N, R() * N, RR(6, 22), 0, 6.29);
+        x.fill();
+      }
+      const tex = new CanvasTexture(c);
+      tex.wrapS = tex.wrapT = RepeatWrapping;
+      tex.repeat.set(150, 150);
+      tex.anisotropy = 8;
+      if (SRGBColorSpace) tex.colorSpace = SRGBColorSpace;
+      const ac = document.createElement("canvas");
+      ac.width = ac.height = 256;
+      const y = ac.getContext("2d");
+      const gr = y.createRadialGradient(128, 128, 30, 128, 128, 128);
+      gr.addColorStop(0, "#fff");
+      gr.addColorStop(0.55, "#bbb");
+      gr.addColorStop(1, "#000");
+      y.fillStyle = gr;
+      y.fillRect(0, 0, 256, 256);
+      const m = new Mesh(new CircleGeometry(900 * M, 64), new MeshLambertMaterial({ map: tex, alphaMap: new CanvasTexture(ac), transparent: true, depthWrite: false }));
+      m.rotation.x = -Math.PI / 2;
+      m.position.set(cx, 0.07 * M, cz);
+      m.renderOrder = 31;
+      m.material.polygonOffset = true;
+      m.material.polygonOffsetFactor = -4;
+      m.material.polygonOffsetUnits = -4;
+      root.add(m);
+    }
+    function bocage(cx, cz, af) {
+      const segs = [], cell = 190, Rm = 3e3, keep = (x, z) => Math.hypot(x - cx, z - cz) > 140 * M && Math.hypot((x - af[0]) / (AF.rx * TOWN_S * 1.15), (z - af[1]) / (AF.rz * TOWN_S * 1.15)) > 1;
+      const rot = 0.21, cr = Math.cos(rot), sr = Math.sin(rot), P = (u, v) => [cx + (u * cr - v * sr) * M, cz + (u * sr + v * cr) * M];
+      for (let u = -Rm; u < Rm; u += cell) for (let v = -Rm; v < Rm; v += cell) {
+        if (Math.hypot(u, v) > Rm) continue;
+        const ju = RR(-40, 40), jv = RR(-40, 40);
+        if (R() < 0.82) segs.push([P(u + ju, v + jv), P(u + cell + RR(-40, 40), v + jv + RR(-25, 25))]);
+        if (R() < 0.82) segs.push([P(u + ju, v + jv), P(u + ju + RR(-25, 25), v + cell + RR(-40, 40))]);
+      }
+      const ok = segs.filter((sg) => keep((sg[0][0] + sg[1][0]) / 2, (sg[0][1] + sg[1][1]) / 2));
+      const geo = new BoxGeometry(1, 1, 1);
+      geo.translate(0, 0.5, 0);
+      const mat2 = new MeshLambertMaterial({ color: 2899740 }), im = new InstancedMesh(geo, mat2, ok.length * 2), q = new Object3D();
+      let n = 0;
+      const tm = new InstancedMesh(new IcosahedronGeometry(1, 0), new MeshLambertMaterial({ color: 2504730, flatShading: true }), ok.length * 3);
+      let nt = 0;
+      for (const [a, b] of ok) {
+        const dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz), ang = Math.atan2(dx, dz), mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2;
+        q.position.set(mx, 0, mz);
+        q.rotation.set(0, ang, 0);
+        q.scale.set(RR(1.6, 2.4) * M, RR(2.4, 3.8) * M, L);
+        q.updateMatrix();
+        im.setMatrixAt(n++, q.matrix);
+        q.scale.set(3.2 * M, 0.8 * M, L);
+        q.updateMatrix();
+        im.setMatrixAt(n++, q.matrix);
+        for (let k = 0; k < 3; k++) if (R() < 0.6) {
+          const f = R();
+          q.position.set(a[0] + dx * f, RR(4, 7) * M, a[1] + dz * f);
+          q.rotation.set(R(), R(), R());
+          const sc = RR(2.6, 4.2) * M;
+          q.scale.set(sc, sc * 1.2, sc);
+          q.updateMatrix();
+          tm.setMatrixAt(nt++, q.matrix);
+        }
+      }
+      im.count = n;
+      tm.count = nt;
+      im.frustumCulled = tm.frustumCulled = false;
+      root.add(im);
+      root.add(tm);
+      stats.hedges = ok.length;
+    }
     function build() {
       built = true;
       root = new Group();
@@ -34948,6 +35035,8 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       me = { x: myC[0], z: myC[1] };
       farFields(myC[0], myC[1]);
       groundPatch(myC[0], myC[1]);
+      grassNear(myC[0], myC[1]);
+      bocage(myC[0], myC[1], tl(AF.x, AF.z));
       const add = (cx, cz, n, mine) => {
         const B = { x: cx, z: cz, guns: [], mine, next: RR(0, 3) };
         const rot = R() * 6.28, rad = (mine ? 30 : RR(25, 40)) * M;
@@ -39131,11 +39220,11 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
           let r = pc[0] * (k + rows), g = pc[1] * (k + rows), b = pc[2] * (k + rows);
           const eu = Math.min(fu, 1 - fu) * best.w1, ev = Math.min(fv, 1 - fv) * best.w2;
           const pe = Math.min(eu, ev);
-          if (pe < 0.9) {
-            const q = (1 - pe / 0.9) * 0.22;
-            r = r * (1 - q) + 58 * q;
-            g = g * (1 - q) + 70 * q;
-            b = b * (1 - q) + 42 * q;
+          if (pe < 1.3) {
+            const q = (1 - pe / 1.3) * 0.55;
+            r = r * (1 - q) + 34 * q;
+            g = g * (1 - q) + 50 * q;
+            b = b * (1 - q) + 24 * q;
           }
           const be = Math.sqrt(d2) - Math.sqrt(d1);
           if (be < 2.2) {
@@ -39537,7 +39626,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
     );
     ground.rotation.x = -Math.PI / 2;
     groundFrame.add(ground);
-    const TOWN_Z = 1180;
+    const TOWN_Z = 1350.6;
     const TOWN_X = -15.3;
     const town = new Group();
     town.position.set(TOWN_X, 6.5, TOWN_Z);
@@ -40060,7 +40149,12 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
     function resetLow(sp, initial) {
       const deep = sp.userData.deep, s = (deep ? 420 : 280) + Math.random() * (deep ? 700 : 480);
       sp.scale.set(s, s * 0.3, 1);
-      sp.position.set((Math.random() - 0.5) * 2e4, deep ? -3300 - Math.random() * 900 : -1900 - Math.random() * 600, initial ? -7e3 + Math.random() * 2e4 : 12e3 + Math.random() * 3e3);
+      sp.position.set(
+        (Math.random() - 0.5) * 2e4,
+        deep ? -2500 - Math.random() * 500 : -1500 - Math.random() * 400,
+        /* 1.7.2: decks raised (deep was down to -4200 u = ~1.3 km over the ground, and drawn after the ground pass it read as clouds lying on the fields) */
+        initial ? -7e3 + Math.random() * 2e4 : 12e3 + Math.random() * 3e3
+      );
       const u = sp.userData.under;
       if (u) {
         u.scale.set(s * 0.92, s * 0.16, 1);
@@ -43917,8 +44011,8 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     function sync(enemiesArr, gunnerState, opts = {}) {
       const shake = gunnerState.shake || 0;
       const recoil = gunnerState.recoil || 0;
-      const sx = (Math.sin(pnow() * 0.097) * 0.095 + Math.sin(pnow() * 0.171) * 0.048) * shake;
-      const sy = (Math.cos(pnow() * 0.113) * 0.072 + Math.sin(pnow() * 0.203) * 0.038) * shake;
+      const sx = (Math.sin(pnow() * 0.021) * 0.095 + Math.sin(pnow() * 0.033) * 0.048) * shake;
+      const sy = (Math.cos(pnow() * 0.024) * 0.072 + Math.sin(pnow() * 0.038) * 0.038) * shake;
       const FALL = opts.fall;
       if (FALL && FALL.eye) camera.position.set(FALL.eye.x + sx, FALL.eye.y + sy, FALL.eye.z);
       else {

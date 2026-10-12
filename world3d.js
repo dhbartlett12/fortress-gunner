@@ -2279,7 +2279,7 @@ export function createWorld3D(canvas) {
         // parcel boundaries (thin, soft) and block edges (hedgerows / lanes)
         const eu = Math.min(fu, 1 - fu) * best.w1, ev = Math.min(fv, 1 - fv) * best.w2;
         const pe = Math.min(eu, ev);
-        if (pe < 0.9) { const q = (1 - pe / 0.9) * 0.22; r = r * (1 - q) + 58 * q; g = g * (1 - q) + 70 * q; b = b * (1 - q) + 42 * q; }
+        if (pe < 1.3) { const q = (1 - pe / 1.3) * 0.55; r = r * (1 - q) + 34 * q; g = g * (1 - q) + 50 * q; b = b * (1 - q) + 24 * q; } // 1.7.2: bocage — every parcel edged by a dark hedgerow line (seen from altitude)
         const be = Math.sqrt(d2) - Math.sqrt(d1);
         if (be < 2.2) { const q = (1 - be / 2.2) * 0.5; r = r * (1 - q) + 52 * q; g = g * (1 - q) + 64 * q; b = b * (1 - q) + 38 * q; }
         const o = (py * N + px) * 4;
@@ -2554,7 +2554,7 @@ export function createWorld3D(canvas) {
   // 1.3.6 TARGET: a small German town with a railway depot (local units: 1 = 10 world u ≈ 15 m).
   // Rail yard (12 tracks, wagons), engine shed, roundhouse + turntable, station, a river with a
   // bridge, streets with gabled roofs, a church, a few sheds/works along the yard.
-  const TOWN_Z = 1180;          // 1.6.4: retuned for 200 mph + 39 s bomb fall (was 1238 @ 180 mph / ~45 s)
+  const TOWN_Z = 1350.6;        // 1.7.2: +170.6 (= +1.79 km): the formation's sticks (release 0:00, 39 s fall) centred 1.79 km past the old spot; 1.6.4: retuned for 200 mph + 39 s bomb fall (was 1238 @ 180 mph / ~45 s)
   const TOWN_X = -15.3;             // 1.5.2: dead on our ground track (was 300 = 3 km to port, so the bombs never hit it)
   const town = new THREE.Group();
   town.position.set(TOWN_X, 6.5, TOWN_Z); // 1.6.3: ~45 world-u up for 3D roofs on 24-bit GPUs; altitude city mass is ground-baked (16-bit safe)
@@ -2909,7 +2909,7 @@ export function createWorld3D(canvas) {
   function resetLow(sp, initial) {
     const deep = sp.userData.deep, s = (deep ? 420 : 280) + Math.random() * (deep ? 700 : 480);
     sp.scale.set(s, s * 0.3, 1);
-    sp.position.set((Math.random() - 0.5) * 20000, deep ? -3300 - Math.random() * 900 : -1900 - Math.random() * 600, initial ? -7000 + Math.random() * 20000 : 12000 + Math.random() * 3000);
+    sp.position.set((Math.random() - 0.5) * 20000, deep ? -2500 - Math.random() * 500 : -1500 - Math.random() * 400, /* 1.7.2: decks raised (deep was down to -4200 u = ~1.3 km over the ground, and drawn after the ground pass it read as clouds lying on the fields) */ initial ? -7000 + Math.random() * 20000 : 12000 + Math.random() * 3000);
     const u = sp.userData.under; if (u) { u.scale.set(s * 0.92, s * 0.16, 1); u.position.set(sp.position.x, sp.position.y - s * 0.07, sp.position.z); }
   }
   for (let i = 0; i < 40; i++) {
@@ -5406,8 +5406,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const shake = gunnerState.shake || 0;
     const recoil = gunnerState.recoil || 0;
     // Cycle 136: MotA-hard fire shake on the GL camera
-    const sx = (Math.sin(pnow() * 0.097) * 0.095 + Math.sin(pnow() * 0.171) * 0.048) * shake;
-    const sy = (Math.cos(pnow() * 0.113) * 0.072 + Math.sin(pnow() * 0.203) * 0.038) * shake;
+    // 1.7.2: 15-32 Hz → 3-6 Hz (a heavy lurch, not a buzz). At a phone's 30-60 fps the old rates aliased into a constant vertical jitter of the whole 3D view.
+    const sx = (Math.sin(pnow() * 0.021) * 0.095 + Math.sin(pnow() * 0.033) * 0.048) * shake;
+    const sy = (Math.cos(pnow() * 0.024) * 0.072 + Math.sin(pnow() * 0.038) * 0.038) * shake;
     const FALL = opts.fall;
     if (FALL && FALL.eye) camera.position.set(FALL.eye.x + sx, FALL.eye.y + sy, FALL.eye.z);
     else {

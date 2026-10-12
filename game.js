@@ -951,12 +951,35 @@
   // 1.6.7 GUN LEAD: the AIR-frame nose direction h that puts a round on a point P moving at (tvx,tvy,tvz) in the box frame.
   // A round leaves at muzzle speed along the nose plus the shooter's CURRENT velocity (box frame), so with w = v_shooter − v_target:
   // |r − w·t| = Vm·t → h = (r − w·t) / (Vm·t). Returns { x, y, z, t } or null.
-  function gunLead(e, px, py, pz, tvx, tvy, tvz) {
-    const rx = px - e.x, ry = py - e.y, rz = pz - e.z, cx = (tvx || 0) - (e.vx || 0), cy = (tvy || 0) - (e.vy || 0), cz = (tvz || 0) - (e.vz || 0), S = BULLET_UPS;
+  function fvMet(k, fired, hit) { if (!mission) return; const M = mission.fvM || (mission.fvM = { nP: 0, hP: 0, nG: 0, hG: 0 }); if (fired) M["n" + k]++; if (hit) M["h" + k]++; }
+  // 1.7.2 DEFLECTION LEAD for every fighter gun (P-51 AI, Easy autopilot, 109/190 at P-51s and at bombers):
+  // aim point = target + v_rel*t + 0.5*a_target*t^2 (+ the round's gravity drop), t = range / the shooter's own muzzle speed, iterated twice.
+  // a_target is the target's measured acceleration (its turn), low-passed so a jinking target doesn't throw the nose around.
+  function gunSpeed(e) { return e && e.type === "p51" ? 880 * U_PER_M : e && (e.type === "109" || e.type === "190") ? 750 * U_PER_M : BULLET_UPS; }
+  function tgtAcc(T) {
+    if (!T || T.vx == null) return null; const now = elapsed;
+    if (T._at !== now) {
+      const dtm = now - (T._at == null ? now : T._at);
+      if (dtm > 0 && dtm < 0.5) { const k = Math.min(1, dtm * 5); T._ax = (T._ax || 0) + ((T.vx - T._pvx) / dtm - (T._ax || 0)) * k; T._ay = (T._ay || 0) + ((T.vy - T._pvy) / dtm - (T._ay || 0)) * k; T._az = (T._az || 0) + ((T.vz - T._pvz) / dtm - (T._az || 0)) * k; }
+      else if (!(dtm > 0)) { T._ax = T._ax || 0; T._ay = T._ay || 0; T._az = T._az || 0; } else { T._ax = T._ay = T._az = 0; }
+      const am = Math.hypot(T._ax, T._ay, T._az), cap = 9 * G_U; if (am > cap) { T._ax *= cap / am; T._ay *= cap / am; T._az *= cap / am; }
+      T._pvx = T.vx; T._pvy = T.vy; T._pvz = T.vz; T._at = now;
+    }
+    return T;
+  }
+  function gunLead(e, px, py, pz, tvx, tvy, tvz, Tobj) {
+    const rx = px - e.x, ry = py - e.y, rz = pz - e.z, cx = (tvx || 0) - (e.vx || 0), cy = (tvy || 0) - (e.vy || 0), cz = (tvz || 0) - (e.vz || 0), S = gunSpeed(e);
     const a = cx * cx + cy * cy + cz * cz - S * S, b = rx * cx + ry * cy + rz * cz, c = rx * rx + ry * ry + rz * rz;
     if (a >= 0) return null;
-    const t = (-b - Math.sqrt(Math.max(0, b * b - a * c))) / a; if (!(t > 0)) return null;
-    const hx = rx + cx * t, hy = ry + cy * t, hz = rz + cz * t, hl = Math.hypot(hx, hy, hz) || 1;
+    let t = (-b - Math.sqrt(Math.max(0, b * b - a * c))) / a; if (!(t > 0)) return null;
+    const A = Tobj ? tgtAcc(Tobj) : null, gx = A ? A._ax : 0, gy = A ? A._ay : 0, gz = A ? A._az : 0;
+    let hx = 0, hy = 0, hz = 0;
+    for (let it = 0; it < 2; it++) {
+      const h2 = 0.5 * t * t;
+      hx = rx + cx * t + gx * h2; hy = ry + cy * t + gy * h2 + BAL_G * h2; hz = rz + cz * t + gz * h2;
+      t = Math.hypot(hx, hy, hz) / S;
+    }
+    const hl = Math.hypot(hx, hy, hz) || 1;
     return { x: hx / hl, y: hy / hl, z: hz / hl, t };
   }
   function leadCos(e, L) { return L ? L.x * e.hx + L.y * e.hy + L.z * e.hz : -1; }
@@ -1530,12 +1553,12 @@
     if (rideHolds(e)) return; // 1.6.6
     const hl = Math.hypot(e.hx, e.hz) || 1, sx = e.hz / hl, sz = -e.hx / hl; // right wing direction
     const dx = T.x - e.x, dy = T.y - e.y, dz = T.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
-    const LT = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz), tf = LT ? LT.t : dl / BULLET_UPS, ax = T.x + T.vx * tf - e.x, ay = T.y + T.vy * tf - e.y, az = T.z + T.vz * tf - e.z, al = Math.hypot(ax, ay, az) || 1, SP = al / Math.max(0.05, tf); // 1.6.7: the tracer flies the real line to where the German will be
+    const LT = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz, T), tf = LT ? LT.t : dl / BULLET_UPS, ax = T.x + T.vx * tf - e.x, ay = T.y + T.vy * tf - e.y, az = T.z + T.vz * tf - e.z, al = Math.hypot(ax, ay, az) || 1, SP = al / Math.max(0.05, tf); // 1.6.7: the tracer flies the real line to where the German will be
     { // 1.6.8: one glowing round per 70 ms slice from the next of the six REAL wing guns, toward the 300-yd harmonisation point on the sight line, muzzle speed + own speed
       e.gunI = ((e.gunI || 0) + 1) % 6;
       const r = rightOf(e), G = GUNPOS.p51[e.gunI], M = muzzleOf(e, G.p, r), Hc = HARM.p51;
       let qx = e.x + e.hx * Hc - M.x, qy = e.y + e.hy * Hc - M.y, qz = e.z + e.hz * Hc - M.z; const ql = Math.hypot(qx, qy, qz) || 1; qx /= ql; qy /= ql; qz /= ql;
-      tracers.push({ x: M.x, y: M.y, z: M.z, vx: qx * BULLET_UPS + e.vx, vy: qy * BULLET_UPS + e.vy, vz: qz * BULLET_UPS + e.vz, life: 1.4, maxLife: 1.4, trav: 0, team: "allied", p51: true, ftr: 1, fvf: T && T.type !== "p51" ? 1 : 0 });
+      tracers.push({ x: M.x, y: M.y, z: M.z, vx: qx * gunSpeed(e) + e.vx, vy: qy * gunSpeed(e) + e.vy, vz: qz * gunSpeed(e) + e.vz, life: 1.4, maxLife: 1.4, trav: 0, team: "allied", p51: true, ftr: 1, fvf: T && T.type !== "p51" ? 1 : 0, tgt: T && T.type !== "p51" ? T : null }); fvMet("P", T && T.type !== "p51");
       void sx; void sz; void ax; void ay; void az; void SP;
     }
     e.mf = 0.1; e.mfI = (e.mfI || 0) + 1;
@@ -1566,7 +1589,7 @@
   // Returns true while the guns are firing. A burst lasts 0.45–0.95 s (≈ 40 rounds a gun-pair), then a short gap; gun-camera rules: inside ~370 u, within a few degrees.
   function p51Fire(e, T, range, cosA, dt, hm) {
     const near = Math.hypot(e.x - CAM.x, e.y - CAM.y, e.z - CAM.z) < 1500;
-    { const L = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz), c = leadCos(e, L); cosA = c > GUN_COS ? 1 : 0.5; if (range > GUN_RANGE) cosA = 0.5; } // 1.6.7: six .50s only with the nose within 3° of the lead point, inside 600 m
+    { const L = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz, T), c = leadCos(e, L); cosA = c > GUN_COS ? 1 : 0.5; if (range > GUN_RANGE) cosA = 0.5; } // 1.6.7: six .50s only with the nose within 3° of the lead point, inside 600 m
     if (!e.pbOn) {
       e.pbGap = (e.pbGap || 0) - dt;
       if (e.pbGap <= 0 && range < 400 && range > 40 && cosA > (range < 160 ? 0.93 : 0.955)) {
@@ -1685,7 +1708,7 @@
       // 1.5.7: ~410 mph cruise (P-51D: ~437 mph max at 25,000 ft, ~380-400 mph combat cruise); a dive adds up to 470 to run a 190 down
       let ax = lx, ay = ly, az = lz;
       if (e.chLead && MW && (MW.phase === "intercept" || MW.phase === "zoom") && range > 400) { const dm = Math.hypot(e.x - MW.x, e.y - MW.y, e.z - MW.z); if (dm > 380) { const w = clamp((dm - 380) / 350, 0, 0.85); ax += (MW.x + MW.vx * 1.2 - ax) * w; ay += (MW.y + MW.vy * 1.2 - ay) * w; az += (MW.z + MW.vz * 1.2 - az) * w; } } // 1.6.0: the leader bends back toward a wingman who is falling behind
-      const LgP = range < GUN_RANGE * 1.4 ? gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz) : null; // 1.6.7: inside ~850 m he flies LEAD PURSUIT for his guns (nose on the bullet-lead point), farther out a curve of pursuit to catch him
+      const LgP = range < GUN_RANGE * 1.4 ? gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz, T) : null; // 1.6.7: inside ~850 m he flies LEAD PURSUIT for his guns (nose on the bullet-lead point), farther out a curve of pursuit to catch him
       d = LgP && (rx * e.hx + ry * e.hy + rz * e.hz) / range > 0.5 ? LgP : airDirTo(e, ax, ay, az); d = slopeLimit(e, d, -0.9, 0.7); d = safeDir(e, d); flyStep(e, d.x, d.y, d.z, dt, LgP ? 2.4 : 1.9);
       const vb = Math.hypot(e.vx, e.vy, e.vz) || 1;
       const cosA = (rx * e.vx + ry * e.vy + rz * e.vz) / (range * vb);
@@ -1848,7 +1871,7 @@
     e.target = null;
     reformOrEgress(e);
   }
-  function killP51(e, by) { // a Mustang shot down (by a German, or by friendly fire: by = "you" / "gun"): wreck + a chute
+  function killP51(e, by) { if (mission) mission.p51Lost = (mission.p51Lost || 0) + 1; // a Mustang shot down (by a German, or by friendly fire: by = "you" / "gun"): wreck + a chute
     e.alive = false; e.burst = null; if (e.target) e.target.p51n = Math.max(0, (e.target.p51n || 0) - 1);
     if (e.foe && e.foe.foe === e) e.foe.foe = null; e.foe = null;
     if (mission) { mission.p51Lost = (mission.p51Lost || 0) + 1; const k = by === "you" ? "p51LostYou" : by === "gun" ? "p51LostGun" : "p51LostGer"; mission[k] = (mission[k] || 0) + 1; }
@@ -1893,11 +1916,11 @@
       let lx = f.x + f.vx * tL, ly = f.y + f.vy * tL, lz = f.z + f.vz * tL;
       if (R < 120 && cosA < 0.93) { lx -= f.hx * 70; ly += 30; lz -= f.hz * 70; } // overshooting: lag pursuit / high yo-yo
       d = airDirTo(e, lx, ly, lz);
-      const LgD = R < GUN_RANGE * 1.3 && R >= 120 && cosA > 0.7 ? gunLead(e, f.x, f.y, f.z, f.vx, f.vy, f.vz) : null; if (LgD) d = LgD; // 1.6.7: lead pursuit for the guns
+      const LgD = R < GUN_RANGE * 1.3 && R >= 120 && cosA > 0.7 ? gunLead(e, f.x, f.y, f.z, f.vx, f.vy, f.vz, f) : null; if (LgD) d = LgD; // 1.6.7: lead pursuit for the guns
       e.vT = clamp(f.V * 1.04 + (R - 160) * 0.2, 285 * MPH, isP ? 440 * MPH : 400 * MPH);
       e.fireCd -= dt;
       if (isP) { if (e.duelDelay <= 0 && p51Fire(e, f, R, cosA, dt, DF.hitMul * 1.4)) { if (mission && !e.duelBurstCt) { } } }
-      else if (e.fireCd <= 0 && e.duelDelay <= 0 && leadCos(e, gunLead(e, f.x, f.y, f.z, f.vx, f.vy, f.vz)) > GUN_COS && R < 360 && R > 45) {
+      else if (e.fireCd <= 0 && e.duelDelay <= 0 && leadCos(e, gunLead(e, f.x, f.y, f.z, f.vx, f.vy, f.vz, f)) > GUN_COS && R < 360 && R > 45) {
         e.fireCd = rand(DF.pBurst[0], DF.pBurst[1]);
         duelBurst(e, f, R);
       }
@@ -2491,7 +2514,7 @@
     const rx = T.x - e.x, ry = T.y - e.y, rz = T.z - e.z, R = Math.hypot(rx, ry, rz) || 1;
     const wx = T.vx - e.vx, wy = T.vy - e.vy, wz = T.vz - e.vz, closing = -(rx * wx + ry * wy + rz * wz) / R;
     const ao = (rx * T.hx + ry * T.hy + rz * T.hz) / R; // > 0: I am behind him
-    const Lg = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz);
+    const Lg = gunLead(e, T.x, T.y, T.z, T.vx, T.vy, T.vz, T);
     let d, mode;
     if (R > 900) { const tgo = clamp(R / Math.max(60, closing), 0, 7) * 0.7; d = airDirTo(e, T.x + T.vx * tgo, T.y + T.vy * tgo, T.z + T.vz * tgo); mode = "int"; }
     else if (R < 320 && closing > 30 && ao > 0.3) { d = airDirTo(e, T.x - T.hx * 70, T.y - T.hy * 70, T.z - T.hz * 70); mode = "lag"; }
@@ -2522,7 +2545,7 @@
       B.fAcc -= 0.08;
       const r = rightOf(e), GP = gunsOf(e), G = GP[(B.gi = ((B.gi || 0) + 1) % GP.length)], m = muzzleOf(e, G.p, r), Hc = HARM[e.type] || 250;
       let dx = e.x + e.hx * Hc - m.x, dy = e.y + e.hy * Hc - m.y, dz = e.z + e.hz * Hc - m.z; const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
-      tracers.push({ x: m.x, y: m.y, z: m.z, vx: dx * BULLET_UPS + e.vx, vy: dy * BULLET_UPS + e.vy, vz: dz * BULLET_UPS + e.vz, life: 1.4, maxLife: 1.4, trav: 0, team: "axis", k190: e.type === "190", ftr: 1, fvf: 1 });
+      fvMet("G", true); tracers.push({ tgt: F, x: m.x, y: m.y, z: m.z, vx: dx * gunSpeed(e) + e.vx, vy: dy * gunSpeed(e) + e.vy, vz: dz * gunSpeed(e) + e.vz, life: 1.4, maxLife: 1.4, trav: 0, team: "axis", k190: e.type === "190", ftr: 1, fvf: 1 });
       e.mf = 0.1; if (window.FGAudio && Math.random() < 0.3) window.FGAudio.enemyGun(e.x, e.y, e.z);
       const rf = FC.rangeFactor(FC.GUNS.mg151, FC.toYd(R)), p = 0.16 * rf * clamp(1 - Math.abs(F.gLoad || 1) * 0.06, 0.6, 1);
       if (Math.random() < p) { F.hp -= e.type === "190" ? 5 : 4.2; F.flash = 1; F.smoke = Math.min(1, (F.smoke || 0) + 0.3); spawnHit(F, null); if (mission) mission.duelGerHits = (mission.duelGerHits || 0) + 1; if (F.hp <= 0) { killP51(F, e); return; } }
@@ -4724,6 +4747,7 @@
   }
   function startRide(e) {
     if (!rideOk(e) || state !== "PLAYING" || downSeq) return false;
+    tiltRecenter(); tiltPermission(); // 1.7.2: twist rudder neutral = how you hold the phone now
     const keep = ride && ride.e !== e ? { yaw: 0, pitch: 0 } : null;
     ride = { e, id: e.id, yaw: 0, pitch: 0, acc: [0, 0, 0, 0, 0, 0], flash: 0, trc: 0, snd: 0, deadT: null, tapT: 0, basis: null, eye: null, pf: null, fly: !window.__FG_RIDE_AUTO, stickR: 0, stickP: 0, rollId: null, pitchId: null }; // 1.6.9: you fly it (F = autopilot)
     void keep;
@@ -4772,13 +4796,25 @@
     const FP = World3D && World3D._fpov, c = FP && FP._camera; if (!c || !FP.on) return null;
     const cp = Math.cos(fpov.pitch); return { C: { x: c.position.x, y: c.position.y, z: c.position.z }, d: { x: Math.sin(fpov.yaw) * cp, y: Math.sin(fpov.pitch), z: Math.cos(fpov.yaw) * cp } };
   }
+  const FPV_MAXR = 10500 * U_PER_M; // 1.7.2: the 88's practical slant range (~10.5 km); beyond it no pip
   function fpovPip() { // lead point: the ground (and the gun) moves -z at VF in the box frame, so a burst T s from now must be laid VF*T ahead (+z) of the bomber
-    const A0 = fpovAim(); if (!A0) { fpov.pip = null; return; } const { C, d } = A0;
+    // 1.7.2: STABLE target — keep the current bomber while it stays in range (hysteresis: switch only if another is 25% closer); lead from its
+    // low-passed velocity; the pip itself is low-passed, so a fire/recoil frame can't flip it. Nothing in range -> no pip.
+    const A0 = fpovAim(); if (!A0) { fpov.pip = null; return; } const { C } = A0;
     const L = []; if (bomber && !bomber.dead) L.push(CAM); for (const f of friendlies) if (friendlyOk(f)) L.push(f);
-    let best = null, bc = -2; for (const B of L) { const rx = B.x - C.x, ry = B.y - C.y, rz = B.z - C.z, r = Math.hypot(rx, ry, rz) || 1, c = (rx * d.x + ry * d.y + rz * d.z) / r; if (c > bc) { bc = c; best = B; } }
-    if (!best) { fpov.pip = null; return; }
-    let T = 15, A = null; for (let i = 0; i < 4; i++) { A = { x: best.x, y: best.y, z: best.z + VF * T }; T = Math.hypot(A.x - C.x, A.y - C.y, A.z - C.z) / FPV_MS; }
-    fpov.pip = A; fpov.T = T; fpov.R = Math.hypot(A.x - C.x, A.y - C.y, A.z - C.z);
+    const rng = (B) => Math.hypot(B.x - C.x, B.y - C.y, B.z - C.z);
+    let best = null, br = 1e12; for (const B of L) { const r = rng(B); if (r < FPV_MAXR && r < br) { br = r; best = B; } }
+    let cur = fpov.tgt && L.includes(fpov.tgt) && rng(fpov.tgt) < FPV_MAXR * 1.04 ? fpov.tgt : null;
+    if (!cur || (best && best !== cur && br < rng(cur) * 0.75)) cur = best;
+    if (cur !== fpov.tgt) { fpov.tgt = cur; fpov.tv = null; fpov.pipS = null; }
+    if (!cur) { fpov.pip = null; fpov.R = null; return; }
+    const now = elapsed; // smoothed target velocity (box frame)
+    if (fpov.tp && fpov.tv && now > fpov.tpT) { const dt = now - fpov.tpT, k = Math.min(1, dt * 1.5); fpov.tv.x += ((cur.x - fpov.tp.x) / dt - fpov.tv.x) * k; fpov.tv.y += ((cur.y - fpov.tp.y) / dt - fpov.tv.y) * k; fpov.tv.z += ((cur.z - fpov.tp.z) / dt - fpov.tv.z) * k; }
+    else if (!fpov.tv) fpov.tv = { x: 0, y: 0, z: 0 };
+    fpov.tp = { x: cur.x, y: cur.y, z: cur.z }; fpov.tpT = now;
+    const v = fpov.tv; let T = 15, A = null; for (let i = 0; i < 4; i++) { A = { x: cur.x + v.x * T, y: cur.y + v.y * T, z: cur.z + (v.z + VF) * T }; T = Math.hypot(A.x - C.x, A.y - C.y, A.z - C.z) / FPV_MS; }
+    if (!fpov.pipS) fpov.pipS = { x: A.x, y: A.y, z: A.z }; else { const k = 0.12; fpov.pipS.x += (A.x - fpov.pipS.x) * k; fpov.pipS.y += (A.y - fpov.pipS.y) * k; fpov.pipS.z += (A.z - fpov.pipS.z) * k; }
+    const P = fpov.pipS; fpov.pip = P; fpov.R = Math.hypot(P.x - C.x, P.y - C.y, P.z - C.z); fpov.T = fpov.R / FPV_MS;
   }
   function fpovFire(dt) {
     fpov.cd = Math.max(0, (fpov.cd || 0) - dt); fpovPip();
@@ -4789,6 +4825,15 @@
     flakBursts.push(b); F.bursts++; F.mine = (F.mine || 0) + 1;
     fpov.cd = rand(3.2, 3.8); fpov.shots = (fpov.shots || 0) + 1; addKick && addKick("flak", 0.6);
     try { World3D._fpov.fireMine(); } catch (er) {}
+  }
+  function drawFlyZones() { // 1.7.2: the top-left hold-to-fire zone (+ the Easy lead pip)
+    ctx.save(); const on = ride.fireId != null, w = W * 0.5, h = H * 0.42;
+    ctx.fillStyle = on ? "rgba(255,120,60,0.16)" : "rgba(255,255,255,0.035)"; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = on ? "rgba(255,140,80,0.55)" : "rgba(255,255,255,0.12)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, h); ctx.lineTo(w, h); ctx.stroke();
+    ctx.fillStyle = on ? "rgba(255,190,140,0.9)" : "rgba(255,255,255,0.32)"; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "center"; ctx.fillText("FIRE", w * 0.5, h * 0.55);
+    ride.pipW = null; { const T = ride.easyT, e = ride.e; if (T && T.alive !== false && e && localStorage.getItem("fg_difficulty") === "easy") { const R = Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z); if (R < 700) { const L = gunLead(e, T.x, T.y, T.z, T.vx || 0, T.vy || 0, T.vz || 0, T); if (L) { const D = L.t * gunSpeed(e); ride.pipW = { x: e.x + L.x * D, y: e.y + L.y * D, z: e.z + L.z * D }; } } } }
+    if (ride.pipW) { const pe = projectStable(ride.pipW.x, ride.pipW.y, ride.pipW.z); if (pe) { ctx.strokeStyle = "rgba(255,80,60,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(pe.sx, pe.sy, 6, 0, 6.29); ctx.stroke(); ctx.beginPath(); ctx.arc(pe.sx, pe.sy, 1.2, 0, 6.29); ctx.stroke(); } }
+    ctx.restore();
   }
   function drawFlakSight() {
     ctx.save(); const cx = W * 0.5, cy = H * 0.5;
@@ -4818,12 +4863,12 @@
     const K = input.keys || {};
     if (K["a"] || K["arrowleft"]) r -= 1; if (K["d"] || K["arrowright"]) r += 1;
     if (K["s"] || K["arrowdown"]) p += 1; if (K["w"] || K["arrowup"]) p -= 1; // stick back (S / down) = nose up
-    let y = ride.stickY || 0; if (K["q"]) y -= 1; if (K["e"]) y += 1; // 1.6.9f: rudder — right thumb sideways / Q-E
+    let y = ride.tiltY || 0; if (K["q"]) y -= 1; if (K["e"]) y += 1; // 1.7.2: rudder = twist the phone like a steering wheel (right thumb is pitch only) / Q-E on desktop
     return { r: clamp(r, -1, 1), p: clamp(p, -1, 1), y: clamp(y, -1, 1) };
   }
   function easyChase(e, T, dt) { // 1.7.1 EASY autopilot: curve in to ~250 u behind him, then lead pursuit to gun range; the trigger stays yours
     const rx = T.x - e.x, ry = T.y - e.y, rz = T.z - e.z, R = Math.hypot(rx, ry, rz) || 1;
-    let ax, ay, az; if (R > 420) { ax = T.x - (T.hx || 0) * 250; ay = T.y - (T.hy || 0) * 250 + 20; az = T.z - (T.hz || 0) * 250; } else { const tf = R / BULLET_UPS; ax = T.x + ((T.vx || 0) - (e.vx || 0)) * tf; ay = T.y + ((T.vy || 0) - (e.vy || 0)) * tf; az = T.z + ((T.vz || 0) - (e.vz || 0)) * tf; } // rounds inherit our own velocity
+    let ax, ay, az; if (R > 420) { ax = T.x - (T.hx || 0) * 250; ay = T.y - (T.hy || 0) * 250 + 20; az = T.z - (T.hz || 0) * 250; } else { const L = gunLead(e, T.x, T.y, T.z, T.vx || 0, T.vy || 0, T.vz || 0, T), D = L ? L.t * gunSpeed(e) : R; if (L) { ax = e.x + L.x * D; ay = e.y + L.y * D; az = e.z + L.z * D; } else { ax = T.x; ay = T.y; az = T.z; } } // 1.7.2: the deflection lead point (turn accel + drop), not the target itself
     e.vT = R > 300 ? 520 * MPH : Math.max(FAI.vMin, (T.V || 0) + (R - 180) * 0.3);
     flyCtl(e, ax - e.x, ay - e.y, az - e.z, dt, { gain: 2.2, nMax: 6, hard: R < 700 }); e.phase = e.phase || "cap";
   }
@@ -4923,6 +4968,16 @@
     if (fpov && World3D && World3D.fpovStats) { const S = World3D.fpovStats; const L = S && S.lastImpact; if (L && L !== _fpImp && _fpImp !== undefined) { if (L.dM < 3000 && V.flakCrew) V.flakCrew("bombs"); } _fpImp = L;
       const lost = mission ? mission.friendliesLost || 0 : 0; if (_fpLost != null && lost > _fpLost && V.flakCrew) V.flakCrew("burn"); _fpLost = lost; } else { _fpLost = null; }
   }
+  // 1.7.2 TWIST RUDDER: the up-vector (accelerationIncludingGravity) in the screen plane gives the phone's roll about the screen normal;
+  // the angle relative to a neutral (captured at fly start / double-tap left) -> rudder, 4 deg deadzone, full at 25 deg, smoothed.
+  // Angle DIFFERENCES are independent of landscape-left/right (a constant rotation) and of the iOS/Android sign convention.
+  const tilt = { a: null, n: null, tgt: 0, last: 0 };
+  window.addEventListener("devicemotion", (ev) => { const g = ev.accelerationIncludingGravity; if (!g || g.x == null) return; const gx = g.x, gy = g.y; if (Math.hypot(gx, gy) < 3) return; // phone too flat: no twist reading
+    const a = Math.atan2(gx, gy); tilt.a = a; if (tilt.n == null) tilt.n = a; let d = a - tilt.n; d = Math.atan2(Math.sin(d), Math.cos(d)); const dg = d * 57.2958, m = Math.max(0, Math.abs(dg) - 4) / 21;
+    tilt.tgt = -Math.sign(dg) * Math.min(1, m); tilt.last = performance.now(); });
+  function tiltRecenter() { tilt.n = tilt.a; tilt.tgt = 0; if (ride) ride.tiltY = 0; }
+  function tiltTick(dt) { if (!ride) return; const live = performance.now() - tilt.last < 500; const tg = live && ride.fly ? tilt.tgt : 0; ride.tiltY = (ride.tiltY || 0) + (tg - (ride.tiltY || 0)) * Math.min(1, dt * 8); }
+  function tiltPermission() { try { const DM = window.DeviceMotionEvent; if (DM && typeof DM.requestPermission === "function") DM.requestPermission().catch(() => {}); } catch (er) {} }
   function rideFlying() { return !!(ride && ride.fly && ride.deadT == null); }
   let _flyBridge = null;
   function flyBridgeSync() { const f = rideFlying(); if (f !== _flyBridge) { _flyBridge = f; try { if (window.AndroidFG && window.AndroidFG.setFlying) window.AndroidFG.setFlying(f); } catch (er) {} } const b = document.getElementById("flyFire"); if (b) b.classList.toggle("hidden", !(f || fpov)); }
@@ -5523,7 +5578,7 @@
     if (heavy) { particles.push({ x, y, z, vx: vx * 0.4, vy: vy * 0.4, vz: vz * 0.4, wait: 0, life: 0.2, max: 0.2, kind: "bloom", r: rand(4.2, 6.2), ang: 0 }); fx154.n.bloom++; }
   }
   function addKick(kind, amp) { // shaped camera kick: flak = one hard low jolt then a slow wobble; cannon = a quick high shudder; mg = a faint tick
-    const K = kind === "flak" ? { f: 7.5, dec: 0.5, jolt: 0.7 } : kind === "cannon" ? { f: 22, dec: 0.2, jolt: 0.25 } : { f: 30, dec: 0.1, jolt: 0 };
+    const K = kind === "flak" ? { f: 4.5, dec: 0.4, jolt: 0.7 } : kind === "cannon" ? { f: 9, dec: 0.15, jolt: 0.25 } : { f: 12, dec: 0.08, jolt: 0 }; // 1.7.2: lower kick rates (no alias buzz at phone fps)
     if (kind === "cannon") { if (elapsed - fx154.lastCannonKick < 0.06) amp *= 0.45; fx154.lastCannonKick = elapsed; }
     fx154.kicks.push({ t: 0, amp, f: K.f * rand(0.9, 1.1), dec: K.dec, jolt: K.jolt, ph: rand(0, TAU), ax: rand(0.5, 1) * (Math.random() < 0.5 ? -1 : 1), ay: kind === "flak" ? 1 : rand(0.6, 1) * (Math.random() < 0.5 ? -1 : 1) });
     if (fx154.kicks.length > 8) fx154.kicks.shift();
@@ -5782,7 +5837,13 @@
     }
     if (bomber && !bomber.dead && !godMode) {
       const d = Math.hypot(CAM.x - b.x, CAM.y - b.y, CAM.z - b.z);
-      if (d < 90) { gunner.shake = Math.max(gunner.shake, 1.5 * (1 - d / 90)); rumble = Math.max(rumble, 1 - d / 90); addKick('flak', 0.08 + 0.42 * Math.pow(1 - d / 90, 0.8)); if (d < 55) cabinHit(0.9 * (1 - d / 55) + 0.1, 'flak'); }
+      // 1.7.2 JITTER FIX: the 1.7.0 box barrage (8-14 bursts/s) put a burst inside 90 u every few frames; each one restarted the 15 Hz camera shake
+      // and stacked another flak kick, so the whole 3D view buzzed vertically non-stop. Now: a jolt only for a really close burst, inside 65 u, at most ~1 per 2.5 s
+      // (a closer burst may still override), and the shake falls off with the square of the miss distance.
+      const q = 1 - d / 90, kOk = d < 65 && (elapsed - (fx154.lastFlakKick || -9) > 2.5 || q > (fx154.lastFlakQ || 0) + 0.3);
+      if (kOk) { fx154.lastFlakKick = elapsed; fx154.lastFlakQ = q; }
+      if (d < 90 && !kOk) rumble = Math.max(rumble, q * 0.6);
+      if (kOk) { gunner.shake = Math.max(gunner.shake, 1.2 * q * q); rumble = Math.max(rumble, q); addKick('flak', 0.06 + 0.4 * Math.pow(q, 1.2)); if (d < 55) cabinHit(0.9 * (1 - d / 55) + 0.1, 'flak'); }
       if (d <= FLAK.radiusU) {
         F.hitsP++;
         if (window.FGAudio) window.FGAudio.hitOwn("flak");
@@ -6073,7 +6134,7 @@
     if (window.FGVoice && mission && !update._inAdvance) { try { if (VX.bailed && downSeq && downSeq.chute && downSeq.chute.t > 3.2 && !window.FGVoice.silenced && (downSeq.chute.t > 7 || !window.FGVoice.state().cur)) window.FGVoice.silence(true); /* 1.6.0: the last line ("You're out!") is allowed to finish before the radio goes quiet */ vTimeline(); window.FGVoice.gunsFiring = !!input.fire; window.FGVoice.tick(mission.t); } catch (e) { window.FGVoice.stats.errors++; } }
     if (downSeq && state === "PLAYING") updateDownSeq(dt);
     updateWorld(dt, false);
-    rideTick(dt); fpovTick(dt); voiceCtxTick();
+    rideTick(dt); tiltTick(dt); fpovTick(dt); voiceCtxTick();
     updateHud();
     rideHud();
     if (callouts.length) {
@@ -6186,6 +6247,7 @@
       }
       if (t.vx != null) {
         balStep(t, dt); // 1.3.9: same gravity + drag as ours
+        if (t.tgt && !t.hitG) { const T2 = t.tgt; if (Math.hypot(t.x - T2.x, t.y - T2.y, t.z - T2.z) < 5) { t.hitG = 1; fvMet(t.team === "axis" ? "G" : "P", false, 1); } } // 1.7.2 aim metric: the round's line passes within 7.5 m of its target
         t.trav = (t.trav || 0) + Math.hypot(t.x - t.px, t.y - t.py, t.z - t.pz);
         if (t.team === "allied" && t.shooter && t.trav > 6) { // stray CPU rounds can strike friends
           const fh = hitFriendlySeg(t.px, t.py, t.pz, t.x, t.y, t.z, t.shooter, true); // 1.3.8: box gunners' strays vs the real, banked mesh too
@@ -6336,6 +6398,7 @@
     if (!inChute && !(ride || fpov)) drawCabinFx();
     if (!downSeq && !(ride || fpov)) drawCrosshair(models3d && !inChute);
     if (fpov && !downSeq) drawFlakSight();
+    if (rideFlying()) drawFlyZones();
     if (!inChute) drawHitMarks();
     if (!models3d) drawFarFighters(); // 1.3.6: 3D mode draws far 109s as depth-tested GL specks
     if (!downSeq) { if (!ride) drawIncoming(); if (!mouse.desktop) drawControls(); } // 1.4.0-web: no touch hints on desktop
@@ -8245,7 +8308,8 @@
         let best = null, bd = 56; for (const q of enemies) { if (!q.alive || q.team === "allied" || q.hold) continue; const pe = projectStable(q.x, q.y, q.z); if (!pe) continue; const d = Math.hypot(pe.sx - x, pe.sy - y); if (d < bd) { bd = d; best = q; } }
         if (best) { ride.easyT = best; pushCallout("ATTACKING — AUTOPILOT", 1.2, true); ev.preventDefault(); return; }
       }
-      if (x < W * 0.5) { ride.rollId = ev.pointerId; ride.rollX0 = x; ride.stickR = 0; }
+      if (x < W * 0.5 && y < H * 0.42) { ride.fireId = ev.pointerId; input.fire = true; ev.preventDefault(); return; } // 1.7.2: top-left = hold to fire (zone fixed at touch start)
+      if (x < W * 0.5) { ride.rollId = ev.pointerId; ride.rollX0 = x; ride.stickR = 0; const nw = performance.now(); if (nw - (ride.lTap || 0) < 320) { tiltRecenter(); pushCallout("RUDDER CENTRED", 0.8, true); } ride.lTap = nw; }
       else { ride.pitchId = ev.pointerId; ride.pitchY0 = y; ride.pitchX0 = x; ride.stickP = 0; ride.stickY = 0; }
       ev.preventDefault();
       return;
@@ -8268,7 +8332,7 @@
   window.addEventListener("pointermove", (ev) => {
     if (ev.pointerType === "mouse") return; // 1.4.0-web: mouse is handled by the mousemove path above
     if (state !== "PLAYING") return;
-    if (ride && ride.fly) { const FS = Math.max(60, Math.min(W, H) * 0.16); if (ev.pointerId === ride.rollId) { ride.stickR = clamp((ev.clientX - ride.rollX0) / FS, -1, 1); return; } if (ev.pointerId === ride.pitchId) { ride.stickP = clamp((ev.clientY - ride.pitchY0) / (FS * 0.8), -1, 1); ride.stickY = clamp((ev.clientX - ride.pitchX0) / FS, -1, 1); return; } }
+    if (ride && ride.fly) { const FS = Math.max(60, Math.min(W, H) * 0.16); if (ev.pointerId === ride.rollId) { ride.stickR = clamp((ev.clientX - ride.rollX0) / FS, -1, 1); return; } if (ev.pointerId === ride.pitchId) { ride.stickP = clamp((ev.clientY - ride.pitchY0) / (FS * 0.8), -1, 1); return; } }
     if (input.stickActive && ev.pointerId === input.stickId) {
       // 1.3.3: direct drag-to-rotate — camera moves exactly with the finger, nothing after
       const dx = ev.clientX - input.lastX;
@@ -8288,6 +8352,7 @@
       // 1.4.0: no tap-to-skip any more — the END MISSION button ends it (a stray tap while looking around must not)
     }
     if (ev.pointerId === input.fireId) { input.fire = false; input.fireId = null; }
+    if (ride && ev.pointerId === ride.fireId) { ride.fireId = null; input.fire = false; }
     if (ride) { if (ev.pointerId === ride.rollId) { ride.rollId = null; ride.stickR = 0; } if (ev.pointerId === ride.pitchId) { ride.pitchId = null; ride.stickP = 0; ride.stickY = 0; } }
     if (ev.pointerId === input.stickId) {
       input.stickActive = false; input.stickId = null;
@@ -8319,7 +8384,7 @@
       else if (ride && (k === "," || k === "q")) rideCycle(-1);
       else if (ride && (k === "." || k === "e")) rideCycle(1);
       else if (ride && k === "c") rideRecenter();
-      else if (ride && k === "f") { ride.fly = !ride.fly; ride.stickR = ride.stickP = ride.stickY = 0; pushCallout(ride.fly ? "YOU HAVE CONTROL" : "AUTOPILOT", 1.0, true); flyBridgeSync(); }
+      else if (ride && k === "f") { ride.fly = !ride.fly; ride.stickR = ride.stickP = ride.stickY = 0; tiltRecenter(); tiltPermission(); pushCallout(ride.fly ? "YOU HAVE CONTROL" : "AUTOPILOT", 1.0, true); flyBridgeSync(); }
     }
     if (k === " " || k === "enter") {
       if (state === "TITLE") startGame();
@@ -8546,6 +8611,9 @@
     killGun: (k) => { if (bomber && bomber.sd && bomber.sd.gun) bomber.sd.gun[k] = 0; },
     ownEngine: (i, fire, out) => { if (!bomber) return; const e = bomber.engines[i]; e.fire = fire; e.out = !!out; },
     // Deterministic time advance for headless playtests (rAF+dt-cap runs slow under SwiftShader)
+    tgtPts: () => mission && mission.tgt ? { pts: mission.tgt.pts || [], G: mission.tgt.G && { X: mission.tgt.G.X, Z: mission.tgt.G.Z, S: mission.tgt.G.S, K: mission.tgt.G.K } } : null,
+    fireState: () => ({ fire: !!input.fire, fz: !!(ride && ride.fireId != null), roll: !!(ride && ride.rollId != null) }), // 1.7.2 test hook
+    fvM: () => mission && Object.assign({ p51Kills: mission.p51Kills || 0, p51Lost: mission.p51Lost || 0 }, mission.fvM), drawNow: () => draw(), // 1.7.2 test hook: one real frame render (jitter harness)
     advance: (sec) => {
       const s = Math.max(0, Number(sec) || 0);
       const step = window.__FG_STEP || 0.016; // 1.6.8: harness may pin the sim step (1/30, 1/60, 1/120)

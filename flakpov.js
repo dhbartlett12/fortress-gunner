@@ -85,11 +85,42 @@ export function createFlakPov(env) {
     const m = new THREE.Mesh(new THREE.CircleGeometry(30000 * M, 96), new THREE.MeshLambertMaterial({ map: tex })); m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.03 * M, cz); m.renderOrder = 29;
     m.material.polygonOffset = true; m.material.polygonOffsetFactor = -2; m.material.polygonOffsetUnits = -2; root.add(m); return m;
   }
+  function grassNear(cx, cz) { // 1.7.2: a real grass texture up close (blades + tufts + clover), tiled ~every 6 m, fading out by ~450 m
+    const N = 512, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
+    x.fillStyle = "#4f6a2c"; x.fillRect(0, 0, N, N);
+    for (let i = 0; i < 2600; i++) { const px = R() * N, py = R() * N, l = RR(3, 11), a = RR(-0.6, 0.6) - 1.57, g = (R() * 60) | 0;
+      x.strokeStyle = "rgba(" + (60 + g * 0.6 | 0) + "," + (95 + g) + "," + (35 + g * 0.3 | 0) + ",0.8)"; x.lineWidth = RR(0.8, 1.8); x.beginPath(); x.moveTo(px, py); x.lineTo(px + Math.cos(a) * l, py + Math.sin(a) * l); x.stroke(); }
+    for (let i = 0; i < 90; i++) { x.fillStyle = R() < 0.5 ? "rgba(40,58,22,0.35)" : "rgba(120,130,60,0.25)"; x.beginPath(); x.arc(R() * N, R() * N, RR(6, 22), 0, 6.29); x.fill(); }
+    const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(150, 150); tex.anisotropy = 8; if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    const ac = document.createElement("canvas"); ac.width = ac.height = 256; const y = ac.getContext("2d"); const gr = y.createRadialGradient(128, 128, 30, 128, 128, 128); gr.addColorStop(0, "#fff"); gr.addColorStop(0.55, "#bbb"); gr.addColorStop(1, "#000"); y.fillStyle = gr; y.fillRect(0, 0, 256, 256);
+    const m = new THREE.Mesh(new THREE.CircleGeometry(900 * M, 64), new THREE.MeshLambertMaterial({ map: tex, alphaMap: new THREE.CanvasTexture(ac), transparent: true, depthWrite: false }));
+    m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.07 * M, cz); m.renderOrder = 31; m.material.polygonOffset = true; m.material.polygonOffsetFactor = -4; m.material.polygonOffsetUnits = -4; root.add(m);
+  }
+  function bocage(cx, cz, af) { // 1.7.2: Normandy bocage — dark 3D hedgerows (2.5-4 m, on banks) along an irregular field grid round the battery, out to ~3 km
+    const segs = [], cell = 190, Rm = 3000, keep = (x, z) => Math.hypot(x - cx, z - cz) > 140 * M && Math.hypot((x - af[0]) / (AF.rx * TOWN_S * 1.15), (z - af[1]) / (AF.rz * TOWN_S * 1.15)) > 1;
+    const rot = 0.21, cr = Math.cos(rot), sr = Math.sin(rot), P = (u, v) => [cx + (u * cr - v * sr) * M, cz + (u * sr + v * cr) * M];
+    for (let u = -Rm; u < Rm; u += cell) for (let v = -Rm; v < Rm; v += cell) {
+      if (Math.hypot(u, v) > Rm) continue; const ju = RR(-40, 40), jv = RR(-40, 40);
+      if (R() < 0.82) segs.push([P(u + ju, v + jv), P(u + cell + RR(-40, 40), v + jv + RR(-25, 25))]);
+      if (R() < 0.82) segs.push([P(u + ju, v + jv), P(u + ju + RR(-25, 25), v + cell + RR(-40, 40))]);
+    }
+    const ok = segs.filter((sg) => keep((sg[0][0] + sg[1][0]) / 2, (sg[0][1] + sg[1][1]) / 2));
+    const geo = new THREE.BoxGeometry(1, 1, 1); geo.translate(0, 0.5, 0);
+    const mat = new THREE.MeshLambertMaterial({ color: 0x2c3f1c }), im = new THREE.InstancedMesh(geo, mat, ok.length * 2), q = new THREE.Object3D(); let n = 0;
+    const tm = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x26381a, flatShading: true }), ok.length * 3); let nt = 0;
+    for (const [a, b] of ok) {
+      const dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz), ang = Math.atan2(dx, dz), mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2;
+      q.position.set(mx, 0, mz); q.rotation.set(0, ang, 0); q.scale.set(RR(1.6, 2.4) * M, RR(2.4, 3.8) * M, L); q.updateMatrix(); im.setMatrixAt(n++, q.matrix); // hedge
+      q.scale.set(3.2 * M, 0.8 * M, L); q.updateMatrix(); im.setMatrixAt(n++, q.matrix); // earth bank
+      for (let k = 0; k < 3; k++) if (R() < 0.6) { const f = R(); q.position.set(a[0] + dx * f, RR(4, 7) * M, a[1] + dz * f); q.rotation.set(R(), R(), R()); const sc = RR(2.6, 4.2) * M; q.scale.set(sc, sc * 1.2, sc); q.updateMatrix(); tm.setMatrixAt(nt++, q.matrix); } // hedgerow trees
+    }
+    im.count = n; tm.count = nt; im.frustumCulled = tm.frustumCulled = false; root.add(im); root.add(tm); stats.hedges = ok.length;
+  }
   function build() {
     built = true; root = new THREE.Group(); root.visible = false; landG.add(root);
     // my battery: on the farmland just outside the airfield's far edge, ~1.2 km from the target complex
     const af = tl(AF.x, AF.z), myC = [af[0] + 0.3 * TOWN_S, af[1] + (AF.rz + 3.2) * TOWN_S];
-    me = { x: myC[0], z: myC[1] }; farFields(myC[0], myC[1]); groundPatch(myC[0], myC[1]);
+    me = { x: myC[0], z: myC[1] }; farFields(myC[0], myC[1]); groundPatch(myC[0], myC[1]); grassNear(myC[0], myC[1]); bocage(myC[0], myC[1], tl(AF.x, AF.z));
     const add = (cx, cz, n, mine) => { const B = { x: cx, z: cz, guns: [], mine, next: RR(0, 3) }; const rot = R() * 6.28, rad = (mine ? 30 : RR(25, 40)) * M; for (let i = 0; i < n; i++) { const a = rot + i / n * 6.28; B.guns.push(gun88(root, cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, RR(0, 6.28))); } BAT.push(B); return B; };
     add(myC[0], myC[1], 4, true); myGun = BAT[0].guns[0]; myGun.sh.visible = false; // 1.7.1: the player's gun (shield off: the layer's eye is right behind it)
     // command post + range-finder pit at the centre, an ammo bunker
