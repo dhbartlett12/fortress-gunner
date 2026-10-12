@@ -393,3 +393,34 @@ body.desktop canvas { cursor: crosshair; }
 #dmgsil { width: 132px; height: 50px; display: block; background: rgba(8,16,12,0.55); border-radius: 3px; padding: 2px 3px; filter: drop-shadow(0 0 2px rgba(0,0,0,0.55)); }
 #dmgsil [data-part] { stroke: rgba(0,0,0,0.35); stroke-width: 0.4; transition: fill 0.25s; }
 #healthbar.hidden { display: none !important; }
+
+/* ===== 1.6.8 HUD: FORTRESS label + planform silhouette in a fixed box, GUNS bar stacked below it (no overlap at ~1024x473); RIDE under TOP/TAIL ===== */
+#healthwrap, #heatwrap { left: 10px !important; width: 104px !important; box-sizing: border-box; }
+#healthwrap { top: 52px !important; bottom: auto !important; height: 86px; min-width: 0; padding: 2px 5px 3px !important; gap: 1px; overflow: hidden; }
+#dmgsil { width: 94px; height: 67px; padding: 0; background: rgba(8,16,12,0.35); border-radius: 2px; filter: none; }
+#dmgsil [data-part] { stroke: rgba(225,240,220,0.75); stroke-width: 0.9; stroke-linejoin: round; transition: fill 0.25s; }
+#dmgsil [data-part="fuselage"], #dmgsil [data-part="cockpit"] { stroke-width: 0.8; }
+#heatwrap { top: 142px !important; bottom: auto !important; }
+@media (max-height: 420px) {
+  #healthwrap { top: 48px !important; height: 74px; }
+  #dmgsil { width: 80px; height: 57px; }
+  #healthwrap, #heatwrap { width: 92px !important; }
+  #heatwrap { top: 126px !important; }
+}
+/* RIDE sits directly under TOP/TAIL (bottom-right stack); while riding ◀ ▶ share that lower row and the station button above reads B-17 */
+#stationBtn { bottom: 120px; }
+.ridebtn { bottom: 72px; }
+#rideBtn { right: 12px; min-width: 72px; text-align: center; }
+#ridePrev { right: 66px; }
+#rideNext { right: 12px; }
+.ridearrow { width: 50px; }
+#rideLabel { bottom: 168px; }
+@media (max-width: 520px), (max-height: 480px) {
+  #stationBtn { right: 8px; bottom: 106px; min-width: 64px; }
+  .ridebtn { bottom: 64px; }
+  #rideBtn { right: 8px; min-width: 64px; padding: 0 8px; }
+  .ridearrow { width: 44px; }
+  #ridePrev { right: 58px; }
+  #rideNext { right: 8px; }
+  #rideLabel { right: 8px; bottom: 154px; }
+}

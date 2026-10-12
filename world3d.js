@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "./vendor/GLTFLoader.js";
+import { createTown3D } from "./town3d.js"; // 1.6.8 TOWN
+import { createFlakGround } from "./flakground.js"; // 1.6.8 FLAK GROUND
 
 const CAM = { x: 0, y: 10.2, z: 6.5 };
 // 1.4.1: capture clock — offline clip harnesses set window.__FG_CAPCLK (ms) so effects run at sim speed
@@ -757,9 +759,9 @@ export function createWorld3D(canvas) {
       }
       if (u.dead) continue;
       const dcam = grp.position.distanceTo(camera.position);
-      for (const sp of u.sprites) { sp.visible = true; const k = 0.8 + Math.random() * 0.3; sp.material.opacity = 0.55 + Math.random() * 0.4; sp.scale.x = sp.scale.x * 0.98 + 0.02 * 3 * k * (1 + dcam / 1500); }
+      for (const sp of u.sprites) { sp.visible = true; const k = 0.8 + Math.random() * 0.3; sp.material.opacity = 0.55 + Math.random() * 0.4; sp.scale.x = sp.scale.x * 0.98 + 0.02 * 3 * k * (1 + Math.min(dcam, 3000) / 1500); } // 1.6.8b: capped
       if (trail) {
-        const ws = Math.min(8, 1 + dcam / 800); // far trails are widened so they still read as a line at kilometres
+        const ws = Math.min(2.5, 1 + dcam / 1600); // 1.6.8b: was min(8, 1 + d/800). far trails are widened so they still read as a line at kilometres
         _v.set(u.isWing ? u.side * 4.5 : 0, 0.2, u.isWing ? 0 : -0.19 * B17_VIS); grp.localToWorld(_v);
         ribbonEmit(u.key, _v, { w0: 1.2 * ws, w1: 11 * ws, life: 3.6 + Math.min(3, dcam / 1500), a: 0.66, col: [0.12, 0.115, 0.11], drift: AIR_DRIFT });
         if (u.isWing) { _v.set(u.side * 1.2, 0.3, 0.0); g.localToWorld(_v); if (g.visible) ribbonEmit(u.key + "s", _v, { w0: 1.2 * ws, w1: 13 * ws, life: 3.6, a: 0.7, col: [0.11, 0.105, 0.1], drift: AIR_DRIFT }); }
@@ -2120,12 +2122,13 @@ export function createWorld3D(canvas) {
         _rbT.set(b.x - a.x, b.y - a.y, b.z - a.z);
         _rbA.set(camera.position.x - p.x, camera.position.y - p.y, camera.position.z - p.z);
         _rbS.crossVectors(_rbT, _rbA); const L = _rbS.length() || 1;
-        const k = p.age / p.life, w = (p.w0 + (p.w1 - p.w0) * Math.sqrt(k)) * 0.5;
+        const k = p.age / p.life, w = Math.min(28, (p.w0 + (p.w1 - p.w0) * Math.sqrt(k))) * 0.5; // 1.6.8b: no smoke ribbon wider than 28 u (42 m)
         _rbS.multiplyScalar(w / L);
         const o = i * 6;
         pos[o] = p.x - _rbS.x; pos[o + 1] = p.y - _rbS.y; pos[o + 2] = p.z - _rbS.z;
         pos[o + 3] = p.x + _rbS.x; pos[o + 4] = p.y + _rbS.y; pos[o + 5] = p.z + _rbS.z;
-        const al = p.a * Math.pow(1 - k, 1.3) * (i === n - 1 ? 0.35 : 1) * Math.min(1, p.age * 10 + 0.35);
+        const dcl = _rbA.length(), nf = Math.min(1, Math.max(0, (dcl - 12) / 70)); // 1.6.8b: fade smoke that reaches the lens
+        const al = p.a * Math.pow(1 - k, 1.3) * (i === n - 1 ? 0.35 : 1) * Math.min(1, p.age * 10 + 0.35) * nf;
         const c = i * 8; col[c] = p.c[0]; col[c + 1] = p.c[1]; col[c + 2] = p.c[2]; col[c + 3] = al; col[c + 4] = p.c[0]; col[c + 5] = p.c[1]; col[c + 6] = p.c[2]; col[c + 7] = al;
         const u = i * 4; uv[u] = 0; uv[u + 1] = p.v; uv[u + 2] = 1; uv[u + 3] = p.v;
       }
@@ -2522,18 +2525,18 @@ export function createWorld3D(canvas) {
   if (uTownDebug > 1.5) {
     gl_FragColor.rgb = vec3(1.0, 0.0, 1.0);
   } else {
-    vec2 dlt = (vMapUv - uTownMap) / max(uTownMapR, 0.0001);
-    float rd = length(dlt);
-    // soft fade; bake alpha already 0 well inside texture — never invent a sandy square
-    float edge = 1.0 - smoothstep(0.42, 0.88, rd);
-    vec2 tuv = dlt * 0.5 + 0.5;
-    if (edge > 0.004 && tuv.x > 0.0 && tuv.x < 1.0 && tuv.y > 0.0 && tuv.y < 1.0) {
+    // 1.6.8 TOWN: bake from town3d.js (same layout as the 3D houses); its own alpha is the soft edge into the farmland
+    vec2 tuv = (vMapUv - uTownMap) / max(uTownMapR, 0.0001) * 0.5 + 0.5;
+    if (tuv.x > 0.0 && tuv.x < 1.0 && tuv.y > 0.0 && tuv.y < 1.0) {
       vec4 tw = texture2D(uTown, tuv);
-      float ta = min(1.0, tw.a * 1.25) * edge;
-      if (ta > 0.01) {
-        vec3 townCol = (uTownDebug > 0.5) ? vec3(1.0, 0.0, 1.0) : min(vec3(1.0), tw.rgb * 1.35 + vec3(0.07, 0.055, 0.035));
-        float keep = (uTownDebug > 0.5) ? ta : ta * 0.98;
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, townCol, keep);
+      if (tw.a > 0.004) {
+        vec3 townCol = (uTownDebug > 0.5) ? vec3(1.0, 0.0, 1.0) : tw.rgb / tw.a * 1.04; // premultiplied bake
+        townCol *= 1.0 - 0.30 * smoothstep(0.35, 0.75, shd); // the same drifting cloud shadows as the fields
+        townCol = mix(townCol, vec3(0.45, 0.58, 0.76), 0.04);
+#ifdef USE_FOG
+        townCol = mix(townCol, fogColor, fogFactor * 0.6); // post-fog: only a light haze, never erased
+#endif
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, townCol, tw.a);
       }
     }
   }
@@ -2556,460 +2559,17 @@ export function createWorld3D(canvas) {
   const TOWN_S = 1.5 * Math.sqrt(15); // 1.6.0: the town is 15x larger BY AREA (x3.873 linear on the 1.5.9 footprint, ≈ 6 km across, readable from 25,000 ft)
   town.scale.set(TOWN_S, TOWN_S, TOWN_S);
   landG.add(town);
-  // 1.6.3d: shared street centerlines (town-local) — bake + 3D houses use the SAME layout (no radials).
-  const TOWN_STREETS = (() => {
-    const st = [];
-    // Orthogonal only. Segmented so we do NOT get one giant cross through a single hub.
-    // Newer districts: offset grid patches
-    for (let k = -3; k <= 2; k++) {
-      st.push([k * 8 - 10, -14, 12, 0]);   // N-S south patch
-      st.push([k * 8 - 10, 12, 11, 0]);    // N-S north patch
-    }
-    for (let k = -3; k <= 3; k++) {
-      st.push([-8, k * 7 - 2, 14, Math.PI / 2]);  // E-W west-ish
-      st.push([10, k * 7 - 2, 12, Math.PI / 2]); // E-W east patch
-    }
-    // Old-town core near cathedral (−14, 0.5): shorter irregular axis-aligned alleys
-    st.push([-14, 0, 9, 0]); st.push([-14, 0, 8, Math.PI / 2]);
-    st.push([-18, -4, 7, 0]); st.push([-10, 5, 6, Math.PI / 2]);
-    st.push([-16, 6, 7, Math.PI / 2]); st.push([-12, -7, 6, 0]);
-    st.push([-8, 2, 5, 0]); st.push([-20, 1, 5, Math.PI / 2]);
-    return st;
-  })();
-  // 1.6.3d: BAKE — grey-brown urban recon (not sand). Mask → 0 well inside texture bounds.
+  // 1.6.8 TOWN: the whole town (layout, ground bake, instanced 3D houses / trees, church, factory, depot, rail, airfield) lives in town3d.js.
+  // `town` above stays as the gameplay anchor (bomb landing height, townInfo); the 3D town sits ON the ground in TOWN3D.root.
+  const TOWN3D = createTown3D({ landG, earthFog, TOWN_X, TOWN_Z, TOWN_S, KR });
+  const TL = TOWN3D.TL, TS = TOWN3D.TS;
+  townBakeU.uTown.value = TOWN3D.bakeTex;
   {
-    const N = 2048, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
-    x.clearRect(0, 0, N, N);
-    let sd = 1944; const R = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
-    const cx = N * 0.50, cy = N * 0.50, rad = N * 0.36; // leave ≥14% transparent margin → no square edge
-    const tlToPx = (lx, lz) => [cx + lx * (rad / 42), cy + lz * (rad / 42)];
-
-    // Soft irregular mask — zero at texture borders
-    const mask = document.createElement("canvas"); mask.width = mask.height = N; const mx = mask.getContext("2d");
-    mx.fillStyle = "#fff";
-    mx.beginPath();
-    for (let i = 0; i <= 80; i++) {
-      const a = i / 80 * Math.PI * 2, rr = rad * (0.82 + 0.1 * Math.sin(i * 1.9) + 0.06 * Math.cos(i * 3.4) + R() * 0.08);
-      if (i === 0) mx.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
-      else mx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
-    }
-    mx.closePath(); mx.fill();
-    for (let k = 0; k < 100; k++) {
-      const a = R() * Math.PI * 2, rr = rad * (0.7 + R() * 0.38);
-      mx.globalAlpha = 0.25 + R() * 0.4;
-      mx.beginPath(); mx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 10 + R() * 32, 0, Math.PI * 2); mx.fill();
-    }
-    mx.globalAlpha = 1;
-    try { mx.filter = "blur(96px)"; } catch (e) {}
-    const m2 = document.createElement("canvas"); m2.width = m2.height = N; m2.getContext("2d").drawImage(mask, 0, 0);
-    try { mx.filter = "none"; } catch (e) {}
-
-    // Grey-brown urban underlay (NOT yellow sand) — only soft blobs, never full-canvas fill before mask
-    const softBlob = (col, px, py, r0) => {
-      const g = x.createRadialGradient(px, py, 0, px, py, r0);
-      g.addColorStop(0, col); g.addColorStop(1, "rgba(0,0,0,0)");
-      x.fillStyle = g; x.beginPath(); x.arc(px, py, r0, 0, Math.PI * 2); x.fill();
-    };
-    // soft light grey-brown base (not sand-yellow) so altitude recon reads ~110–140 lum
-    {
-      const g = x.createRadialGradient(cx, cy, 0, cx, cy, rad * 0.95);
-      g.addColorStop(0, "rgba(178,168,155,0.95)");
-      g.addColorStop(0.5, "rgba(168,158,146,0.82)");
-      g.addColorStop(1, "rgba(0,0,0,0)");
-      x.fillStyle = g; x.beginPath(); x.arc(cx, cy, rad * 0.95, 0, Math.PI * 2); x.fill();
-    }
-    for (let k = 0; k < 110; k++) {
-      const a = R() * Math.PI * 2, rr = Math.pow(R(), 0.55) * rad * 0.96;
-      const px = cx + Math.cos(a) * rr, py = cy + Math.sin(a) * rr;
-      // light grey-brown urban ~ RGB 145–170 (25k recon must read vs fields, not a dark blot)
-      const g0 = 148 + (R() * 22 | 0), r0 = g0 + (R() * 10 | 0), b0 = g0 - (8 + (R() * 10 | 0));
-      softBlob("rgba(" + r0 + "," + g0 + "," + b0 + ",0.88)", px, py, 48 + R() * 100);
-    }
-    // denser core — warm grey-brown (brick dust), not sand-yellow
-    for (let k = 0; k < 32; k++) {
-      const a = R() * Math.PI * 2, rr = R() * rad * 0.38;
-      softBlob("rgba(155,142,128,0.62)", cx - N * 0.03 + Math.cos(a) * rr, cy + Math.sin(a) * rr, 50 + R() * 70);
-    }
-
-    // Parks / courtyards (green)
-    for (let k = 0; k < 16; k++) {
-      const a = R() * Math.PI * 2, rr = rad * (0.15 + R() * 0.65);
-      x.fillStyle = "rgba(95,112,80," + (0.28 + R() * 0.25).toFixed(2) + ")";
-      x.beginPath(); x.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 12 + R() * 28, 0, Math.PI * 2); x.fill();
-    }
-
-    // Streets from shared layout — lighter grey lines
-    x.lineCap = "round"; x.lineJoin = "round";
-    for (const [scx, scz, half, yaw] of TOWN_STREETS) {
-      const ca = Math.cos(yaw), sa = Math.sin(yaw);
-      const [x0, y0] = tlToPx(scx - ca * half, scz - sa * half);
-      const [x1, y1] = tlToPx(scx + ca * half, scz + sa * half);
-      x.strokeStyle = "rgba(200,192,178,0.9)"; x.lineWidth = 4.4;
-      x.beginPath(); x.moveTo(x0, y0); x.lineTo(x1, y1); x.stroke();
-      x.strokeStyle = "rgba(215,208,192,0.55)"; x.lineWidth = 2.0;
-      x.beginPath(); x.moveTo(x0, y0); x.lineTo(x1, y1); x.stroke();
-    }
-    // short alleys in old core
-    x.strokeStyle = "rgba(160,154,144,0.4)"; x.lineWidth = 1.4;
-    for (let i = 0; i < 40; i++) {
-      const a = R() * Math.PI * 2, r0 = rad * (0.08 + R() * 0.35), len = rad * (0.04 + R() * 0.1);
-      const ox = Math.cos(a + 0.9), oy = Math.sin(a + 0.9);
-      const px = cx - N * 0.03 + Math.cos(a) * r0, py = cy + Math.sin(a) * r0;
-      x.beginPath(); x.moveTo(px - ox * len, py - oy * len); x.lineTo(px + ox * len, py + oy * len); x.stroke();
-    }
-
-    // Dense roof speckles packed along streets (terracotta + slate)
-    const roofCols = ["#c49888", "#b89080", "#a88878", "#9a9888", "#8a8880", "#a89888", "#b8a090", "#908880", "#c8a898", "#7a7870", "#d0a898", "#989078"];
-    for (const [scx, scz, half, yaw] of TOWN_STREETS) {
-      const ca = Math.cos(yaw), sa = Math.sin(yaw), nx = -sa, nz = ca;
-      const steps = Math.max(8, (half * 2 / 0.95) | 0);
-      for (let s = 0; s < steps; s++) {
-        const t = (s / (steps - 1) - 0.5) * 2 * half;
-        const lx = scx + ca * t, lz = scz + sa * t;
-        const dcen = Math.hypot(lx + 14, lz - 0.5);
-        // moderate street lining — block fill below supplies the mass (avoids spoke/cross arms)
-        const dens = dcen < 14 ? 7 : dcen < 26 ? 4 : 2;
-        for (let j = 0; j < dens; j++) {
-          for (const side of [-1, 1]) {
-            if (R() < 0.18) continue;
-            const set = 1.1 + R() * 2.4;
-            const [px, py] = tlToPx(lx + nx * side * set + (R() - 0.5) * 0.9, lz + nz * side * set + (R() - 0.5) * 0.9);
-            x.fillStyle = roofCols[(R() * roofCols.length) | 0];
-            x.globalAlpha = 0.7 + R() * 0.28;
-            x.save(); x.translate(px, py); x.rotate(yaw + (R() - 0.5) * 0.25);
-            x.fillRect(-1.6 - R() * 3.2, -1.1 - R() * 2.2, 3.2 + R() * 5.5, 2.2 + R() * 3.8);
-            x.restore();
-          }
-        }
-      }
-    }
-    // dense block fill — old-town core packed, suburbs sparser (solid urban fabric, not street spokes)
-    for (let k = 0; k < 48000; k++) {
-      const a = R() * Math.PI * 2, rr = Math.pow(R(), 0.55) * rad * 0.78;
-      const px = cx - N * 0.02 + Math.cos(a) * rr, py = cy + Math.sin(a) * rr;
-      if (rr > rad * 0.5 && R() < 0.55) continue;
-      if (rr > rad * 0.62 && R() < 0.7) continue;
-      x.fillStyle = roofCols[(R() * roofCols.length) | 0];
-      x.globalAlpha = 0.55 + R() * 0.4;
-      x.fillRect(px, py, 1.6 + R() * 4.5, 1.3 + R() * 3.2);
-    }
-    x.globalAlpha = 1;
-
-    // Rail yard (SE) — soft ballast blobs + thin tracks (NO hard rectangle)
-    x.save();
-    const [rx, ry] = tlToPx(6, -2);
-    x.translate(rx, ry); x.rotate(-0.14);
-    for (let k = 0; k < 18; k++) {
-      const by = -N * 0.18 + R() * N * 0.36, bx = (R() - 0.5) * N * 0.05;
-      softBlob("rgba(128,124,116,0.45)", bx, by, 18 + R() * 36);
-    }
-    x.strokeStyle = "rgba(175,170,160,0.75)"; x.lineWidth = 1.4; x.lineCap = "round";
-    for (let t = -4; t <= 4; t++) {
-      x.beginPath(); x.moveTo(t * 5.5, -N * 0.18); x.lineTo(t * 5.5, N * 0.16); x.stroke();
-    }
-    // soft goods-shed blob (not a hard rect)
-    softBlob("rgba(135,130,122,0.55)", N * 0.07, 0, N * 0.055);
-    softBlob("rgba(145,140,132,0.4)", N * 0.09, N * 0.02, N * 0.04);
-    x.restore();
-
-    // 1.6.4 Airfield on factory/depot outskirts (SE of yard) — visible from altitude
-    {
-      const [ax0, ay0] = tlToPx(18, 8);
-      x.save(); x.translate(ax0, ay0); x.rotate(-0.22);
-      // grass strip
-      softBlob("rgba(110,125,95,0.55)", 0, 0, N * 0.09);
-      // runway (light grey, soft ends)
-      x.strokeStyle = "rgba(175,172,165,0.85)"; x.lineWidth = 7; x.lineCap = "round";
-      x.beginPath(); x.moveTo(-N * 0.11, 0); x.lineTo(N * 0.12, 0); x.stroke();
-      x.strokeStyle = "rgba(200,198,190,0.55)"; x.lineWidth = 2.2;
-      x.beginPath(); x.moveTo(-N * 0.1, 0); x.lineTo(N * 0.11, 0); x.stroke();
-      // taxiway
-      x.strokeStyle = "rgba(160,158,150,0.5)"; x.lineWidth = 3.5;
-      x.beginPath(); x.moveTo(N * 0.02, 0); x.lineTo(N * 0.02, N * 0.05); x.stroke();
-      // hangars (dark blobs)
-      softBlob("rgba(95,90,82,0.7)", -N * 0.04, N * 0.035, N * 0.018);
-      softBlob("rgba(100,94,86,0.65)", N * 0.05, N * 0.032, N * 0.016);
-      softBlob("rgba(90,88,82,0.6)", N * 0.08, N * 0.028, N * 0.012);
-      x.restore();
-    }
-
-    // River
-    const riverPts = [];
-    for (let k = 0; k <= 40; k++) {
-      const t = k / 40;
-      riverPts.push([cx - rad * 0.9 + t * rad * 1.8, cy + rad * 0.18 + Math.sin(t * 3 + 0.4) * rad * 0.16]);
-    }
-    const strokeR = (w, col) => {
-      x.strokeStyle = col; x.lineWidth = w; x.lineCap = "round";
-      x.beginPath(); x.moveTo(riverPts[0][0], riverPts[0][1]);
-      for (let i = 1; i < riverPts.length; i++) x.lineTo(riverPts[i][0], riverPts[i][1]);
-      x.stroke();
-    };
-    strokeR(12, "rgba(90,110,95,0.35)"); strokeR(7, "rgba(105,125,130,0.55)"); strokeR(4, "rgba(115,135,145,0.7)");
-
-    // Soft alpha — hard-zero at borders
-    x.globalCompositeOperation = "destination-in";
-    x.drawImage(m2, 0, 0);
-    x.globalCompositeOperation = "source-over";
-    // force rim transparent (kill any residual square)
-    const grd = x.createRadialGradient(cx, cy, rad * 0.92, cx, cy, rad * 1.08);
-    // already masked; extra clear outside rad
-    x.globalCompositeOperation = "destination-in";
-    x.fillStyle = "#fff";
-    x.beginPath(); x.arc(cx, cy, rad * 1.05, 0, Math.PI * 2); x.fill();
-    x.globalCompositeOperation = "source-over";
-
-    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter;
-    townBakeU.uTown.value = tex;
-    {
-      const rep = 92 * FARM_REP;
-      const gfX = TOWN_X * KR, gfZ = TOWN_Z * KR;
-      const uvX = gfX / 60000 + 0.5;
-      const uvY = 0.5 - gfZ / 60000;
-      const radUV = (TOWN_S * 155 * KR) / 60000; // tighter — mask zero well inside plane
-      townBakeU.uTownMap.value.set(uvX * rep, uvY * rep);
-      townBakeU.uTownMapR.value = radUV * rep;
-    }
+    const rep = 92 * FARM_REP, bc = TOWN3D.bakeCenter;
+    const gfX = (TOWN_X + TOWN_S * bc[0]) * KR, gfZ = (TOWN_Z + TOWN_S * bc[1]) * KR;
+    townBakeU.uTownMap.value.set((gfX / 60000 + 0.5) * rep, (0.5 - gfZ / 60000) * rep);
+    townBakeU.uTownMapR.value = (TOWN_S * TOWN3D.bakeHalf * KR) / 60000 * rep;
   }
-  const townMats = [];
-  // 1.5.3: the town's structures as data (town-local x, z, half-width, half-depth, yaw) so game.js can resolve real bomb landings against them
-  const TL = { houses: [], keys: [], stalls: [], wagons: [], tracks: [] };
-  const TS = { houseM: [], wagonM: [], walls: null, roofs: null, wagons: null, keyMesh: [], stallMesh: [], craters: null, nCr: 0, rubble: null, hit: new Set() };
-  {
-    let seed = 1936;
-    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    const lam = (c) => { const m = new THREE.MeshLambertMaterial({ color: c, fog: true, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8 }); townMats.push(m); return m; };
-    const bas = (c, o) => { const m = new THREE.MeshBasicMaterial(Object.assign({ color: c, fog: true, polygonOffset: true, polygonOffsetFactor: -8, polygonOffsetUnits: -8 }, o || {})); townMats.push(m); return m; };
-    const YD_X = -13.3, YD_Z = -36.5; // the depot hall (yard-aligned (0,-39) in town-local coords): no houses on it
-    const YARD_A = 0.0; // 1.6.0: the yard / depot / factory complex lies ALONG the bomb track (was tilted 0.35 rad)
-    const KC = 0.4, VS = 0.7; // 1.6.0: the target complex keeps ~its 1.5.9 physical size (x0.28 of the x3.87 town), yard 30 % shorter, so a real stick of bombs can still catch depot AND factory
-    const CXG = new THREE.Group(); CXG.scale.set(KC, KC, KC); town.add(CXG); TS.cxg = CXG;
-    // canvas texture for the yard: ballast bed, rails, wagons in rows
-    const yardTex = (() => {
-      const c = document.createElement("canvas"); c.width = 128; c.height = 1024;
-      const x = c.getContext("2d");
-      x.fillStyle = "#6e6a60"; x.fillRect(0, 0, 128, 1024);
-      for (let i = 0; i < 2600; i++) { const v = 90 + rnd() * 40 | 0; x.fillStyle = "rgba(" + v + "," + (v - 4) + "," + (v - 10) + ",0.5)"; x.fillRect(rnd() * 128, rnd() * 1024, 2, 2); }
-      const n = 12;
-      for (let t = 0; t < n; t++) {
-        const cx = 8 + t * (112 / (n - 1));
-        x.fillStyle = "rgba(48,44,40,0.9)"; x.fillRect(cx - 2.5, 0, 5, 1024); // ballast + sleepers
-        x.fillStyle = "rgba(150,146,140,0.8)"; x.fillRect(cx - 1.5, 0, 0.8, 1024); x.fillRect(cx + 0.8, 0, 0.8, 1024);
-        // strings of wagons on most tracks
-        let y = rnd() * 80;
-        while (y < 1000) {
-          const run = 60 + rnd() * 260;
-          if (rnd() < 0.72) for (let k = 0; k < run; k += 13) {
-            const col = rnd() < 0.5 ? "rgb(86,62,48)" : rnd() < 0.5 ? "rgb(70,72,70)" : "rgb(104,88,70)";
-            x.fillStyle = col; x.fillRect(cx - 3, y + k, 6, 11);
-          }
-          y += run + 20 + rnd() * 90;
-        }
-      }
-      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-      t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
-      return t;
-    })();
-    const yard = new THREE.Mesh(new THREE.PlaneGeometry(6.2, 58 * VS), bas(0xffffff, { map: yardTex }));
-    yard.rotation.set(-Math.PI / 2, 0, YARD_A);
-    yard.visible = false; // 1.6.3d: hard dark rectangle from altitude — rail yard lives in bake + wagons
-    CXG.add(yard);
-    // main line out of town both ways (a thin dark line across the countryside)
-    const line = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 900), bas(0x3e3a34));
-    line.rotation.set(-Math.PI / 2, 0, YARD_A); line.position.y = -0.01;
-    line.visible = false; // 1.6.3: rail into countryside is in the bake
-    town.add(line);
-    const branch = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 500), bas(0x423e38));
-    branch.rotation.set(-Math.PI / 2, 0, YARD_A + 0.9); branch.position.set(-2, -0.01, -26);
-    branch.visible = false;
-    town.add(branch);
-    const ax = (u, v) => { // yard-aligned coordinates → town local
-      const c = Math.cos(YARD_A), s = Math.sin(YARD_A);
-      v *= VS; return [u * c + v * s, -u * s + v * c];
-    };
-    // freight wagons in 3D (catch the sun), engine shed, roundhouse, station
-    const wagonGeo = new THREE.BoxGeometry(0.2, 0.2, 0.85);
-    const wagons = new THREE.InstancedMesh(wagonGeo, lam(0x5a4638), 140);
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(1, 1, 1), pv = new THREE.Vector3();
-    const yq = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), YARD_A);
-    for (let i = 0; i < 140; i++) {
-      const tr = (rnd() * 12) | 0, u = -3.1 + 0.25 + tr * (5.7 / 11), v = -26 + rnd() * 52;
-      const [px, pz] = ax(u, v);
-      pv.set(px, 0.1, pz); m4.compose(pv, yq, sc); wagons.setMatrixAt(i, m4); TL.wagons.push([px, pz, 0.1, 0.425, YARD_A]); TS.wagonM.push(m4.clone());
-      const tint = 0.75 + rnd() * 0.5; wagons.setColorAt(i, new THREE.Color(0x5a4638).multiplyScalar(tint));
-    }
-    CXG.add(wagons); TS.wagons = wagons;
-    for (let tr = 0; tr < 12; tr++) for (let j = 0; j < 13; j++) { const [tx, tz] = ax(-3.1 + 0.25 + tr * (5.7 / 11), -24 + 4 * j); TL.tracks.push([tx, tz, 0.15, 2.0 * VS, YARD_A]); }
-    const box = (w, h, d, u, v, mat, rotExtra) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      const [px, pz] = ax(u, v); m.position.set(px, h / 2, pz); m.rotation.y = YARD_A + (rotExtra || 0);
-      CXG.add(m); return m;
-    };
-    const keyB = (name, w, d, u, v, m, kind) => { const [px, pz] = ax(u, v); TL.keys.push([px, pz, w / 2, d / 2, YARD_A, name, kind || "d"]); TS.keyMesh.push(m); return m; }; // kind: "d" = depot target, "f" = factory target
-    const roofDark = lam(0x4a4642), brick = lam(0x7a5a4a), stone = lam(0x9a968c);
-    keyB("engine shed", 2.2, 9, 4.6, 12, box(2.2, 0.7, 9, 4.6, 12, roofDark));           // engine shed (long, dark)
-    keyB("station", 1.6, 5.5, -4.8, -2, box(1.6, 0.9, 5.5, -4.8, -2, stone));           // station building
-    keyB("goods shed", 1.0, 1.4, -4.8, -6.2, box(1.0, 0.6, 1.4, -4.8, -6.2, brick));         // goods shed
-    keyB("works", 3.2, 1.8, 5.2, -14, box(3.2, 0.9, 1.8, 5.2, -14, brick), "d");           // works / warehouse
-    keyB("goods hall", 2.4, 3.2, -6.2, 16, box(2.4, 1.1, 3.2, -6.2, 16, brick), "d");           // factory hall
-    { // roundhouse: a 3/4 ring of stalls around a turntable
-      const [cx, cz] = ax(5.5, 22);
-      const tt = new THREE.Mesh(new THREE.CircleGeometry(0.8, 20), bas(0x4a4640));
-      tt.rotation.x = -Math.PI / 2; tt.position.set(cx, 0.02, cz); tt.visible = false; CXG.add(tt);
-      for (let k = 0; k < 14; k++) {
-        const a = -0.6 + k * (4.2 / 13);
-        const st = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.45, 1.5), roofDark);
-        st.position.set(cx + Math.cos(a) * 1.9, 0.22, cz + Math.sin(a) * 1.9);
-        st.rotation.y = -a + Math.PI / 2; CXG.add(st); TL.stalls.push([st.position.x, st.position.z, 0.31, 0.75, st.rotation.y]); TS.stallMesh.push(st);
-      }
-    }
-    // 1.6.3d: same centerlines as the bake (TOWN_STREETS) — no radial spokes
-    const streetM = bas(0x7a766c); // factory access road only
-    const streets = TOWN_STREETS.slice();
-    const N = 1100;
-    const wallG = new THREE.BoxGeometry(1, 0.55, 1); wallG.translate(0, 0.275, 0);
-    const roofG = (() => { // gable prism, ridge along x
-      const v = [-0.55, 0.55, -0.58, 0.55, 0.55, -0.58, 0.55, 0.95, 0, -0.55, 0.95, 0, -0.55, 0.55, 0.58, 0.55, 0.55, 0.58];
-      const i = [0, 2, 1, 0, 3, 2, 4, 3, 5, 3, 2, 5, 5, 2, 1, 5, 1, 4, 0, 4, 3, 0, 1, 4];
-      const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3)); g.setIndex(i);
-      g.computeVertexNormals(); return g;
-    })();
-    const walls = new THREE.InstancedMesh(wallG, lam(0xa8a298), N);
-    const roofs = new THREE.InstancedMesh(roofG, lam(0xffffff), N);
-    // 1.6.3: muted WWII aerial colours — terracotta / dark slate (no hot red slabs)
-    const roofPal = [0xc49888, 0xb89080, 0xa88878, 0x9a9888, 0x8a8880, 0xa89888, 0xb8a090, 0xc8a898, 0x7a7870, 0xd0a898];
-    let n = 0;
-    const scl = new THREE.Vector3(), rq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
-    const place = (x0, z0, rot, len, wid, tall) => {
-      if (n >= N) return;
-      if (Math.hypot(x0 + 14, z0 - 0.5) < 4.5) return; // cathedral close
-      if (x0 > -3.2 && x0 < 12.5 && z0 > -16 && z0 < 10.5) return; // yard / depot / factory
-      pv.set(x0, 0.04, z0); // slight raise vs bake plane
-      scl.set(len, (tall || 1) * (0.85 + rnd() * 0.55), wid); rq.setFromAxisAngle(up, rot);
-      m4.compose(pv, rq, scl); walls.setMatrixAt(n, m4); roofs.setMatrixAt(n, m4); TL.houses.push([x0, z0, len / 2, wid / 2, rot]); TS.houseM.push(m4.clone());
-      const rc = new THREE.Color(roofPal[(rnd() * roofPal.length) | 0]).multiplyScalar(0.9 + rnd() * 0.2);
-      roofs.setColorAt(n, rc); walls.setColorAt(n, new THREE.Color(0xd0c8b8).multiplyScalar(0.75 + rnd() * 0.25));
-      n++;
-    };
-    // 1.6.3d: houses along orthogonal streets + fill blocks (no spokes)
-    for (const [scx, scz, half, yaw] of streets) {
-      const ca = Math.cos(yaw), sa = Math.sin(yaw);
-      const nx = -sa, nz = ca;
-      const steps = Math.max(6, (half * 2 / 1.4) | 0);
-      for (let s = 0; s < steps; s++) {
-        const t = (s / (steps - 1) - 0.5) * 2 * half;
-        const px = scx + ca * t, pz = scz + sa * t;
-        const dcen = Math.hypot(px + 14, pz - 0.5);
-        if (dcen > 36 && rnd() < 0.6) continue;
-        if (dcen > 26 && rnd() < 0.35) continue;
-        for (const side of [-1, 1]) {
-          if (rnd() < 0.14) continue;
-          const setback = 1.5 + rnd() * 0.5;
-          place(px + nx * side * setback, pz + nz * side * setback, yaw + (side < 0 ? Math.PI : 0), 1.1 + rnd() * 1.0, 0.9 + rnd() * 0.4, dcen < 12 ? 1.2 : 1);
-        }
-      }
-    }
-    // Fill blocks between N-S / E-W grid lines
-    {
-      const xs = [], zs = [];
-      for (const [scx, scz, half, yaw] of streets) {
-        if (Math.abs(yaw) < 0.2 || Math.abs(yaw - Math.PI) < 0.2) xs.push(scx);
-        else if (Math.abs(Math.abs(yaw) - Math.PI / 2) < 0.2) zs.push(scz);
-      }
-      xs.sort((a, b) => a - b); zs.sort((a, b) => a - b);
-      const uniq = (a) => a.filter((v, i) => !i || Math.abs(v - a[i - 1]) > 1.5);
-      const X = uniq(xs), Z = uniq(zs);
-      for (let i = 0; i < X.length - 1; i++) for (let j = 0; j < Z.length - 1; j++) {
-        const x0 = X[i], x1 = X[i + 1], z0 = Z[j], z1 = Z[j + 1];
-        const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
-        const dcen = Math.hypot(mx + 14, mz - 0.5);
-        if (dcen > 34) continue;
-        if (mx > -3.2 && mx < 12.5 && mz > -16 && mz < 10.5) continue; // yard
-        const dens = dcen < 12 ? 0.9 : dcen < 22 ? 0.55 : 0.25;
-        const nx = Math.max(1, ((x1 - x0 - 2.8) / 1.7) | 0);
-        const nz = Math.max(1, ((z1 - z0 - 2.8) / 1.7) | 0);
-        for (let ix = 0; ix < nx; ix++) for (let iz = 0; iz < nz; iz++) {
-          if (rnd() > dens) continue;
-          const px = x0 + 1.4 + (ix + 0.5) * (x1 - x0 - 2.8) / nx + (rnd() - 0.5) * 0.3;
-          const pz = z0 + 1.4 + (iz + 0.5) * (z1 - z0 - 2.8) / nz + (rnd() - 0.5) * 0.3;
-          place(px, pz, rnd() < 0.5 ? 0 : Math.PI / 2, 1.0 + rnd() * 0.9, 0.85 + rnd() * 0.35, dcen < 12 ? 1.15 : 0.95);
-        }
-      }
-    }
-    // remaining budget: sparse suburban street edges only
-    let guard = 0;
-    while (n < N * 0.9 && guard++ < 3000) {
-      const st = streets[(rnd() * streets.length) | 0];
-      const [scx, scz, half, yaw] = st;
-      const ca = Math.cos(yaw), sa = Math.sin(yaw), nx = -sa, nz = ca;
-      const t = (rnd() - 0.5) * 2 * half;
-      const side = rnd() < 0.5 ? -1 : 1;
-      const px = scx + ca * t + nx * side * (2.0 + rnd()), pz = scz + sa * t + nz * side * (2.0 + rnd());
-      if (Math.hypot(px + 14, pz - 0.5) < 22) continue;
-      place(px, pz, yaw, 0.85 + rnd() * 0.5, 0.75 + rnd() * 0.3, 0.9);
-    }
-    walls.count = n; roofs.count = n;
-    walls.instanceMatrix.needsUpdate = true; roofs.instanceMatrix.needsUpdate = true;
-    if (walls.instanceColor) walls.instanceColor.needsUpdate = true;
-    if (roofs.instanceColor) roofs.instanceColor.needsUpdate = true;
-    walls.renderOrder = 1;
-    town.add(walls); town.add(roofs); TS.walls = walls; TS.roofs = roofs;
-    { // 1.6.0/1.6.1 CATHEDRAL: landmark scaled up so the spire reads from altitude
-      const slate = lam(0x4a5560), cx0 = -14, cz0 = 0.5;
-      const add = (geo, mat, x, y, z, ry) => { const m = new THREE.Mesh(geo, mat); m.position.set(cx0 + x, y, cz0 + z); if (ry) m.rotation.y = ry; town.add(m); return m; };
-      add(new THREE.BoxGeometry(1.8, 1.6, 6.2), stone, 0, 0.8, 0); add(new THREE.BoxGeometry(4.8, 1.35, 1.8), stone, 0, 0.68, 0.45); // nave + transept
-      add(new THREE.BoxGeometry(1.55, 0.42, 6.0), slate, 0, 1.75, 0); add(new THREE.BoxGeometry(4.6, 0.36, 1.55), slate, 0, 1.45, 0.45);   // roofs
-      add(new THREE.BoxGeometry(1.15, 3.4, 1.15), stone, 0, 1.7, 0.45); add(new THREE.ConeGeometry(0.95, 5.2, 4), slate, 0, 5.9, 0.45, Math.PI / 4); // crossing tower + spire (taller)
-      for (const sx of [-0.7, 0.7]) { add(new THREE.BoxGeometry(0.85, 3.1, 0.85), stone, sx, 1.55, -3.2); add(new THREE.ConeGeometry(0.65, 1.8, 4), slate, sx, 3.9, -3.2, Math.PI / 4); } // west towers
-    }
-    { // 1.6.0 TRAIN DEPOT (target): a long arched train shed over the yard's throat with the station hall in front of it — in yard-aligned coordinates, at the north end of the tracks
-      const shedM = lam(0x6a6862), hallM = lam(0xa8a296), roofM = lam(0x35383a);
-      const shed = box(5.8, 1.0, 11, 6.2, -24, shedM); keyB("train depot shed", 5.8, 11, 6.2, -24, shed, "d");
-      { const [px, pz] = ax(6.2, -24); const arch = new THREE.Mesh(new THREE.CylinderGeometry(2.9, 2.9, 11, 14, 1, false, 0, Math.PI), roofM); arch.rotation.set(0, YARD_A + Math.PI / 2, Math.PI / 2); arch.position.set(px, 1.0, pz); arch.rotation.order = "YZX"; CXG.add(arch); }
-      const hall = box(7.2, 1.4, 2.6, 6.2, -35.1, hallM); keyB("train depot hall", 7.2, 2.6, 6.2, -35.1, hall, "d");
-      { const [px, pz] = ax(8.6, -35.1); const clock = new THREE.Mesh(new THREE.BoxGeometry(0.7, 2.3, 0.7), hallM); clock.position.set(px, 1.15, pz); clock.rotation.y = YARD_A; CXG.add(clock); const cap = new THREE.Mesh(new THREE.ConeGeometry(0.55, 0.9, 4), roofM); cap.position.set(px, 2.75, pz); cap.rotation.y = YARD_A + Math.PI / 4; CXG.add(cap); }
-            const [ex, ez] = ax(6.2, -35.1); TS.depotC = [ex * KC, ez * KC];
-    }
-    { // 1.6.0 FACTORY (target): a works district east of the yard — three long sawtooth halls, a power house, two tall brick chimneys and storage tanks
-      const FX = 10, hallM = lam(0x7e7468), saw = lam(0x58504a), chim = lam(0x6a4a40), tankM = lam(0xb9b4a6); // 1.6.3 muted chimneys
-      const keyD = (name, w, d, x, z, m, kind) => { TL.keys.push([x, z, w / 2, d / 2, 0, name, kind || "f"]); TS.keyMesh.push(m); return m; };
-      const put = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); CXG.add(m); return m; };
-      for (let i = 0; i < 3; i++) {
-        const z = -8 + i * 4.6, m = put(new THREE.BoxGeometry(11, 1.05, 3.8), hallM, FX, 0.525, z); keyD("factory hall " + "ABC"[i], 11, 3.8, FX, z, m);
-        for (let k = 0; k < 5; k++) put(new THREE.BoxGeometry(1.7, 0.3, 3.6), saw, FX - 4.4 + k * 2.2, 1.2, z); // sawtooth roof lights
-      }
-      keyD("power house", 3.4, 3.4, 19.5, -6, put(new THREE.BoxGeometry(3.4, 1.5, 3.4), hallM, 19.5, 0.75, -6));
-      keyD("chimney", 0.7, 0.7, 18, 1, put(new THREE.CylinderGeometry(0.22, 0.34, 5.2, 8), chim, 18, 2.6, 1));
-      keyD("chimney", 0.7, 0.7, 20, 5, put(new THREE.CylinderGeometry(0.2, 0.3, 4.4, 8), chim, 20, 2.2, 5));
-      for (let k = 0; k < 3; k++) put(new THREE.CylinderGeometry(0.9, 0.9, 0.9, 12), tankM, 17 + k * 2.2, 0.45, 12);
-      const sidingM = bas(0x3e3a34), sid = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 40), sidingM); sid.rotation.set(-Math.PI / 2, 0, 0); sid.position.set(4.6, 0.02, 0); sid.visible = false; CXG.add(sid); // bake owns siding at altitude
-      const road = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 40), streetM); road.rotation.set(-Math.PI / 2, 0, 0); road.position.set(23, 0.012, 3); road.visible = false; CXG.add(road);
-      // 1.6.4 airfield runway + two hangars east of factory (town-local via CXG)
-      {
-        const rwyM = bas(0xb0aca0), hangM = lam(0x6a6860);
-        const rwy = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 28), rwyM);
-        rwy.rotation.set(-Math.PI / 2, 0, -0.22); rwy.position.set(28, 0.03, 10); CXG.add(rwy);
-        for (const [hx, hz] of [[24, 18], [30, 16]]) {
-          const h = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.7, 2.2), hangM);
-          h.position.set(hx, 0.35, hz); CXG.add(h);
-        }
-      }
-    }
-
-    // 1.6.3: altitude landmarks (red slabs) removed — city mass is ground-baked
-    for (const A of [TL.wagons, TL.tracks, TL.stalls, TL.keys]) for (const e of A) { e[0] *= KC; e[1] *= KC; e[2] *= KC; e[3] *= KC; } // 1.6.0: complex coordinates → town-local
-  }
-
-  // 1.6.3: coplanar black disc / white grid / pad removed — townBakeU owns the altitude read
-
-  // 1.6.1: keep town meshes drawing at long range (instanced houses had default frustum spheres that culled early)
-  if (TS.walls) { TS.walls.frustumCulled = false; TS.roofs.frustumCulled = false; }
-  town.traverse((o) => { if (o.isMesh || o.isInstancedMesh) o.frustumCulled = false; });
-
-  town.traverse((o) => { if (o.material && !o.material._earthFog) { o.material._earthFog = true; o.material.onBeforeCompile = earthFog; } });
-  town.traverse((o) => { if (o.isMesh || o.isInstancedMesh) { o.renderOrder = Math.max(o.renderOrder || 0, 2); if (o.material && !o.material.polygonOffset) { o.material.polygonOffset = true; o.material.polygonOffsetFactor = -8; o.material.polygonOffsetUnits = -8; } } });
 
   // bomb bursts + smoke columns on the target (children of the ground frame → move with the ground)
   const impactFlash = [], impactSmoke = [];
@@ -3020,37 +2580,12 @@ export function createWorld3D(canvas) {
     sp.visible = false; landG.add(sp); impactSmoke.push({ sp, life: 0, max: 1, vy: 0, s0: 1, s1: 4, a: 0.6 });
   }
   let _ifI = 0, _isI = 0;
-  // 1.6.4: 88 mm muzzle flashes on the ground (tied to sky flak TOF)
-  const flakMuz = [];
-  for (let i = 0; i < 48; i++) {
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, color: 0xffc060, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
-    sp.visible = false; sp.scale.set(18, 18, 1); landG.add(sp);
-    flakMuz.push({ sp, life: 0 });
-  }
-  let _fmI = 0;
-  function flakMuzzle(wx, wz) {
-    // wx,wz are box-frame; convert approx into landG local via town center offset
-    landG.updateWorldMatrix(true, false);
-    const P = new THREE.Vector3(wx, groundWY(), wz);
-    const L = landG.worldToLocal(P.clone());
-    const f = flakMuz[_fmI]; _fmI = (_fmI + 1) % flakMuz.length;
-    f.sp.position.set(L.x, 0.8, L.z);
-    f.life = f.max = 0.45 + Math.random() * 0.25;
-    f.sp.visible = true;
-    f.sp.material.opacity = 1;
-    const sc = 22 + Math.random() * 18; f.sp.scale.set(sc, sc, 1);
-  }
-  function updateFlakMuzzles(dt) {
-    for (const f of flakMuz) {
-      if (!f.sp.visible) continue;
-      f.life -= dt;
-      if (f.life <= 0) { f.sp.visible = false; continue; }
-      const k = f.life / f.max;
-      f.sp.material.opacity = Math.min(1, k * 1.4);
-      const sc = 12 + (1 - k) * 40; f.sp.scale.set(sc, sc * 0.7, 1);
-      f.sp.position.y += 8 * dt;
-    }
-  }
+  // 1.6.8 FLAK GROUND: real 88 mm batteries (4–6 guns) round the town / factory / yard and along the approach. Each shell game.js
+  // fires (spawnFlakBurst, ~FLAK_TOF before its sky burst) belongs to a salvo: the whole battery flashes within ~0.25 s and leaves
+  // drifting smoke for 20–30 s. Pooled Points (2 draw calls), screen-size clamped, fog-exempt, drawn over the ground in the Earth pass.
+  // (1.6.4's sprites sat directly under the sky burst — i.e. under our own box — and their updater was never called.)
+  const FLAKG = createFlakGround({ landG, TOWN_X, TOWN_Z, TOWN_S, renderer, camera, clock: () => (window.__FG_FREEZE && window.__FG_SIMT != null ? window.__FG_SIMT : pnow() / 1000) });
+  function flakMuzzle() { FLAKG.muzzle(); }
   function bombBurst(lx, lz, big) { // ground-frame local coords (landG). 1.6.1: much bigger so a stick reads from a straggler several km back
     const mul = big ? 3.6 : 2.0;
     const f = impactFlash[_ifI]; _ifI = (_ifI + 1) % impactFlash.length;
@@ -3098,7 +2633,7 @@ export function createWorld3D(canvas) {
   const craterGeo = new THREE.CircleGeometry(0.34, 14); craterGeo.rotateX(-Math.PI / 2);
   const craterMat = new THREE.MeshBasicMaterial({ color: 0x2b2620, fog: true, transparent: true, opacity: 0.82, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   craterMat.onBeforeCompile = earthFog; craterMat._earthFog = true;
-  TS.craters = new THREE.InstancedMesh(craterGeo, craterMat, 320); TS.craters.count = 0; TS.craters.frustumCulled = false; town.add(TS.craters);
+  TS.craters = new THREE.InstancedMesh(craterGeo, craterMat, 320); TS.craters.count = 0; TS.craters.frustumCulled = false; TOWN3D.root.add(TS.craters); // 1.6.8: on the ground with the 3D town
   // ===== 1.5.8 CRASH SITES: where a hull / tail / wing hits the ground: fireball + flicker flames, a smoke column that climbs for ~30 s, a persistent scorch + debris-field decals (instanced, ground-fixed so they stream aft
   // with the farmland), and a distance-delayed boom. All of it lives in landG (local units = world / 7); a B-17 hull is a ~300 m fireball seen from 7.6 km, a tail ~40 %, a wing ~60 %. =====
   const CR = { fire: [], smoke: [], sites: [], nSc: 0, SC_N: 520, sm: 0, fi: 0, stats: { n: 0, hull: 0, tail: 0, wing: 0, puffs: 0 } };
@@ -3253,8 +2788,7 @@ export function createWorld3D(canvas) {
   const _tmpM = new THREE.Matrix4(), _tp = new THREE.Vector3(), _tq = new THREE.Quaternion(), _ts = new THREE.Vector3();
   function townReset() {
     TS.nCr = 0; TS.craters.count = 0; TS.hit.clear();
-    TS.houseM.forEach((m, i) => { TS.walls.setMatrixAt(i, m); TS.roofs.setMatrixAt(i, m); });
-    TS.walls.instanceMatrix.needsUpdate = true; TS.roofs.instanceMatrix.needsUpdate = true;
+    TOWN3D.resetHouses(); // 1.6.8
     TS.wagonM.forEach((m, i) => TS.wagons.setMatrixAt(i, m)); TS.wagons.instanceMatrix.needsUpdate = true;
     TS.keyMesh.forEach((m) => { m.scale.set(1, 1, 1); m.position.y = m.geometry.parameters.height / 2; if (m._mat0) m.material = m._mat0; m.rotation.z = 0; });
     TS.stallMesh.forEach((m) => { m.scale.set(1, 1, 1); m.position.y = 0.22; if (m._mat0) m.material = m._mat0; });
@@ -3542,11 +3076,83 @@ export function createWorld3D(canvas) {
   }
   const flakStats = { live: 0, flashes: 0, maxLive: 0 };
   function prng(seed) { let s = (seed * 9301 + 49297) % 233280; return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
-  function updateFlakBursts(list) {
+  // 1.6.8: LINGERING PUFFS — when game.js drops a burst (t ≥ 14 s) its 9 puffs move into one merged "ghost" mesh in the air mass
+  // (it streams aft with the box's motion and swings with the turns, like the bursts and contrails), keep expanding slowly, rise,
+  // drift with the wind and fade over 60–90 s. All animation runs in the vertex shader from static per-puff data; only the slot of a
+  // newly handed-over burst is uploaded (addUpdateRange), so 700 lingering bursts cost one draw call and ~no CPU.
+  const GH_N = 700, GH_V = GH_N * FP * 4;
+  const ghGeo = new THREE.BufferGeometry();
+  { const cor = new Float32Array(GH_V * 2), idx = new Uint32Array(GH_N * FP * 6);
+    for (let q = 0; q < GH_N * FP; q++) { const v = q * 4; cor.set([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5], v * 2); idx.set([v, v + 1, v + 2, v + 1, v + 3, v + 2], q * 6); }
+    ghGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(GH_V * 3), 3));
+    ghGeo.setAttribute("corner", new THREE.BufferAttribute(cor, 2));
+    ghGeo.setAttribute("aP", new THREE.BufferAttribute(new Float32Array(GH_V * 4), 4)); // wind x, wind z, size at hand-over, rotation
+    ghGeo.setAttribute("aQ", new THREE.BufferAttribute(new Float32Array(GH_V * 4).fill(-1e6), 4)); // birth time, life, alpha, atlas cell
+    ghGeo.setAttribute("aTint", new THREE.BufferAttribute(new Float32Array(GH_V * 3), 3));
+    ghGeo.setIndex(new THREE.BufferAttribute(idx, 1)); }
+  const ghMat = new THREE.ShaderMaterial({
+    uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { map: { value: flakAtlas }, uT: { value: 0 } }]),
+    vertexShader: [
+      "attribute vec2 corner; attribute vec4 aP; attribute vec4 aQ; attribute vec3 aTint; uniform float uT;",
+      "varying vec2 vUv; varying float vA; varying vec3 vT;",
+      "#include <fog_pars_vertex>",
+      "void main(){",
+      "  float age = uT - aQ.x, k = age / aQ.y;",
+      "  if (k < 0.0 || k >= 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vA = 0.0; return; }",
+      "  vec3 p = position + vec3(aP.x * age * 1.4, 0.72 * age, aP.y * age * 1.4 - 0.9 * age);", // slow wind drift aft + rise
+      "  vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);",
+      "  float sz = min(aP.z + 0.16 * age, 32.0);", // 1.6.8b: capped (32 u ≈ 48 m)
+      "  float c = cos(aP.w + 0.004 * age), s = sin(aP.w + 0.004 * age);",
+      "  mvPosition.xy += vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y) * sz;",
+      "  gl_Position = projectionMatrix * mvPosition;",
+      "  vUv = (vec2(mod(aQ.w, 4.0), floor(aQ.w / 4.0)) + corner + 0.5) / vec2(4.0, 2.0);",
+      "  vA = aQ.z * pow(1.0 - k, 1.35) * (1.0 - 0.25 * k);",
+      "  vT = mix(aTint, vec3(0.30, 0.29, 0.28), smoothstep(0.0, 1.0, k) * 0.8);", // old smoke greys out as it thins
+      "  #include <fog_vertex>",
+      "}"].join("\n"),
+    fragmentShader: flakMat.fragmentShader,
+    transparent: true, depthWrite: false, depthTest: true, fog: true,
+  });
+  const ghMesh = new THREE.Mesh(ghGeo, ghMat); ghMesh.frustumCulled = false; scene.add(ghMesh);
+  let ghNext = 0, ghT = 0, ghLive = 0; const ghBirth = new Float32Array(GH_N).fill(-1e6), ghLife = new Float32Array(GH_N);
+  const _gv = new THREE.Vector3();
+  function flakGhostClear() { const q = ghGeo.attributes.aQ.array; q.fill(-1e6); ghGeo.attributes.aQ.needsUpdate = true; ghBirth.fill(-1e6); ghMesh.position.set(0, 0, 0); ghMesh.rotation.set(0, 0, 0); }
+  function flakGhost(F, b) { // hand burst b (last state seen, time b.t) from mesh F to the ghost pool
+    const slot = ghNext; ghNext = (ghNext + 1) % GH_N;
+    const life = 60 + ((b.seed * 7919) % 30);
+    ghBirth[slot] = ghT; ghLife[slot] = life;
+    ghMesh.updateMatrixWorld(true);
+    const t = b.t, A = ghGeo.attributes, pos = A.position.array, P4 = A.aP.array, Q4 = A.aQ.array, T3 = A.aTint.array;
+    for (let p = 0; p < FP; p++) {
+      const P = F.puffs[p], tp = Math.max(0, t - P.late * 0.2), g2 = 1 - Math.exp(-tp * 5.5);
+      _gv.set(b.x + P.ox * (0.35 + 1.1 * g2) + P.wx * t, b.y + P.oy * (0.35 + 1.1 * g2) + 0.22 * t, b.z + P.oz * (0.35 + 1.1 * g2) + P.wz * t);
+      ghMesh.worldToLocal(_gv);
+      const size = P.s * (0.3 + 0.75 * g2) + t * 0.3, alpha = 0.92 * (p === 0 ? 1 : 0.9) * (1 - 0.3 * Math.min(1, t / 12));
+      const kk = P.lum * F.dark, tr = (0.12 + 0.03 * P.lum) * kk * F.tint[0], tg = (0.10 + 0.025 * P.lum) * kk * F.tint[1], tb = (0.085 + 0.02 * P.lum) * kk * F.tint[2];
+      for (let v = 0; v < 4; v++) {
+        const o = (slot * FP + p) * 4 + v;
+        pos[o * 3] = _gv.x; pos[o * 3 + 1] = _gv.y; pos[o * 3 + 2] = _gv.z;
+        P4[o * 4] = P.wx; P4[o * 4 + 1] = P.wz; P4[o * 4 + 2] = size; P4[o * 4 + 3] = P.rot + P.spin * t;
+        Q4[o * 4] = ghT; Q4[o * 4 + 1] = life; Q4[o * 4 + 2] = alpha; Q4[o * 4 + 3] = P.cell;
+        T3[o * 3] = tr; T3[o * 3 + 1] = tg; T3[o * 3 + 2] = tb;
+      }
+    }
+    const v0 = slot * FP * 4, nv = FP * 4;
+    for (const [nm, k] of [["position", 3], ["aP", 4], ["aQ", 4], ["aTint", 3]]) { A[nm].addUpdateRange(v0 * k, nv * k); A[nm].needsUpdate = true; }
+  }
+  function updateFlakGhosts(dt, dz, dH) {
+    ghT += dt; ghMat.uniforms.uT.value = ghT;
+    if (dH) { const c = Math.cos(-dH), s = Math.sin(-dH), x = ghMesh.position.x, z = ghMesh.position.z; ghMesh.position.x = x * c + z * s; ghMesh.position.z = -x * s + z * c; ghMesh.rotation.y -= dH; }
+    ghMesh.position.z -= dz;
+    let n = 0; for (let i = 0; i < GH_N; i++) if (ghT - ghBirth[i] < ghLife[i]) n++;
+    ghLive = n; flakStats.ghosts = n; ghMesh.visible = n > 0;
+  }
+  function updateFlakBursts(list, dt, dz, dH) {
     list = list || [];
+    updateFlakGhosts(dt || 0, dz || 0, dH || 0);
     const byId = new Map(); for (const b of list) if (b.t >= 0) byId.set(b.id, b);
-    // keep each burst in its mesh
-    for (const F of flakMeshes) if (F.id >= 0 && !byId.has(F.id)) { F.id = -1; F.m.visible = false; F.fl.visible = false; }
+    // keep each burst in its mesh; a burst game.js has dropped lingers on in the ghost pool
+    for (const F of flakMeshes) if (F.id >= 0 && !byId.has(F.id)) { if (F.last && F.last.t > 0.5) flakGhost(F, F.last); F.id = -1; F.last = null; F.m.visible = false; F.fl.visible = false; }
     const used = new Set(flakMeshes.filter((F) => F.id >= 0).map((F) => F.id));
     for (const b of byId.values()) {
       if (used.has(b.id)) continue;
@@ -3574,16 +3180,17 @@ export function createWorld3D(canvas) {
       const b = byId.get(F.id); if (!b) continue;
       live++;
       const t = b.t;
+      F.last = { x: b.x, y: b.y, z: b.z, t: b.t, seed: b.seed };
       F.m.visible = true; F.m.position.set(b.x, b.y, b.z);
       const geo = F.m.geometry, pos = geo.attributes.position.array, dat = geo.attributes.aData.array, tin = geo.attributes.aTint.array;
       const grow = 1 - Math.exp(-t * 5.5);       // fast blast expansion, then slow billowing
-      const fade = t < 0.04 ? t / 0.04 : t < 5 ? 1 : Math.max(0, 1 - (t - 5) / 8.5);
+      const fade = t < 0.04 ? t / 0.04 : 1; // 1.6.8: no fade-out here — it lingers on as a ghost for 60–90 s
       const glow = Math.max(0, 1 - t / 0.45);   // hot orange core in the first instants
       for (let p = 0; p < FP; p++) {
         const P = F.puffs[p], tp = Math.max(0, t - P.late * 0.2);
         const g2 = 1 - Math.exp(-tp * 5.5);
         const ox = P.ox * (0.35 + 1.1 * g2) + P.wx * t, oy = P.oy * (0.35 + 1.1 * g2) + 0.22 * t, oz = P.oz * (0.35 + 1.1 * g2) + P.wz * t;
-        const size = P.s * (0.3 + 0.75 * g2) + t * 0.55;
+        const size = P.s * (0.3 + 0.75 * g2) + t * 0.3; // 1.6.8b: slower growth
         const alpha = 0.92 * fade * (p === 0 ? 1 : 0.9) * (1 - 0.3 * Math.min(1, t / 12));
         const kGlow = glow * (p === 0 ? 1 : 0.6);
         const tr = (0.12 + 0.03 * P.lum) * (1 - kGlow) + 2.2 * kGlow, tg = (0.10 + 0.025 * P.lum) * (1 - kGlow) + 0.75 * kGlow, tb = (0.085 + 0.02 * P.lum) * (1 - kGlow) + 0.2 * kGlow;
@@ -3640,13 +3247,15 @@ export function createWorld3D(canvas) {
   }
   const rmBegin = (R) => { R.ni = 0; R.used = 0; };
   // add one section (vertex pair) of ribbon r at index i of nPts
+  let _conRide = false; // 1.6.8: set each frame from opts.ride
   function rmSec(R, r, i, px, py, pz, tx, ty, tz, w, wMin, red, grn, blu, a, v) {
     _ca.set(camera.position.x - px, camera.position.y - py, camera.position.z - pz);
     const dist = _ca.length();
     _cw.set(tx, ty, tz).cross(_ca); let L = _cw.length();
     if (L < 1e-4) { _cw.set(1, 0, 0); L = 1; }
     const ww = Math.max(w, dist * wMin) * 0.5 / L; _cw.multiplyScalar(ww);
-    const nf = dist < 45 ? 0 : dist > 240 ? 1 : (dist - 45) / 195; a *= nf * nf * (3 - 2 * nf); // never smear across the lens
+    const n0 = _conRide ? 120 : 45, n1 = _conRide ? 900 : 240; // 1.6.8: riding a fighter behind the box, the bombers' sheets ran from the lens to the target like beams
+    const nf = dist < n0 ? 0 : dist > n1 ? 1 : (dist - n0) / (n1 - n0); a *= nf * nf * (3 - 2 * nf) * (_conRide ? 0.6 : 1); // never smear across the lens
     const o = (r * R.nPts + i) * 6, c = (r * R.nPts + i) * 8, u = (r * R.nPts + i) * 4;
     R.pos[o] = px - _cw.x; R.pos[o + 1] = py - _cw.y; R.pos[o + 2] = pz - _cw.z; R.pos[o + 3] = px + _cw.x; R.pos[o + 4] = py + _cw.y; R.pos[o + 5] = pz + _cw.z;
     R.col[c] = R.col[c + 4] = red; R.col[c + 1] = R.col[c + 5] = grn; R.col[c + 2] = R.col[c + 6] = blu; R.col[c + 3] = R.col[c + 7] = a;
@@ -3663,7 +3272,7 @@ export function createWorld3D(canvas) {
   const conStats = { bomberRibs: 0, fighterRibs: 0, verts: 0, bomberVerts: 0, fighterVerts: 0, ms: 0, cap: 0 };
   // --- 1.5.4 bombers: TRUE per-plane trails. Every Fortress (4 engines) leaves world-space points as it flies; they stay in the
   // air mass (stream aft by the distance flown, swing with the formation's turn), so the trails curve when the box turns for home.
-  const CB_PTS = 72, CB_DT = 0.5, CB_LIFE = 35;
+  const CB_PTS = 132, CB_DT = 0.75, CB_LIFE = 95; // 1.6.8: trails hang for ~1.5 min (was 35 s)
   const bomberR = ribMesh(18 * 4, CB_PTS), conAnchors = [];
   let _cDz = 0, _cDH = 0, _cReset = false;
   function addContrails(group, pts) {
@@ -3703,7 +3312,7 @@ export function createWorld3D(canvas) {
         const p = P[i], pa = P[Math.max(0, i - 1)], pb = P[Math.min(n - 1, i + 1)];
         if (i) vco += Math.hypot(p.x - pa.x, p.y - pa.y, p.z - pa.z) / 36;
         const k = Math.min(1, p.age / CB_LIFE), fadeIn = Math.min(1, Math.max(0, (p.age - 0.2) / 0.7));
-        const al = 0.55 * fadeIn * Math.pow(1 - k, 1.5), w = 0.3 + 14 * Math.pow(k, 0.72);
+        const al = 0.55 * fadeIn * Math.pow(1 - k, 1.15) * (1 - 0.35 * k), w = 0.3 + 26 * Math.pow(k, 0.62);
         rmSec(R, r, i, p.x, p.y, p.z, pb.x - pa.x, pb.y - pa.y, pb.z - pa.z, w, 0.0018, 1, 1, 1, al, vco);
       }
       rmLink(R, r, n); r++; nv += n * 2;
@@ -3712,7 +3321,7 @@ export function createWorld3D(canvas) {
     R.used = r; rmEnd(R); conStats.bomberRibs = r; conStats.bomberVerts = nv;
   }
   // --- fighters: thin path ribbons from each fighter's own history
-  const CF_P = 56, CF_R = 64;
+  const CF_P = 64, CF_R = 64; // 1.6.8b: fighter trails 10–15 s, cruise only
   const fighterR = ribMesh(CF_R, CF_P), fTrails = new Map(), fFree = [];
   for (let i = CF_R - 1; i >= 0; i--) fFree.push(i);
   function conEmitFighter(e, hpFrac, dt, now) {
@@ -3734,10 +3343,11 @@ export function createWorld3D(canvas) {
     T.pv = [vx, vy, vz];
     T.last -= dt;
     if (T.last <= 0 && e.alive) {
-      T.last = 0.1;
-      const gm = Math.min(1, Math.max(0, (T.g - 1.8) / 4.5));
+      T.last = 0.25;
+      const cruise = T.g < 2 && Math.abs(e.bank || 0) < 0.785; // 1.6.8b: no trail while manoeuvring (zero-alpha points keep the gap)
+      T.cr = (T.cr || 0) + ((cruise ? 1 : 0) - (T.cr || 0)) * 0.35;
       const hit = hpFrac < 0.99;
-      T.pts.push({ x: e.x, y: e.y, z: e.z, age: 0, wm: 1 + 1.3 * gm, am: (1 + 0.8 * gm) * (hpFrac <= 0.4 ? 0.25 : hit ? 0.55 : 1) });
+      T.pts.push({ x: e.x, y: e.y, z: e.z, age: 0, wm: 1, am: T.cr * (hpFrac <= 0.4 ? 0.25 : hit ? 0.55 : 1) });
       if (T.pts.length > CF_P) T.pts.shift();
     }
   }
@@ -3745,17 +3355,17 @@ export function createWorld3D(canvas) {
     const R = fighterR; rmBegin(R); let live = 0, nv = 0;
     for (const [id, T] of fTrails) {
       T.live = activeIds.has(id);
-      const P = T.pts, life = T.p51 ? 8.5 : 6.5;
+      const P = T.pts, life = T.p51 ? 15 : 10; // 1.6.8b
       { const cs = Math.cos(-_cDH), sn = Math.sin(-_cDH); for (const p of P) { p.age += dt; if (_cDH) { const x = p.x, z = p.z; p.x = x * cs + z * sn; p.z = -x * sn + z * cs; } p.z -= _cDz; } }
       while (P.length && P[0].age >= life) P.shift();
       if (P.length < 2) { if (!T.live && !P.length) { fFree.push(T.r); fTrails.delete(id); } continue; }
-      const A0 = T.p51 ? 0.7 : 0.4, W0 = T.p51 ? 0.55 : 0.4, W1 = T.p51 ? 3.1 : 2.2, col = T.p51 ? 1 : 0.94;
+      const A0 = T.p51 ? 0.6 : 0.4, W0 = T.p51 ? 0.55 : 0.4, W1 = T.p51 ? 4 : 3, col = T.p51 ? 1 : 0.94;
       let vcoord = 0, n = P.length;
       for (let i = 0; i < n; i++) {
         const p = P[i], a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)];
         if (i) vcoord += Math.hypot(p.x - a.x, p.y - a.y, p.z - a.z) / 14;
-        const k = p.age / life, w = (W0 + (W1 - W0) * Math.sqrt(k)) * p.wm;
-        const al = A0 * p.am * Math.pow(1 - k, 1.25) * Math.min(1, p.age / 0.12 + 0.3) * (i === n - 1 && T.live ? 0.6 : 1);
+        const k = p.age / life, w = (W0 + (W1 - W0) * Math.pow(k, 0.6)) * p.wm;
+        const al = A0 * p.am * Math.pow(1 - k, 1.3) * Math.min(1, p.age / 0.12 + 0.3) * (i === n - 1 && T.live ? 0.6 : 1);
         rmSec(R, T.r, i, p.x, p.y, p.z, b.x - a.x, b.y - a.y, b.z - a.z, w, 0.0011, col, col, T.p51 ? 1 : 0.98, al, vcoord);
       }
       rmLink(R, T.r, n); live++; nv += n * 2;
@@ -3795,7 +3405,7 @@ export function createWorld3D(canvas) {
     // --- clouds + flak: stationary in the air → stream aft by the distance flown, swing with the turn ---
     const odo = opts.odo || 0;
     let dz = _odo == null ? 0 : odo - _odo;
-    if (dz < 0 || dz > 400) { dz = 0; _cReset = true; if (_odo == null || odo < _odo) { bombs.length = 0; bombMesh.count = 0; bombStreak.count = 0; } // 1.6.5: new mission — drop last mission's sticks (nothing else steps them now)
+    if (dz < 0 || dz > 400) { dz = 0; _cReset = true; flakGhostClear(); FLAKG.reset(); if (_odo == null || odo < _odo) { bombs.length = 0; bombMesh.count = 0; bombStreak.count = 0; } // 1.6.5: new mission — drop last mission's sticks (nothing else steps them now)
       if (typeof crashReset === "function" && CR.nSc + CR.sites.length) crashReset(); } // new mission / big jump
     _odo = odo;
     const hd = opts.heading || 0;
@@ -3818,7 +3428,8 @@ export function createWorld3D(canvas) {
     if (dH) for (const gg of friendlyPool) { const ds = gg.userData.dets; if (!ds) continue; for (const grp of ds) { if (grp.userData.dead) continue; const u = grp.userData; rot(grp); const vx = u.vx, vz = u.vz; u.vx = vx * c + vz * s; u.vz = -vx * s + vz * c; grp.rotateOnWorldAxis(_yAxis, -dH); } } // 1.5.8: falling pieces are in the air mass too
     if (dH) for (const f of flakPool) { const x = f.x, z = f.z; f.x = x * c + z * s; f.z = -x * s + z * c; }
     updateFlak(!!opts.flakOn, dt, dz);
-    updateFlakBursts(opts.flakBursts);
+    updateFlakBursts(opts.flakBursts, dt, dz, dH);
+    FLAKG.update(dt);
     updateRockets(opts.rockets);
     updateDebris(dz);
     updateFlakDebris(dz);
@@ -3901,7 +3512,7 @@ export function createWorld3D(canvas) {
           if (eng.lastEmit <= 0) { // 1.4.0: a continuous trail (ribbon) instead of spaced puffs
             eng.anchor.getWorldPosition(_v);
             const dark = burning || f.spiraling;
-            { const wsx = f.spiraling ? Math.min(8, 1 + g.position.distanceTo(camera.position) / 800) : 1; ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: (dark ? 1.0 : 0.6) * wsx, w1: (dark ? (f.spiraling ? 12 : 8) : 3.2) * wsx, life: dark ? (burning ? 4.6 : 3.2) * (f.spiraling ? 1.5 : 1) : 2.4, a: dark ? 0.62 : 0.3, col: dark ? [0.13, 0.125, 0.12] : [0.4, 0.4, 0.39], drift: 55 }); }
+            { const wsx = f.spiraling ? Math.min(2.5, 1 + g.position.distanceTo(camera.position) / 1600) : 1; /* 1.6.8b: was min(8, …/800) */ ribbonEmit("b" + i + "_" + k + "_" + (f.id != null ? f.id : ""), _v, { w0: (dark ? 1.0 : 0.6) * wsx, w1: (dark ? (f.spiraling ? 12 : 8) : 3.2) * wsx, life: dark ? (burning ? 4.6 : 3.2) * (f.spiraling ? 1.5 : 1) : 2.4, a: dark ? 0.62 : 0.3, col: dark ? [0.13, 0.125, 0.12] : [0.4, 0.4, 0.39], drift: 55 }); }
             if (f.spiraling && Math.random() < 0.3) emitSmoke(_v, true, true);
             eng.lastEmit = 0.05;
           }
@@ -5210,7 +4821,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
 
   // 1.3.3: kill blast + tumbling debris for bandits
   const _spinQ = new THREE.Quaternion();
-  const debrisMat = new THREE.MeshStandardMaterial({ color: 0x3a3d34, roughness: 0.7, metalness: 0.4 });
+  const debrisMat = new THREE.MeshStandardMaterial({ color: 0x1b1c19, roughness: 0.85, metalness: 0.25 }); // 1.6.8: darker
   const debrisGeo = [new THREE.BoxGeometry(1.2, 0.12, 0.6), new THREE.BoxGeometry(0.5, 0.4, 0.5), new THREE.BoxGeometry(1.8, 0.1, 0.35)];
   const debris = [];
   for (let i = 0; i < 40; i++) {
@@ -5234,11 +4845,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       d.m.position.copy(pos);
       d.v.set((e.vx || 0) * 0.5 + (Math.random() - 0.5) * 40, (e.vy || 0) * 0.3 + Math.random() * 20 - 4, (e.vz || 0) * 0.5 + (Math.random() - 0.5) * 40);
       d.w.set(Math.random() * 12, Math.random() * 12, Math.random() * 12);
-      d.m.scale.setScalar(0.8 + Math.random() * 1.2);
+      d.m.scale.setScalar(0.25 + Math.random() * 0.35); // 1.6.8: chunks were 1-5 m slabs; real kill debris is panels and bits
       d.life = 2.2 + Math.random();
       d.m.visible = true;
     }
-    for (let i = 0; i < 5; i++) emitSmoke(pos, true, true, { life: 3.5, s0: 3, s1: 14, a: 0.75 });
+    for (let i = 0; i < 5; i++) emitSmoke(pos, true, true, { life: 3.5, s0: 2, s1: 9, a: 0.7 }); // 1.6.8: smaller kill puff
   }
   function updateDebris() {
     const now = pnow();
@@ -5430,7 +5041,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     const c = document.createElement("canvas"); c.width = c.height = 256;
     const x = c.getContext("2d"); x.translate(128, 128);
     x.shadowColor = kind === "k14" ? "rgba(255,170,60,0.9)" : "rgba(255,120,40,0.9)"; x.shadowBlur = 6;
-    x.strokeStyle = x.fillStyle = kind === "k14" ? "rgba(255,196,90,0.95)" : "rgba(255,150,70,0.95)";
+    x.strokeStyle = x.fillStyle = kind === "k14" ? "rgba(255,150,40,0.9)" : "rgba(255,112,26,0.9)"; // 1.6.8: warm orange glow on the reflector
     if (kind === "k14") { // K-14: six diamonds on the range ring + the centre pipper
       for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3 - Math.PI / 2, r = 92; x.save(); x.translate(Math.cos(a) * r, Math.sin(a) * r); x.rotate(a); x.beginPath(); x.moveTo(-9, 0); x.lineTo(0, -5); x.lineTo(9, 0); x.lineTo(0, 5); x.closePath(); x.fill(); x.restore(); }
       x.beginPath(); x.arc(0, 0, 4.5, 0, Math.PI * 2); x.fill();
@@ -5453,12 +5064,15 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     p51: { bg: "#3c4934", gauges: [[46, 48, 32, "asi"], [120, 44, 32, "ai"], [194, 44, 32, "alt"], [268, 44, 32, "comp"], [342, 46, 32, "rpm"], [416, 48, 30, "mp"], [478, 112, 26, "vsi"], [70, 136, 28, "turn"], [144, 140, 26, "oil"], [214, 140, 26, "temp"], [286, 140, 26, "fuel"]], ammo: null },
   };
   function drawRidePanel(cv, type, mph, ft, t, att) { // 1.6.7b: att = { bank, pitch, hdg } (rad) from the ridden airframe's basis
-    const L = RIDE_PANEL[type], x = cv.getContext("2d"), W = cv.width, H = cv.height;
-    x.fillStyle = L.bg; x.fillRect(0, 0, W, H);
-    const gr = x.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "rgba(255,255,255,0.07)"); gr.addColorStop(1, "rgba(0,0,0,0.28)"); x.fillStyle = gr; x.fillRect(0, 0, W, H);
-    x.strokeStyle = "rgba(0,0,0,0.35)"; x.lineWidth = 2; x.strokeRect(3, 3, W - 6, H - 6);
+    const L = RIDE_PANEL[type], x = cv.getContext("2d"), W = cv.width, H = cv.height, PT = !!cv.__painted;
+    if (PT) x.clearRect(0, 0, W, H); // 1.6.8: painted panel — only the live dial faces are drawn here, into the painted bezels
+    else {
+      x.fillStyle = L.bg; x.fillRect(0, 0, W, H);
+      const gr = x.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "rgba(255,255,255,0.07)"); gr.addColorStop(1, "rgba(0,0,0,0.28)"); x.fillStyle = gr; x.fillRect(0, 0, W, H);
+      x.strokeStyle = "rgba(0,0,0,0.35)"; x.lineWidth = 2; x.strokeRect(3, 3, W - 6, H - 6);
+    }
     for (const [gx, gy, r, k] of L.gauges) {
-      x.fillStyle = "#151515"; x.beginPath(); x.arc(gx, gy, r + 4, 0, 6.283); x.fill(); // bezel
+      if (!PT) { x.fillStyle = "#151515"; x.beginPath(); x.arc(gx, gy, r + 4, 0, 6.283); x.fill(); } // bezel
       x.fillStyle = "#0b0b0b"; x.beginPath(); x.arc(gx, gy, r, 0, 6.283); x.fill();
       x.strokeStyle = "#e8e4d8"; x.lineWidth = 1.6;
       const nT = k === "comp" ? 0 : 12;
@@ -5491,6 +5105,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       if (k === "alt") { const a2 = -1.571 + ((ft % 100000) / 100000) * 6.283; x.lineWidth = r * 0.1; x.beginPath(); x.moveTo(gx, gy); x.lineTo(gx + Math.cos(a2) * r * 0.5, gy + Math.sin(a2) * r * 0.5); x.stroke(); }
       x.fillStyle = "#777"; x.beginPath(); x.arc(gx, gy, r * 0.08, 0, 6.283); x.fill();
     }
+    if (PT) { // glass glint over each dial
+      for (const [gx, gy, r] of L.gauges) { const gg = x.createLinearGradient(gx - r, gy - r, gx + r * 0.3, gy + r * 0.3); gg.addColorStop(0, "rgba(255,255,255,0.10)"); gg.addColorStop(0.5, "rgba(255,255,255,0.02)"); gg.addColorStop(1, "rgba(255,255,255,0)"); x.fillStyle = gg; x.beginPath(); x.arc(gx, gy, r, 0, 6.283); x.fill(); }
+    }
     if (L.ammo) { const [ax, ay, n] = L.ammo; for (let i = 0; i < n; i++) { const bx = ax + i * 30; x.fillStyle = "#121212"; x.fillRect(bx, ay, 26, 52); x.fillStyle = "#d8d2c0"; x.font = "bold 13px monospace"; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(String(9 - i * 2), bx + 13, ay + 14); x.fillText("0", bx + 13, ay + 30); x.fillStyle = "#6a6"; x.fillRect(bx + 8, ay + 42, 10, 5); } }
   }
   function rideWingTex(type, port) { // u: root → tip, v: leading edge → trailing edge
@@ -5515,6 +5132,29 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         for (let k = 0; k < 10; k++) { const a = -1.571 + k * Math.PI / 5, r = k % 2 ? R * 0.38 : R * 0.97; x.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); } x.fill(); }
     } else { const cx = 0.68 * 512, cy = 128, R = 46; x.fillStyle = "#f2f2f0"; x.fillRect(cx - R, cy - R * 0.22, R * 2, R * 0.44); x.fillRect(cx - R * 0.22, cy - R, R * 0.44, R * 2); x.fillStyle = "#111"; x.fillRect(cx - R * 0.8, cy - R * 0.13, R * 1.6, R * 0.26); x.fillRect(cx - R * 0.13, cy - R * 0.8, R * 0.26, R * 1.6); } // Balkenkreuz (both upper wings)
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.flipY = false; return t; // v = 0 (canvas top) = leading edge
+  }
+  // 1.6.8: painted cockpit shell — 6 faces of a box around the pilot's eye, each a painted image made by a central projection from the eye
+  // (fg_168/cp/rt.py), so from the eye it lines up with the live 3D nose, wings and sky. Glass is alpha 0. Drawn after the world, before the live dials.
+  const CP_BOX = { x0: -0.37, x1: 0.37, y0: -0.47, y1: 0.31, z0: -0.68, z1: 0.57 };
+  function addPaintedShell(g, type) {
+    const B = CP_BOX, L = new THREE.TextureLoader();
+    const F = { // TL, TR, BR, BL corners (group local: +X port, +Y up, +Z nose) — must match rt.py FACES
+      front: [[B.x1, B.y1, B.z1], [B.x0, B.y1, B.z1], [B.x0, B.y0, B.z1], [B.x1, B.y0, B.z1]],
+      back: [[B.x0, B.y1, B.z0], [B.x1, B.y1, B.z0], [B.x1, B.y0, B.z0], [B.x0, B.y0, B.z0]],
+      left: [[B.x1, B.y1, B.z0], [B.x1, B.y1, B.z1], [B.x1, B.y0, B.z1], [B.x1, B.y0, B.z0]],
+      right: [[B.x0, B.y1, B.z1], [B.x0, B.y1, B.z0], [B.x0, B.y0, B.z0], [B.x0, B.y0, B.z1]],
+      top: [[B.x1, B.y1, B.z1], [B.x0, B.y1, B.z1], [B.x0, B.y1, B.z0], [B.x1, B.y1, B.z0]],
+      bottom: [[B.x1, B.y0, B.z0], [B.x0, B.y0, B.z0], [B.x0, B.y0, B.z1], [B.x1, B.y0, B.z1]],
+    };
+    g.userData.shell = [];
+    for (const k in F) {
+      const c = F[k], geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute([].concat(c[0], c[3], c[2], c[0], c[2], c[1]), 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1], 2));
+      const tex = L.load("assets/cockpit/" + type + "_" + k + ".png?v=168"); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.03, depthTest: false, depthWrite: true, side: THREE.DoubleSide, fog: false, toneMapped: false }));
+      m.renderOrder = 900; g.add(m); g.userData.shell.push(m);
+    }
   }
   function buildRideCockpit(type) {
     const g = new THREE.Group(); g.name = "rideCockpit_" + type; g.visible = false;
@@ -5570,7 +5210,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       quad([[s * 0.38, W.y, W.le], [s * W.s, tipY, tLE], [s * W.s, tipY, tLE - W.tc], [s * 0.38, W.y, W.le - W.rc]], wm, [[0, 0], [1, 0], [1, 1], [0, 1]]);
     }
     // ---- canopy (eye at origin; windscreen base y −0.17 at z 0.6) ----
-    if (type === "109") { // G-6 with Erla Haube: flat armoured front panel + thick glass block, angular side panes with one bar each, clear top
+    const PAINTED = !window.__FG_OLDCP; // 1.6.8: the canopy, coaming, panel housing and sight body are a PAINTED shell (assets/cockpit/*) around the eye
+    if (PAINTED) addPaintedShell(g, type);
+    else if (type === "109") { // G-6 with Erla Haube: flat armoured front panel + thick glass block, angular side panes with one bar each, clear top
       const th = 0.014;
       bar([-0.15, -0.17, 0.62], [-0.12, 0.17, 0.45], th); bar([0.15, -0.17, 0.62], [0.12, 0.17, 0.45], th); bar([-0.12, 0.17, 0.45], [0.12, 0.17, 0.45], th);
       bar([-0.15, -0.17, 0.62], [0.15, -0.17, 0.62], th);
@@ -5609,13 +5251,15 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       const hr = new THREE.Mesh(boxG, padM); hr.scale.set(0.2, 0.18, 0.06); hr.position.set(0, -0.02, -0.55); g.add(hr); // headrest
     }
     // ---- coaming, instrument panel (canvas), gunsight ----
-    { const o = new THREE.Mesh(boxG, intM); o.scale.set(0.46, 0.012, 0.03); o.position.set(0, -0.128, 0.455); g.add(o); } // thin coaming lip
-    const pcv = rideCanvas(512, 192); drawRidePanel(pcv, type, 0, 25000, 0);
+    if (!PAINTED) { const o = new THREE.Mesh(boxG, intM); o.scale.set(0.46, 0.012, 0.03); o.position.set(0, -0.128, 0.455); g.add(o); } // thin coaming lip
+    const pcv = rideCanvas(512, 192); pcv.__painted = PAINTED; drawRidePanel(pcv, type, 0, 25000, 0);
     const ptex = new THREE.CanvasTexture(pcv); ptex.colorSpace = THREE.SRGBColorSpace; ptex.anisotropy = 4;
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.17), new THREE.MeshLambertMaterial({ map: ptex, fog: false, emissive: 0xffffff, emissiveMap: ptex, emissiveIntensity: 0.4 }));
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.17), PAINTED ? new THREE.MeshBasicMaterial({ map: ptex, fog: false, transparent: true, depthTest: false, depthWrite: false, color: 0x9a9a96 }) : new THREE.MeshLambertMaterial({ map: ptex, fog: false, emissive: 0xffffff, emissiveMap: ptex, emissiveIntensity: 0.4 }));
+    if (PAINTED) panel.renderOrder = 950; // live dials sit in the painted bezels, over the shell
     panel.position.set(0, -0.215, 0.45); panel.lookAt(0, 0.04, 0); g.add(panel); // top edge just under the sight line of the windscreen base (≈ −16°), gauges −18…−27°
     g.userData.panel = { cv: pcv, tex: ptex, t: -1 };
-    if (ger) { // Revi 16B: small body on the coaming, reflector plate leaning back in a thin frame
+    if (PAINTED) { /* sight body + reflector frame are painted */ }
+    else if (ger) { // Revi 16B: small body on the coaming, reflector plate leaning back in a thin frame
       const b = new THREE.Mesh(boxG, sightM); b.scale.set(0.034, 0.032, 0.07); b.position.set(0, -0.112, 0.47); g.add(b);
       slab(0.058, 0.048, 0.003, 0, -0.072, 0.478, -0.5);
       bar([-0.029, -0.097, 0.488], [-0.029, -0.052, 0.466], 0.003, sightM); bar([0.029, -0.097, 0.488], [0.029, -0.052, 0.466], 0.003, sightM);
@@ -5626,7 +5270,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       bar([-0.027, -0.111, 0.495], [-0.027, -0.079, 0.488], 0.003, sightM); // reflector arm
       slab(0.05, 0.04, 0.003, -0.004, -0.06, 0.49, -0.55);
     }
-    const ret = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: rideReticleTex(type === "p51" ? "k14" : "revi"), transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    const ret = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: rideReticleTex(type === "p51" ? "k14" : "revi"), transparent: true, depthTest: false, depthWrite: false, blending: window.__FG_OLDCP ? THREE.AdditiveBlending : THREE.NormalBlending, fog: false })); // 1.6.8: normal blend keeps the glow orange against a bright sky
     const RD = 0.5, RS = RD * Math.tan((type === "p51" ? 7.2 : 6.6) * Math.PI / 180); // sight picture on the boresight (dead ahead of the eye)
     ret.scale.set(RS * 2, RS * 2, 1); ret.position.set(0, 0, RD); ret.rotation.y = Math.PI; ret.renderOrder = 998; g.add(ret);
     g.userData.ret = ret;
@@ -5699,6 +5343,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     } else _rollQ.setFromAxisAngle(_zAxis, -(opts.roll || 0));
     camera.quaternion.premultiply(_rollQ);
     const RIDE = opts.ride || null; // 1.6.6 ride-along: the camera sits in a fighter's cockpit
+    _conRide = !!RIDE;
     if (RIDE || rideStats.on) syncRide(RIDE);
     if (ownShip) updateOwnShip(opts);
     { // 1.3.8: under our own canopy
@@ -5706,17 +5351,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       CR.chuteRich = inChute; // 1.6.1: richer crash/ground FX only in parachute view
       const atTail = (opts.station === "tail") && !RIDE;
       CR.tailDim = atTail;
-      // 1.6.3: LOD — 3D house instances only when near (bake owns the altitude recon look)
-      if (TS.walls) {
-        const tw = town.getWorldPosition(_mw);
-        // horizontal near + AGL: bake owns cruise/25k chute; 3D houses from ~≤10k ft AGL
-        const dTown = Math.hypot(camera.position.x - tw.x, camera.position.z - tw.z);
-        const agl = camera.position.y - groundWY();
-        const nearH = dTown < 2200 && agl < 2400; // ~≤12k ft
-        TS.walls.visible = nearH; TS.roofs.visible = nearH;
-        if (TS.wagons) TS.wagons.visible = nearH && dTown < 1800;
-        if (TS.cxg) TS.cxg.visible = nearH && agl < 1100; // factories/yard ~≤5.4k ft only
-      }
+      TOWN3D.update(camera, groundWY()); // 1.6.8 TOWN: 3D town ≤ ~15k ft AGL, bake above (and underneath)
 
       // 1.6.3: TAIL reuses TOP turret twin .50 barrel meshes (closer-spaced in updateGuns); hide cage/sightBox + old procedural tailGuns
       turretAnchor.visible = !inChute && !window.__FG_FREECAM && !RIDE;
@@ -6107,6 +5742,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     muzzles: muzzleOut,
     _gunGroups: gunGroups,
     _townBakeU: townBakeU,
+    _town3d: TOWN3D, _groundWY: () => groundWY(), // 1.6.8 test hooks
     b17Ortho, rayShip, addHole, addTear, clearDamage, rayFighter, addFighterHole, fighterBoundR, fighterDecalInfo, fighterMeshDump,
     decalInfo: (which) => { const g = shipGroup(which); if (!g) return []; g.updateMatrixWorld(true); return (g.userData.decals || []).map((m) => { const p = new THREE.Vector3(); m.getWorldPosition(p); const n = new THREE.Vector3(0, 0, 1).applyQuaternion(m.getWorldQuaternion(new THREE.Quaternion())); return { x: p.x, y: p.y, z: p.z, nx: n.x, ny: n.y, nz: n.z, s: m.scale.x }; }); },
     get flakStats() { return Object.assign({}, flakStats); },
@@ -6122,7 +5758,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     crashFx: (x, z, size) => { crashImpact(new THREE.Vector3(x, groundWY(), z), size || 1, "hull"); detStats.crashed.hull++; },
     get decalStats() { return decalStats; }, decalDump() { const o = []; for (const g of [ownShip, ...friendlyPool]) { const L = (g.userData.decals || []).concat(g.userData.tears || []); if (!L.length) continue; g.updateMatrixWorld(true);
       o.push({ vis: g.visible, n: L.length, items: L.map((m) => { const bb = new THREE.Box3().setFromObject(m); const c = bb.getCenter(new THREE.Vector3()); return { v: m.visible, vc: m.geometry.attributes.position.count, x: +c.x.toFixed(2), y: +c.y.toFixed(2), z: +c.z.toFixed(2), sz: +bb.getSize(new THREE.Vector3()).length().toFixed(2) }; }) }); } return o; }, get detStats() { return JSON.parse(JSON.stringify(detStats)); }, get crashStats() { return Object.assign({ decals: Math.min(CR.nSc, CR.SC_N), sites: CR.sites.length, fire: CR.fire.filter((f) => f.life > 0).length, smoke: CR.smoke.filter((p) => p.life > 0).length }, CR.stats); }, groundWY,
-    flakMuzzle: (wx, wz) => flakMuzzle(wx, wz),
+    flakMuzzle: (wx, wz) => flakMuzzle(wx, wz), _flakGround: () => FLAKG, _flakStats: () => flakStats, _dbgSky: () => ({ scene, ghMesh, flakMeshes, smokePool }),
     groundBurst: (u, v) => { bombBurst(TOWN_X + TOWN_S * u, TOWN_Z + TOWN_S * v, true); if (TS.nCr < 320) { _tp.set(u, 0.07, v); _tq.identity(); _ts.set(1.2, 1, 1.2); TS.craters.setMatrixAt(TS.nCr++, _tmpM.compose(_tp, _tq, _ts)); TS.craters.count = TS.nCr; TS.craters.instanceMatrix.needsUpdate = true; } },
     townGeom: { X: TOWN_X, Z: TOWN_Z, K: K_LAND, S: TOWN_S, g: BOMB_G, spacing: BOMB_SPACING, wy: CAM.y * (1 - EARTH_K) + EARTH_K * (GROUND_Y + 0.05) },
     townLayout: () => TL,

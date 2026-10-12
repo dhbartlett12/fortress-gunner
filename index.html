@@ -19,7 +19,6 @@
       <div id="wavebox"><span id="tgtlabel">TGT</span> <span id="wave">2:00</span></div>
       <div id="fpsbox"><span id="fps">--</span> FPS</div>
       <div id="boxbox">B-17s <span id="boxcount">19/19</span></div>
-      <div id="escbox">ESC <span id="esccount">20/20</span></div>
       <div id="killbox">AXIS <span id="bandits">36/36</span><span id="youk"> · YOU <span id="kills">0</span></span></div>
     </div>
     <div id="missionbar">
@@ -29,19 +28,17 @@
     </div>
     <div id="healthwrap">
       <div id="healthlabel">FORTRESS</div>
-      <svg id="dmgsil" viewBox="0 0 120 44" aria-label="B-17 damage">
-        <!-- planform: nose up = +Y in SVG flipped via rotate; drawn nose to the right -->
-        <g transform="translate(8,22)">
-          <ellipse data-part="cockpit" cx="78" cy="0" rx="10" ry="5.5" fill="#6fbf4a"/>
-          <rect data-part="wingL" x="28" y="-18" width="42" height="7" rx="1.5" fill="#6fbf4a"/>
-          <rect data-part="wingR" x="28" y="11" width="42" height="7" rx="1.5" fill="#6fbf4a"/>
-          <rect data-part="eng0" x="34" y="-20.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
-          <rect data-part="eng1" x="48" y="-20.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
-          <rect data-part="eng2" x="48" y="16.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
-          <rect data-part="eng3" x="34" y="16.5" width="7" height="4" rx="1" fill="#6fbf4a"/>
-          <rect data-part="fuselage" x="18" y="-3.2" width="72" height="6.4" rx="2.2" fill="#5a7a48" opacity="0.85"/>
-          <rect data-part="tail" x="4" y="-9" width="16" height="18" rx="1.5" fill="#6fbf4a"/>
-        </g>
+      <svg id="dmgsil" viewBox="0 0 140 100" aria-label="B-17 damage">
+        <!-- 1.6.8: top-down B-17 planform, nose up: fuselage, tapered wings, 4 nacelles (#1 port outboard … #4 starboard outboard), stabilisers, nose/cockpit -->
+        <path data-part="wingL" d="M64 35 L8 41.5 Q5 42 5 44.5 L5.5 46.5 Q6 48 9 48 L64 53 Z" fill="#6fbf4a"/>
+        <path data-part="wingR" d="M76 35 L132 41.5 Q135 42 135 44.5 L134.5 46.5 Q134 48 131 48 L76 53 Z" fill="#6fbf4a"/>
+        <path data-part="tail" d="M66.5 79 L45 85 Q43 85.6 43.4 87.6 L44 90 L66.5 92 Z M73.5 79 L95 85 Q97 85.6 96.6 87.6 L96 90 L73.5 92 Z" fill="#6fbf4a"/>
+        <path data-part="fuselage" d="M64.2 21 L75.8 21 Q77 30 76.6 40 L75.4 62 Q74 80 72.2 94 Q70 96.5 67.8 94 Q66 80 64.6 62 L63.4 40 Q63 30 64.2 21 Z" fill="#6fbf4a"/>
+        <path data-part="cockpit" d="M70 4 Q75.6 6 76 13 L75.8 21 L64.2 21 L64 13 Q64.4 6 70 4 Z" fill="#6fbf4a"/>
+        <ellipse data-part="eng0" cx="27" cy="38.6" rx="3.2" ry="6.4" fill="#6fbf4a"/>
+        <ellipse data-part="eng1" cx="47" cy="36.4" rx="3.4" ry="6.6" fill="#6fbf4a"/>
+        <ellipse data-part="eng2" cx="93" cy="36.4" rx="3.4" ry="6.6" fill="#6fbf4a"/>
+        <ellipse data-part="eng3" cx="113" cy="38.6" rx="3.2" ry="6.4" fill="#6fbf4a"/>
       </svg>
       <div id="healthbar" class="hidden" aria-hidden="true"><div id="healthfill"></div></div>
     </div>
