@@ -34479,6 +34479,10 @@
       const c = tl(3, 0);
       battery(c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r);
     }
+    for (let i = 0; i < 14; i++) {
+      const d = km(RR(8, 25)), side = R() < 0.5 ? -1 : 1, off = km(RR(1, 6));
+      battery(ctr[0] + side * off, ctr[1] - d);
+    }
     for (let i = 0; i < 22; i++) {
       const d = km(RR(3, 35)), side = R() < 0.5 ? -1 : 1, off = km(RR(1.5, 8));
       battery(ctr[0] + side * off, ctr[1] - d);
@@ -34546,7 +34550,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       landG.add(P);
       return { P, g, N, pos: g.attributes.position.array, s: g.attributes.aS.array, c: g.attributes.aC.array };
     }
-    const FL = pts(192, flashTex, true, 11), SM = pts(480, smokeTex, false, 3);
+    const FL = pts(192, flashTex, true, 11), SM = pts(720, smokeTex, false, 3);
     const fl = [];
     for (let i = 0; i < FL.N; i++) fl.push({ t: 99, life: 0.5, x: 0, z: 0, s: 1 });
     const sm = [];
@@ -34602,7 +34606,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       const p = sm[si];
       si = (si + 1) % SM.N;
       p.t = -delay - 0.05;
-      p.life = RR(20, 30);
+      p.life = RR(15, 20);
       p.x = g[0];
       p.y = 1.5;
       p.z = g[1];
@@ -34697,7 +34701,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
 
   // www/flakpov.js
   function createFlakPov(env) {
-    const { landG, TOWN_X, TOWN_Z, TOWN_S, AF, camera, flakG, fireTex, smokeTex, audio } = env;
+    const { landG, TOWN_X, TOWN_Z, TOWN_S, AF, camera, flakG, fireTex, smokeTex, audio, ground } = env;
     const M = 1 / 10.5;
     const tl = (u, v) => [TOWN_X + TOWN_S * u, TOWN_Z + TOWN_S * v];
     let built = false, root = null, on = false;
@@ -34959,9 +34963,9 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
         rfp.position.set(myC[0], 1 * M, myC[1]);
         root.add(rfp);
         const bk = new Mesh(new BoxGeometry(6 * M, 2 * M, 4 * M), conc);
-        bk.material = mat(10131082);
-        bk.position.set(myC[0] + 22 * M, 0.7 * M, myC[1] - 52 * M);
-        bk.scale.y = 0.7;
+        bk.material = mat(7301708);
+        bk.position.set(myC[0] + 22 * M, 0.35 * M, myC[1] - 62 * M);
+        bk.scale.y = 0.5;
         root.add(bk);
       }
       for (let i = 0; i < 3; i++) {
@@ -34977,6 +34981,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
         const a = 0.28 + i * 0.22, p = [af[0] + Math.cos(a + 1.2) * AF.rx * 0.75 * TOWN_S * 0.55 + (i - 2.5) * 40 * M, af[1] + AF.rz * 0.8 * TOWN_S];
         bomber(root, p[0], p[1], RR(2.6, 3.6), i % 3 === 2 ? "217" : "88");
       }
+      for (let i = 0; i < 3; i++) bomber(root, myC[0] + (-75 + i * 70) * M, myC[1] - (150 + (i & 1) * 25) * M, RR(-0.5, 0.5) + (i === 1 ? 0.6 : 0), i === 1 ? "217" : "88");
       for (let i = 0; i < 26; i++) {
         const G = BAT[0].guns[i % 4];
         men.push(man(root, G.x + RR(-4, 4) * M, G.z + RR(-4, 4) * M));
@@ -35011,6 +35016,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       on = true;
       root.visible = true;
       stats.on = true;
+      if (ground) ground.visible = false;
       landG.updateWorldMatrix(true, false);
       const E = eyeLocal();
       landG.localToWorld(_v.set(E.x, E.y, E.z));
@@ -35027,6 +35033,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       on = false;
       stats.on = false;
       if (root) root.visible = false;
+      if (ground) ground.visible = true;
     }
     let _bomb = 0;
     function impact(lx, lz, big) {
@@ -35038,7 +35045,11 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       const kind = uu * uu + vv * vv < 1 ? "airfield" : inR(-2.75, 9.3, -11.4, 8.6) ? "target" : Math.hypot(tu + 13.9, tv - 0.8) < 11 ? "town" : "farm";
       (stats.where || (stats.where = [])).length < 400 && stats.where.push([+tu.toFixed(1), +tv.toFixed(1), kind[0]]);
       stats.impacts[kind]++;
-      stats.lastImpact = { kind, dM: Math.round(Math.hypot(lx - me.x, lz - me.z) / M), az: +(Math.atan2(lx - me.x, lz - me.z) * 57.3).toFixed(1), t: +(performance.now() / 1e3).toFixed(1) };
+      stats.lastImpact = { kind, dM: Math.round(Math.hypot(lx - me.x, lz - me.z) / M), az: (() => {
+        landG.updateWorldMatrix(true, false);
+        const I = landG.localToWorld(new Vector3(lx, 0, lz)), E = eyeLocal(), C = landG.localToWorld(new Vector3(E.x, E.y, E.z));
+        return +(Math.atan2(I.x - C.x, I.z - C.z) * 57.3).toFixed(1);
+      })(), t: +(performance.now() / 1e3).toFixed(1) };
       const B = blasts[_bomb++ % blasts.length];
       B.t = 0;
       B.x = lx;
@@ -35100,6 +35111,11 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
           B.next = RR(3.6, 4.8) * (B.mine ? 1 : 1.15);
           salvo(B, bl, t);
         }
+      }
+      {
+        const T = landG.localToWorld(_w.set(TOWN_X, 0, TOWN_Z));
+        stats.townAz = +(Math.atan2(T.x - camera.position.x, T.z - camera.position.z) * 57.3).toFixed(1);
+        stats.townKm = +(Math.hypot(TOWN_X - me.x, TOWN_Z - me.z) / M / 1e3).toFixed(1);
       }
       stats.near = Math.round(Math.hypot(bl.x - me.x, bl.z - me.z) / M);
       for (const F of flashes) {
@@ -35169,7 +35185,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
             const G = BAT[0].guns[R() * 4 | 0];
             if (R() < 0.25) {
               P.tx = me.x + 22 * M + RR(-4, 4) * M;
-              P.tz = me.z - 49 * M + RR(-1, 1) * M;
+              P.tz = me.z - 59 * M + RR(-1, 1) * M;
             } else {
               P.tx = G.x + RR(-3.5, 3.5) * M;
               P.tz = G.z + RR(-3.5, 3.5) * M;
@@ -35195,6 +35211,10 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       return on;
     }, get me() {
       return me;
+    }, get _root() {
+      return root;
+    }, get _camera() {
+      return camera;
     } };
   }
 
@@ -39499,7 +39519,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
     }
     let _ifI = 0, _isI = 0;
     const FLAKG = createFlakGround({ landG, TOWN_X, TOWN_Z, TOWN_S, renderer, camera, clock: () => window.__FG_FREEZE && window.__FG_SIMT != null ? window.__FG_SIMT : pnow() / 1e3 });
-    const FPOV = createFlakPov({ landG, TOWN_X, TOWN_Z, TOWN_S, AF: { x: TOWN3D.airfield[0], z: TOWN3D.airfield[1], rx: 6.3, rz: 5, rot: 0.28 }, camera, flakG: FLAKG, fireTex, smokeTex, audio: window.FGAudio || null });
+    const FPOV = createFlakPov({ landG, TOWN_X, TOWN_Z, TOWN_S, AF: { x: TOWN3D.airfield[0], z: TOWN3D.airfield[1], rx: 6.3, rz: 5, rot: 0.28 }, camera, flakG: FLAKG, fireTex, smokeTex, audio: window.FGAudio || null, ground });
     function flakMuzzle() {
       FLAKG.muzzle();
     }
@@ -40334,7 +40354,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
     function flakGhost(F, b) {
       const slot = ghNext;
       ghNext = (ghNext + 1) % GH_N;
-      const life = window.__FG_GHOLD ? 60 + b.seed * 7919 % 30 : 14 + b.seed * 7919 % 8;
+      const life = window.__FG_GHOLD ? 60 + b.seed * 7919 % 30 : Math.max(3, 15 + b.seed * 7919 % 5 - (b.t || 0));
       ghBirth[slot] = ghT;
       ghLife[slot] = life;
       ghMesh.updateMatrixWorld(true);
@@ -44222,7 +44242,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         for (let i = 0; i < trN && n < TR_MAX * 2; i++) {
           const o = i * 8;
           let hx = trBuf[o], hy = trBuf[o + 1], hz = trBuf[o + 2], tx = trBuf[o + 3], ty = trBuf[o + 4], tz = trBuf[o + 5];
-          const K = TR_KIND[trBuf[o + 6] | 0] || TR_KIND[1], A = trBuf[o + 7];
+          const kRaw = trBuf[o + 6] | 0, fvf = kRaw >= 8, K = TR_KIND[kRaw & 7] || TR_KIND[1], A = trBuf[o + 7];
           if (smear) {
             _trV.set(tx - _tc.x, ty - _tc.y, tz - _tc.z).applyQuaternion(smear);
             tx = _tc.x + _trV.x;
@@ -44279,7 +44299,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
             py2 /= pl;
             pz2 /= pl;
           }
-          const dMid = Math.hypot(mx, my, mz), isOwnK = (trBuf[o + 6] | 0) === 0;
+          const dMid = Math.hypot(mx, my, mz), isOwnK = (kRaw & 7) === 0;
           let dFade, wFade;
           if (dMid <= TR_FADE0 || window.__FG_NOTRFADE) {
             dFade = 1;
@@ -44287,6 +44307,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
           } else if (isOwnK) {
             dFade = Math.max(0.08, Math.exp(-(dMid - TR_FADE0) / TR_FADEL));
             wFade = 0.55 + 0.45 * dFade;
+          } else if (fvf) {
+            const e2 = Math.exp(-(dMid - TR_FADE0) / 2600);
+            dFade = Math.max(0.3, e2);
+            wFade = Math.max(0.6, 0.45 + 0.55 * e2);
           } else {
             const e2 = Math.exp(-(dMid - TR_FADE0) / 1100);
             dFade = Math.max(0.08, e2);
@@ -44516,6 +44540,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       get fpovStats() {
         return Object.assign({}, FPOV.stats, { me: FPOV.me });
       },
+      get _fpov() {
+        return FPOV;
+      },
+      // 1.7.0 test hook
       get rideStats() {
         const g = rideStats.type && RIDE_CP[rideStats.type];
         let n = 0;

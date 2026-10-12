@@ -2587,7 +2587,7 @@ export function createWorld3D(canvas) {
   // drifting smoke for 20–30 s. Pooled Points (2 draw calls), screen-size clamped, fog-exempt, drawn over the ground in the Earth pass.
   // (1.6.4's sprites sat directly under the sky burst — i.e. under our own box — and their updater was never called.)
   const FLAKG = createFlakGround({ landG, TOWN_X, TOWN_Z, TOWN_S, renderer, camera, clock: () => (window.__FG_FREEZE && window.__FG_SIMT != null ? window.__FG_SIMT : pnow() / 1000) });
-  const FPOV = createFlakPov({ landG, TOWN_X, TOWN_Z, TOWN_S, AF: { x: TOWN3D.airfield[0], z: TOWN3D.airfield[1], rx: 6.3, rz: 5.0, rot: 0.28 }, camera, flakG: FLAKG, fireTex, smokeTex, audio: window.FGAudio || null }); // 1.6.9
+  const FPOV = createFlakPov({ landG, TOWN_X, TOWN_Z, TOWN_S, AF: { x: TOWN3D.airfield[0], z: TOWN3D.airfield[1], rx: 6.3, rz: 5.0, rot: 0.28 }, camera, flakG: FLAKG, fireTex, smokeTex, audio: window.FGAudio || null, ground }); // 1.6.9 (1.7.0: + ground, hidden at the battery)
   function flakMuzzle() { FLAKG.muzzle(); }
   function bombBurst(lx, lz, big) { // ground-frame local coords (landG). 1.6.1: much bigger so a stick reads from a straggler several km back
     try { FPOV.impact(lx, lz, big); } catch (e) { /* POV not built yet */ }
@@ -3123,7 +3123,7 @@ export function createWorld3D(canvas) {
   function flakGhostClear() { const q = ghGeo.attributes.aQ.array; q.fill(-1e6); ghGeo.attributes.aQ.needsUpdate = true; ghBirth.fill(-1e6); ghMesh.position.set(0, 0, 0); ghMesh.rotation.set(0, 0, 0); }
   function flakGhost(F, b) { // hand burst b (last state seen, time b.t) from mesh F to the ghost pool
     const slot = ghNext; ghNext = (ghNext + 1) % GH_N;
-    const life = window.__FG_GHOLD ? 60 + ((b.seed * 7919) % 30) : 14 + ((b.seed * 7919) % 8); // (__FG_GHOLD: the 1.6.8 lifetime, for A/B metrics) // 1.6.9: a dropped burst (14 s old) now thins out over 14–22 s (was 60–90 s: hundreds of 48 m quads behind the box cost FPS looking aft)
+    const life = window.__FG_GHOLD ? 60 + ((b.seed * 7919) % 30) : Math.max(3, 15 + ((b.seed * 7919) % 5) - (b.t || 0)); /* 1.7.0: total puff life 15-20 s from the burst, wherever the hand-off happens */ // (__FG_GHOLD: the 1.6.8 lifetime, for A/B metrics) // 1.6.9: a dropped burst (14 s old) now thins out over 14–22 s (was 60–90 s: hundreds of 48 m quads behind the box cost FPS looking aft)
     ghBirth[slot] = ghT; ghLife[slot] = life;
     ghMesh.updateMatrixWorld(true);
     const t = b.t, A = ghGeo.attributes, pos = A.position.array, P4 = A.aP.array, Q4 = A.aQ.array, T3 = A.aTint.array;
@@ -5730,7 +5730,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       for (let i = 0; i < trN && n < TR_MAX * 2; i++) {
         const o = i * 8;
         let hx = trBuf[o], hy = trBuf[o + 1], hz = trBuf[o + 2], tx = trBuf[o + 3], ty = trBuf[o + 4], tz = trBuf[o + 5];
-        const K = TR_KIND[trBuf[o + 6] | 0] || TR_KIND[1], A = trBuf[o + 7];
+        const kRaw = trBuf[o + 6] | 0, fvf = kRaw >= 8, K = TR_KIND[kRaw & 7] || TR_KIND[1], A = trBuf[o + 7]; // 1.7.0: +8 = fighter-vs-fighter round (slow distance fade)
         if (smear) { _trV.set(tx - _tc.x, ty - _tc.y, tz - _tc.z).applyQuaternion(smear); tx = _tc.x + _trV.x; ty = _tc.y + _trV.y; tz = _tc.z + _trV.z; }
         let dh = (hx - cx) * fx + (hy - cy) * fy + (hz - cz) * fz, dtl = (tx - cx) * fx + (ty - cy) * fy + (tz - cz) * fz;
         if (dh < NEAR && dtl < NEAR) continue;
@@ -5757,11 +5757,12 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         const pl = Math.hypot(px, py, pz); if (pl < 1e-6) { px = 0; py = 1; pz = 0; } else { px /= pl; py /= pl; pz /= pl; }
         // 1.5.5: DISTANCE FADE for every tracer kind (own, box gunners, 109/190, P-51): full strength inside ~250 u, ~25 % alpha by 2000 u (floor 8 %),
         // and the streak also thins (width x 0.55..1) so far tracers read as faint hairlines instead of bright pins.
-        const dMid = Math.hypot(mx, my, mz), isOwnK = (trBuf[o + 6] | 0) === 0;
+        const dMid = Math.hypot(mx, my, mz), isOwnK = (kRaw & 7) === 0;
         // 1.5.8: AI-fighter / gunner tracers thin AND fade much faster with range (faint past ~1 km, a hairline at several km); the player's own guns (kind 0) keep the 1.5.5 curve
         let dFade, wFade;
         if (dMid <= TR_FADE0 || window.__FG_NOTRFADE) { dFade = 1; wFade = 1; }
         else if (isOwnK) { dFade = Math.max(0.08, Math.exp(-(dMid - TR_FADE0) / TR_FADEL)); wFade = 0.55 + 0.45 * dFade; }
+        else if (fvf) { const e2 = Math.exp(-(dMid - TR_FADE0) / 2600); dFade = Math.max(0.3, e2); wFade = Math.max(0.6, 0.45 + 0.55 * e2); } // 1.7.0: a dogfight off to the side still reads at 1-3 km
         else { const e2 = Math.exp(-(dMid - TR_FADE0) / 1100); dFade = Math.max(0.08, e2); wFade = 0.28 + 0.72 * e2; } // __FG_NOTRFADE disables (A/B stills)
         for (let layer = 0; layer < 2; layer++) {
           const wpx = (layer ? K[2] : K[3]) * wFade, rgb = layer ? K[0] : K[1], a = (layer ? K[4] : K[5]) * A * dFade, keep = layer ? K[6] : 0;
@@ -5870,6 +5871,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     townStrike,
     townReset,
     get fpovStats() { return Object.assign({}, FPOV.stats, { me: FPOV.me }); },
+    get _fpov() { return FPOV; }, // 1.7.0 test hook
     get rideStats() { const g = rideStats.type && RIDE_CP[rideStats.type]; let n = 0; if (g) g.traverse((o) => { if (o.isMesh) n++; }); return Object.assign({ meshes: n, built: Object.keys(RIDE_CP), cam: camera.position.toArray().map((v) => +v.toFixed(2)), ownVis: !!(ownShip && ownShip.visible), turretVis: turretAnchor.visible }, rideStats); }, // 1.6.6
     get bombStats() { return Object.assign({}, bombStats, { n: bombs.length, t0: bombs[0] ? +bombs[0].t.toFixed(2) : null, land: (bombStats.land || []).slice(-400) }); },
     bombPositions: () => bombs.filter((b) => b.t >= 0 && !b.landed).sort((p, q) => (q.own ? 1 : 0) - (p.own ? 1 : 0)).slice(0, 40).map((b) => ({ x: +(b._wx || 0).toFixed(1), y: +(b._wy || 0).toFixed(1), z: +(b._wz || 0).toFixed(1), t: +b.t.toFixed(2), y0: +b.y0.toFixed(1), own: !!b.own })), // 1.6.5: own-ship sticks first (test hook)

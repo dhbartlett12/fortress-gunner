@@ -436,4 +436,4 @@ body.desktop canvas { cursor: crosshair; }
 @media (max-width: 520px), (max-height: 480px) { #flakBtn { right: 80px; min-width: 56px; padding: 0 8px; } }
 
 /* 1.6.9: flak POV dormant until the ground/impact framing is fixed */
-#flakBtn { display: none !important; }
+/* 1.7.0: FLAK POV button unhidden */

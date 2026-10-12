@@ -24,6 +24,7 @@ export function createFlakGround(env) {
   for (let i = 0; i < 16; i++) { const a = i / 16 * 6.283 + RR(-0.15, 0.15), r = km(RR(2.6, 6.5)); battery(ctr[0] + Math.cos(a) * r, ctr[1] + Math.sin(a) * r); }
   for (let i = 0; i < 5; i++) { const a = R() * 6.283, r = km(RR(1.4, 2.4)); const c = tl(3, 0); battery(c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r); } // inner ring at the yard / factory
   // along the approach (the box comes in from −z): fields either side of the track, 3–35 km out
+  for (let i = 0; i < 14; i++) { const d = km(RR(8, 25)), side = R() < 0.5 ? -1 : 1, off = km(RR(1, 6)); battery(ctr[0] + side * off, ctr[1] - d); } // 1.7.0: more batteries along the route (the mid-mission light flak)
   for (let i = 0; i < 22; i++) { const d = km(RR(3, 35)), side = R() < 0.5 ? -1 : 1, off = km(RR(1.5, 8)); battery(ctr[0] + side * off, ctr[1] - d); }
 
   // ---- point sprites (flash + smoke), one shader, uMinPx clamps the on-screen size
@@ -50,7 +51,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
     const P = new THREE.Points(g, m); P.frustumCulled = false; P.renderOrder = additive ? 6 : 5; landG.add(P);
     return { P, g, N, pos: g.attributes.position.array, s: g.attributes.aS.array, c: g.attributes.aC.array };
   }
-  const FL = pts(192, flashTex, true, 11), SM = pts(480, smokeTex, false, 3);
+  const FL = pts(192, flashTex, true, 11), SM = pts(720, smokeTex, false, 3); // 1.7.0: barrage peak
   const fl = []; for (let i = 0; i < FL.N; i++) fl.push({ t: 99, life: 0.5, x: 0, z: 0, s: 1 });
   const sm = []; for (let i = 0; i < SM.N; i++) sm.push({ t: 99, life: 25, x: 0, y: 0, z: 0, vx: 0, vz: 0, s0: 1, s1: 1, c: 1 });
   let fi = 0, si = 0;
@@ -74,7 +75,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
   }
   function fireGun(b, g, delay) {
     const f = fl[fi]; fi = (fi + 1) % FL.N; f.t = -delay; f.life = RR(0.35, 0.55); f.x = g[0]; f.z = g[1]; f.s = RR(0.9, 1.2); stats.flashes++;
-    const p = sm[si]; si = (si + 1) % SM.N; p.t = -delay - 0.05; p.life = RR(20, 30); p.x = g[0]; p.y = 1.5; p.z = g[1]; p.vx = RR(0.25, 0.45); p.vz = RR(-0.1, 0.15); p.s0 = RR(25, 35) / LGU_M; p.s1 = RR(120, 170) / LGU_M; p.c = RR(0.85, 1.1);
+    const p = sm[si]; si = (si + 1) % SM.N; p.t = -delay - 0.05; p.life = RR(15, 20); p.x = g[0]; p.y = 1.5; p.z = g[1]; p.vx = RR(0.25, 0.45); p.vz = RR(-0.1, 0.15); p.s0 = RR(25, 35) / LGU_M; p.s1 = RR(120, 170) / LGU_M; p.c = RR(0.85, 1.1);
   }
   // one call per sky shell (game.js spawnFlakBurst): shells fired in the same frame belong to one salvo from one battery;
   // a new salvo fires the whole battery (4–6 guns within ~0.25 s)

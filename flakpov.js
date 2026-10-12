@@ -5,7 +5,7 @@
 import * as THREE from "three";
 
 export function createFlakPov(env) {
-  const { landG, TOWN_X, TOWN_Z, TOWN_S, AF, camera, flakG, fireTex, smokeTex, audio } = env;
+  const { landG, TOWN_X, TOWN_Z, TOWN_S, AF, camera, flakG, fireTex, smokeTex, audio, ground } = env;
   const M = 1 / 10.5; // metres → landG units
   const tl = (u, v) => [TOWN_X + TOWN_S * u, TOWN_Z + TOWN_S * v];
   let built = false, root = null, on = false;
@@ -91,13 +91,14 @@ export function createFlakPov(env) {
     const add = (cx, cz, n, mine) => { const B = { x: cx, z: cz, guns: [], mine, next: RR(0, 3) }; const rot = R() * 6.28, rad = (mine ? 30 : RR(25, 40)) * M; for (let i = 0; i < n; i++) { const a = rot + i / n * 6.28; B.guns.push(gun88(root, cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, RR(0, 6.28))); } BAT.push(B); return B; };
     add(myC[0], myC[1], 4, true);
     // command post + range-finder pit at the centre, an ammo bunker
-    { for (let i = 0; i < 12; i++) { const a = i / 12 * 6.283, bag = new THREE.Mesh(new THREE.BoxGeometry(1.7 * M, 1.0 * M, 0.7 * M), sand); bag.position.set(myC[0] + Math.cos(a) * 3.4 * M, 0.5 * M, myC[1] + Math.sin(a) * 3.4 * M); bag.rotation.y = -a + Math.PI / 2; root.add(bag); } const rf = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * M, 0.12 * M, 4 * M, 8), dark); rf.rotation.z = Math.PI / 2; rf.position.set(myC[0], 1.7 * M, myC[1]); root.add(rf); const rfp = new THREE.Mesh(new THREE.CylinderGeometry(0.1 * M, 0.15 * M, 1.4 * M, 6), dark); rfp.position.set(myC[0], 1.0 * M, myC[1]); root.add(rfp); const bk = new THREE.Mesh(new THREE.BoxGeometry(6 * M, 2 * M, 4 * M), conc); bk.material = mat(0x9a968a); bk.position.set(myC[0] + 22 * M, 0.7 * M, myC[1] - 52 * M); bk.scale.y = 0.7; root.add(bk); }
+    { for (let i = 0; i < 12; i++) { const a = i / 12 * 6.283, bag = new THREE.Mesh(new THREE.BoxGeometry(1.7 * M, 1.0 * M, 0.7 * M), sand); bag.position.set(myC[0] + Math.cos(a) * 3.4 * M, 0.5 * M, myC[1] + Math.sin(a) * 3.4 * M); bag.rotation.y = -a + Math.PI / 2; root.add(bag); } const rf = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * M, 0.12 * M, 4 * M, 8), dark); rf.rotation.z = Math.PI / 2; rf.position.set(myC[0], 1.7 * M, myC[1]); root.add(rf); const rfp = new THREE.Mesh(new THREE.CylinderGeometry(0.1 * M, 0.15 * M, 1.4 * M, 6), dark); rfp.position.set(myC[0], 1.0 * M, myC[1]); root.add(rfp); const bk = new THREE.Mesh(new THREE.BoxGeometry(6 * M, 2 * M, 4 * M), conc); bk.material = mat(0x6f6a4c); bk.position.set(myC[0] + 22 * M, 0.35 * M, myC[1] - 62 * M); bk.scale.y = 0.5; root.add(bk); /* 1.7.0: sod-covered, dug in, 16 m behind the eye (was 4 m: its grey roof filled the view toward the town) */ }
     // nearby batteries (the airfield ring) and several more along the approach (box comes in from −z)
     for (let i = 0; i < 3; i++) { const a = -1.9 + i * 1.3, r = RR(650, 1100) * M; add(myC[0] + Math.cos(a) * r, myC[1] + Math.sin(a) * r, 4, false); }
     for (let i = 0; i < 6; i++) { const d = RR(2500, 9000) * M; add(myC[0] + RR(-1800, 1800) * M, myC[1] - d, 4 + (i & 1) * 2, false); }
     stats.batteries = BAT.length;
     // parked bombers on the airfield dispersal nearest us
     for (let i = 0; i < 6; i++) { const a = 0.28 + i * 0.22, p = [af[0] + Math.cos(a + 1.2) * AF.rx * 0.75 * TOWN_S * 0.55 + (i - 2.5) * 40 * M, af[1] + AF.rz * 0.8 * TOWN_S]; bomber(root, p[0], p[1], RR(2.6, 3.6), i % 3 === 2 ? "217" : "88"); }
+    for (let i = 0; i < 3; i++) bomber(root, myC[0] + (-75 + i * 70) * M, myC[1] - (150 + (i & 1) * 25) * M, RR(-0.5, 0.5) + (i === 1 ? 0.6 : 0), i === 1 ? "217" : "88"); // 1.7.0: a dispersal 150 m off, readable from the battery
     // men: gun crews round my guns, runners between the guns, bunker and the field
     for (let i = 0; i < 26; i++) { const G = BAT[0].guns[i % 4]; men.push(man(root, G.x + RR(-4, 4) * M, G.z + RR(-4, 4) * M)); }
     // muzzle flash + smoke sprites
@@ -110,7 +111,7 @@ export function createFlakPov(env) {
   const _v = new THREE.Vector3(), _w = new THREE.Vector3();
   function pose(P) { // place the camera at the battery, looking yaw / pitch (world frame)
     if (!built) build();
-    on = true; root.visible = true; stats.on = true;
+    on = true; root.visible = true; stats.on = true; if (ground) ground.visible = false; // 1.7.0: at 2 m the Earth plane z-fights the field ring (grey sheet toward the town) — the ring + near patch are the ground here
     landG.updateWorldMatrix(true, false);
     const E = eyeLocal(); landG.localToWorld(_v.set(E.x, E.y, E.z));
     camera.position.copy(_v);
@@ -118,7 +119,7 @@ export function createFlakPov(env) {
     if (camera.fov !== 52) { camera.fov = 52; camera.updateProjectionMatrix(); } // a gunner's eye, a touch narrower than the turret view so a box at 7.6 km reads
     camera.updateMatrixWorld();
   }
-  function off() { on = false; stats.on = false; if (root) root.visible = false; }
+  function off() { on = false; stats.on = false; if (root) root.visible = false; if (ground) ground.visible = true; }
   let _bomb = 0;
   function impact(lx, lz, big) { // every bomb impact (landG coords) — classify against the airfield / town and draw a close-up blast if near us
     if (!built) build();
@@ -127,7 +128,7 @@ export function createFlakPov(env) {
     const inR = (x0, x1, z0, z1) => tu > x0 && tu < x1 && tv > z0 && tv < z1;
     const kind = uu * uu + vv * vv < 1 ? "airfield" : (inR(-2.75, 9.3, -11.4, 8.6) ? "target" : Math.hypot(tu + 13.9, tv - 0.8) < 11 ? "town" : "farm"); // target complex / old town / fields
     (stats.where || (stats.where = [])).length < 400 && stats.where.push([+tu.toFixed(1), +tv.toFixed(1), kind[0]]);
-    stats.impacts[kind]++; stats.lastImpact = { kind, dM: Math.round(Math.hypot(lx - me.x, lz - me.z) / M), az: +(Math.atan2(lx - me.x, lz - me.z) * 57.3).toFixed(1), t: +(performance.now() / 1000).toFixed(1) };
+    stats.impacts[kind]++; stats.lastImpact = { kind, dM: Math.round(Math.hypot(lx - me.x, lz - me.z) / M), az: (() => { landG.updateWorldMatrix(true, false); const I = landG.localToWorld(new THREE.Vector3(lx, 0, lz)), E = eyeLocal(), C = landG.localToWorld(new THREE.Vector3(E.x, E.y, E.z)); return +(Math.atan2(I.x - C.x, I.z - C.z) * 57.3).toFixed(1); })(), t: +(performance.now() / 1000).toFixed(1) };
     const B = blasts[_bomb++ % blasts.length]; B.t = 0; B.x = lx; B.z = lz; B.k = big ? 1.3 : 1; B.kind = kind;
     const AU = audio || window.FGAudio; if (on && AU && AU.boom) { const d = Math.hypot(lx - me.x, lz - me.z) / M; if (d < 6000) setTimeout(() => AU.boomAt ? AU.boomAt(d / 1.5, true) : AU.boom(0, 0, 0, d < 1500), Math.min(6000, d / 0.34)); }
   }
@@ -153,6 +154,7 @@ export function createFlakPov(env) {
       const slant = Math.hypot(dh, bl.y) / M; // metres
       B.next -= dt; if (slant < 11500 && B.next <= 0) { B.next = RR(3.6, 4.8) * (B.mine ? 1 : 1.15); salvo(B, bl, t); }
     }
+    { const T = landG.localToWorld(_w.set(TOWN_X, 0, TOWN_Z)); stats.townAz = +(Math.atan2(T.x - camera.position.x, T.z - camera.position.z) * 57.3).toFixed(1); stats.townKm = +(Math.hypot(TOWN_X - me.x, TOWN_Z - me.z) / M / 1000).toFixed(1); }
     stats.near = Math.round(Math.hypot(bl.x - me.x, bl.z - me.z) / M);
     for (const F of flashes) { if (F.t > 0.4 || !F.g) { F.s.visible = false; if (F.t <= 0.4) F.t += dt; continue; } F.t += dt; if (F.t < 0) { F.s.visible = false; continue; } F.g.tip.getWorldPosition(_v); root.worldToLocal(_v); F.s.position.copy(_v); const k = F.t / 0.4; F.s.scale.setScalar((3 + 9 * Math.sin(Math.min(1, k * 3) * 1.57)) * (1 - k) * M + 0.01); F.s.material.opacity = 1 - k; F.s.visible = true; }
     for (const P of puffs) { if (!P.g || P.t > P.life) { P.s.visible = false; continue; } P.t += dt; if (P.t < 0) { P.s.visible = false; continue; } if (P.t < dt * 1.5) { P.g.tip.getWorldPosition(_v); root.worldToLocal(_v); P.s.position.copy(_v); } const k = P.t / P.life; P.s.position.x += P.vx * dt; P.s.position.z += P.vz * dt; P.s.position.y += 0.6 * M * dt; P.s.scale.setScalar((2 + 14 * Math.sqrt(k)) * M); P.s.material.opacity = 0.55 * (1 - k); P.s.visible = true; }
@@ -161,12 +163,12 @@ export function createFlakPov(env) {
     const mh = 0.85 * M;
     for (const P of men) {
       const dx = P.tx - P.x, dz = P.tz - P.z, d = Math.hypot(dx, dz);
-      if (d < 0.3 * M) { P.wait -= dt; if (P.wait <= 0) { const G = BAT[0].guns[(R() * 4) | 0]; if (R() < 0.25) { P.tx = me.x + 22 * M + RR(-4, 4) * M; P.tz = me.z - 49 * M + RR(-1, 1) * M; } else { P.tx = G.x + RR(-3.5, 3.5) * M; P.tz = G.z + RR(-3.5, 3.5) * M; } P.wait = RR(0.3, 2.5); } }
+      if (d < 0.3 * M) { P.wait -= dt; if (P.wait <= 0) { const G = BAT[0].guns[(R() * 4) | 0]; if (R() < 0.25) { P.tx = me.x + 22 * M + RR(-4, 4) * M; P.tz = me.z - 59 * M + RR(-1, 1) * M; } else { P.tx = G.x + RR(-3.5, 3.5) * M; P.tz = G.z + RR(-3.5, 3.5) * M; } P.wait = RR(0.3, 2.5); } }
       else { const st = Math.min(d, P.sp * dt); P.x += dx / d * st; P.z += dz / d * st; P.g.rotation.y = Math.atan2(dx, dz); P.ph += dt * 11; }
       P.g.position.set(P.x, 0, P.z);
       const sw = d < 0.3 * M ? 0 : Math.sin(P.ph) * 0.6; P.legs[0].rotation.x = sw; P.legs[1].rotation.x = -sw; P.legs[0].position.y = P.legs[1].position.y = mh / 2 + 0.02 * M;
     }
     void flakG;
   }
-  return { pose, off, update, impact, stats, get on() { return on; }, get me() { return me; } };
+  return { pose, off, update, impact, stats, get on() { return on; }, get me() { return me; }, get _root() { return root; }, get _camera() { return camera; } };
 }
