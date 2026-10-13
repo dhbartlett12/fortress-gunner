@@ -4859,11 +4859,11 @@
   // ===== 1.6.9 FLYABLE FIGHTER: left thumb = roll (drag sideways), right thumb = pitch (drag down = nose up), Volume Up / FIRE / Space = guns.
   // Same airframe numbers as the AI (roll rate/acceleration, nMax, level and dive speeds); neutral stick holds ~1 g so the nose stays put.
   function flyStick() {
-    let r = ride.stickR || 0, p = ride.stickP || 0;
+    let r = (ride.stickR || 0) + (ride.gpR || 0), p = (ride.stickP || 0) + (ride.gpP || 0); // 1.7.3: + gamepad left stick
     const K = input.keys || {};
     if (K["a"] || K["arrowleft"]) r -= 1; if (K["d"] || K["arrowright"]) r += 1;
     if (K["s"] || K["arrowdown"]) p += 1; if (K["w"] || K["arrowup"]) p -= 1; // stick back (S / down) = nose up
-    let y = ride.tiltY || 0; if (K["q"]) y -= 1; if (K["e"]) y += 1; // 1.7.2: rudder = twist the phone like a steering wheel (right thumb is pitch only) / Q-E on desktop
+    let y = (ride.tiltY || 0) + (ride.gpY || 0); if (K["q"]) y -= 1; if (K["e"]) y += 1; // 1.7.2: rudder = twist the phone like a steering wheel (right thumb is pitch only) / Q-E on desktop
     return { r: clamp(r, -1, 1), p: clamp(p, -1, 1), y: clamp(y, -1, 1) };
   }
   function easyChase(e, T, dt) { // 1.7.1 EASY autopilot: curve in to ~250 u behind him, then lead pursuit to gun range; the trigger stays yours
@@ -6398,7 +6398,7 @@
     if (!inChute && !(ride || fpov)) drawCabinFx();
     if (!downSeq && !(ride || fpov)) drawCrosshair(models3d && !inChute);
     if (fpov && !downSeq) drawFlakSight();
-    if (rideFlying()) drawFlyZones();
+    if (rideFlying() && !GP.hide) drawFlyZones();
     if (!inChute) drawHitMarks();
     if (!models3d) drawFarFighters(); // 1.3.6: 3D mode draws far 109s as depth-tested GL specks
     if (!downSeq) { if (!ride) drawIncoming(); if (!mouse.desktop) drawControls(); } // 1.4.0-web: no touch hints on desktop
@@ -8193,13 +8193,46 @@
     ctx.restore();
   }
 
+  // ----- 1.7.3 GAMEPAD (Gamepad API, standard mapping, polled every frame) -----
+  // Fighter: LS roll/pitch (back = nose up), LB/RB rudder, RT fire, RS head look. Turret / flak 88: RS or LS aim (curve + fine zone), RT fire.
+  // A/B/X/Y = TOP/TAIL/RIDE/FLAK, Start = pause, View/Back = back to the B-17. Touch hides nothing permanently: a touch restores the on-screen zones.
+  const GP = { on: false, prev: [], fire: false, paused: false, hide: false };
+  const gpDz = (v) => { const a = Math.abs(v || 0); return a < 0.15 ? 0 : Math.sign(v) * Math.min(1, (a - 0.15) / 0.85); };
+  const gpCurve = (v) => { const a = Math.abs(v); return Math.sign(v) * (a < 0.4 ? a * 0.3 : 0.12 + Math.pow((a - 0.4) / 0.6, 1.7) * 0.88); }; // fine-aim zone below 40% throw
+  function gpHide(h) { GP.hide = h; document.body.classList.toggle("gp", h); }
+  window.addEventListener("pointerdown", (ev) => { if (GP.hide && ev.pointerType !== "mouse") gpHide(false); }, true);
+  function gpPoll(dt) {
+    let pad = null; try { const L = navigator.getGamepads ? navigator.getGamepads() : []; for (const q of L || []) if (q && q.connected !== false && q.buttons && q.buttons.length) { pad = q; break; } } catch (er) {}
+    if (!pad) { if (GP.on) { GP.on = false; gpHide(false); if (GP.fire) { input.fire = false; GP.fire = false; } if (ride) ride.gpR = ride.gpP = ride.gpY = 0; pushCallout("CONTROLLER DISCONNECTED", 1.2); } return; }
+    if (!GP.on) { GP.on = true; GP.prev = []; gpHide(true); pushCallout("CONTROLLER CONNECTED", 1.6); }
+    const B = (i) => { const b = pad.buttons[i]; return !!b && (b.pressed || b.value > 0.5); }, E = (i) => B(i) && !GP.prev[i];
+    const A = pad.axes || [], lx = gpDz(A[0]), ly = gpDz(A[1]), rx = gpDz(A[2]), ry = gpDz(A[3]), rt = pad.buttons[7] ? pad.buttons[7].value || (pad.buttons[7].pressed ? 1 : 0) : 0;
+    let act = rt > 0.3 || lx || ly || rx || ry; for (let i = 0; i < pad.buttons.length; i++) if (B(i)) act = true;
+    if (act && !GP.hide) gpHide(true);
+    if (E(9)) { GP.paused = !GP.paused; pushCallout(GP.paused ? "PAUSED — START TO RESUME" : "RESUMED", 1.4, true); }
+    const play = state === "PLAYING" && !downSeq && !GP.paused;
+    if (play) {
+      if (E(0) || E(1)) { if (fpov) endFlakPov(); if (ride) endRide(); setStation(E(0) ? "top" : "tail"); setStationUI(); }
+      if (E(2)) { if (ride) rideCycle(1); else rideToggle(); }
+      if (E(3)) { if (fpov) endFlakPov(); else startFlakPov(); }
+      if (E(8)) { if (fpov) endFlakPov(); if (ride) endRide(); }
+    }
+    if (rt > 0.3 && play) { input.fire = true; GP.fire = true; } else if (GP.fire) { input.fire = false; GP.fire = false; }
+    if (play) {
+      const k = lookRadPerPx() || 0.003, RATE = 2.0;
+      if (ride && ride.fly) { ride.gpR = lx; ride.gpP = ly; ride.gpY = (B(5) ? 1 : 0) - (B(4) ? 1 : 0); if (rx || ry) applyLookDelta(gpCurve(rx) * RATE * dt / k, gpCurve(ry) * RATE * dt / k); }
+      else { if (ride) ride.gpR = ride.gpP = ride.gpY = 0; const ax = rx || lx, ay = ry || ly; if (ax || ay) applyLookDelta(gpCurve(ax) * RATE * dt / k, gpCurve(ay) * RATE * dt / k); }
+    }
+    for (let i = 0; i < pad.buttons.length; i++) GP.prev[i] = B(i);
+  }
   // ----- loop -----
   const fpsEl = document.getElementById("fps"); let fpsN = 0, fpsT0 = 0; // 1.5.8: FPS counter, averaged over ~0.5 s
   function frame(t) {
     const dt = Math.min(0.033, (t - lastT) / 1000 || 0.016);
     lastT = t;
     if (fpsEl) { if (!fpsT0) fpsT0 = t; fpsN++; if (t - fpsT0 >= 500) { fpsEl.textContent = String(Math.round(fpsN * 1000 / (t - fpsT0))); fpsN = 0; fpsT0 = t; } }
-    if (!window.__FG_FREEZE) update(dt); // debug: headless stills render an exact sim state
+    gpPoll(dt); // 1.7.3 Xbox / standard gamepad
+    if (!window.__FG_FREEZE && !GP.paused) update(dt); // debug: headless stills render an exact sim state
     draw();
     if (mouse.desktop) { // 1.4.0-web: free the cursor for DOM buttons (END MISSION, results)
       const endShown = (endBtn && !endBtn.classList.contains("hidden")) || (tryBtn && !tryBtn.classList.contains("hidden"));
@@ -8613,6 +8646,7 @@
     // Deterministic time advance for headless playtests (rAF+dt-cap runs slow under SwiftShader)
     tgtPts: () => mission && mission.tgt ? { pts: mission.tgt.pts || [], G: mission.tgt.G && { X: mission.tgt.G.X, Z: mission.tgt.G.Z, S: mission.tgt.G.S, K: mission.tgt.G.K } } : null,
     fireState: () => ({ fire: !!input.fire, fz: !!(ride && ride.fireId != null), roll: !!(ride && ride.rollId != null) }), // 1.7.2 test hook
+    gp: () => ({ on: GP.on, hide: GP.hide, paused: GP.paused, fire: !!input.fire, station: gunner.station, ride: !!ride, fly: !!(ride && ride.fly), fpov: !!fpov, yaw: fpov ? fpov.yaw : ride ? ride.yaw : gunner.yaw, pitch: fpov ? fpov.pitch : ride ? ride.pitch : gunner.pitch, r: ride ? ride.gpR || 0 : 0, p: ride ? ride.gpP || 0 : 0, y: ride ? ride.gpY || 0 : 0 }),
     fvM: () => mission && Object.assign({ p51Kills: mission.p51Kills || 0, p51Lost: mission.p51Lost || 0 }, mission.fvM), drawNow: () => draw(), // 1.7.2 test hook: one real frame render (jitter harness)
     advance: (sec) => {
       const s = Math.max(0, Number(sec) || 0);

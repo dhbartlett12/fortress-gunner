@@ -437,3 +437,6 @@ body.desktop canvas { cursor: crosshair; }
 
 /* 1.6.9: flak POV dormant until the ground/impact framing is fixed */
 /* 1.7.0: FLAK POV button unhidden */
+
+/* 1.7.3: gamepad active -> on-screen touch controls hidden (a touch brings them back) */
+body.gp #flyFire, body.gp .ridebtn, body.gp #ridePrev, body.gp #rideNext { display: none !important; }
