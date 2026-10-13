@@ -89,9 +89,16 @@
   const ctxOf = (spk) => { const p = String(spk || "").slice(0, 3); return p === "de_" ? "de" : p === "us_" ? "us" : p === "fk_" ? "flak" : "b17"; };
   V.setCtx = function (c) { if (c === V.ctx) return; V.ctx = c; queue = []; V.cut(false, "ctx"); };
   const pick = (a) => a[(Math.random() * a.length) | 0];
-  const RV = { de: { attack: ["de_pauke", "de_pauke2", "de_viermot", "de_dicke"], close: ["de_ranhalten"], brk: ["de_abschwung", "de_weg"], evade: ["de_indianer", "de_mustang", "de_kurbeln"], kill: ["de_horrido", "de_abschuss"], hit: ["de_treffer"], hurt: ["de_getroffen"], bail: ["de_aussteigen"], rtb: ["de_munition"], reform: ["de_sammeln", "de_noch_einmal"] },
+  const RV = { de: { attack: ["de_pauke", "de_pauke2", "de_viermot", "de_dicke", "de_a1", "de_a2", "de_a3", "de_a4"], close: ["de_ranhalten", "de_c1", "de_c2", "de_bleib"], brk: ["de_abschwung", "de_weg", "de_b1", "de_b2"], evade: ["de_indianer", "de_mustang", "de_kurbeln", "de_hu2"],
+      kill: ["de_horrido", "de_abschuss", "de_k1", "de_k3"], killP: ["de_kp1", "de_horrido"], hit: ["de_treffer", "de_h1", "de_h2"], hurt: ["de_getroffen", "de_hu1", "de_hu3"], bail: ["de_aussteigen"], rtb: ["de_munition", "de_rt1", "de_rt2"],
+      reform: ["de_sammeln", "de_noch_einmal", "de_f2"], reattack: ["de_r1", "de_r2", "de_r3", "de_noch_einmal"], formup: ["de_f1", "de_f4", "de_bleib"], escort: ["de_e1", "de_e2", "de_e3", "de_gc3"],
+      gc: ["de_gc1", "de_gc2", "de_gc4", "de_gc5", "de_kt"], gcAck: ["de_gc6"] }, // 1.7.4: leader / two wingmen / Kirchturm ground control
     us: { attack: ["us_bogeys", "us_bandits_bombers", "us_tallyho", "us_tanks"], close: ["us_on_him"], brk: [], evade: ["us_break_left", "us_break_right", "us_check6"], kill: ["us_splash", "us_got_him"], hit: ["us_on_him"], hurt: ["us_hit"], bail: ["us_bail"], rtb: [], reform: ["us_reform", "us_stay"] } };
-  V.rideCall = function (side, ev) { const L = RV[side] && RV[side][ev]; if (!L || !L.length) return false; const id = pick(L); return V.say(id, { trg: "ride_" + ev, cd: ev === "kill" || ev === "bail" || ev === "hurt" ? 0.5 : 5, prio: ev === "reform" ? 1 : 3, noIdCd: ev === "kill" || ev === "bail", resp: ev === "reform" }); };
+  V.rideCall = function (side, ev) { const L = RV[side] && RV[side][ev]; if (!L || !L.length) return false; const id = pick(L); const lowP = ev === "reform" || ev === "formup" || ev === "gc" || ev === "gcAck"; // 1.7.4: radio chatter prio 1 (needs a quiet channel); the rest cut through
+    const cd = { kill: 0.5, killP: 0.5, bail: 0.5, hurt: 0.5, hit: 6, close: 8, gc: 30, escort: 25, formup: 20, reattack: 10 }[ev];
+    const ok = V.say(id, { trg: "ride_" + ev, cd: cd != null ? cd : 5, prio: lowP ? 1 : ev === "hit" || ev === "close" ? 2 : 3, noIdCd: ev === "kill" || ev === "killP" || ev === "bail", resp: ev === "reform" || ev === "gcAck" || ev === "formup" });
+    if (ok && side === "de" && ev === "gc" && id !== "de_kt" && Math.random() < 0.6) V.say("de_gc6", { trg: "ride_gcAck", cd: 20, prio: 1, resp: true, after: 0.4 }); // the leader acknowledges Kirchturm
+    return ok; };
   const FKSEQ = ["fk_richtung", "fk_zuender", "fk_laden", "fk_fertig", "fk_gruppe", "fk_feuer", "fk_schneller", "fk_munition", "fk_ziel", "fk_feuer"]; let fkI = 0;
   V.flakCrew = function (ev) {
     if (ev === "start") return V.say(pick(["fk_achtung", "fk_viermots"]), { trg: "fk_start", cd: 0, prio: 2, noIdCd: true });

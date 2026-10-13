@@ -755,7 +755,9 @@
           if (t > nextFarFlak) { nextFarFlak = t + 2.2 + Math.random() * 4.5; sFarFlak(G, t, 700 + Math.random() * 1400, (Math.random() - 0.5) * 1.4); count("farFlak"); }
           return;
         }
-        if (s.engines) for (let i = 0; i < 4 && i < s.engines.length; i++) { const e = s.engines[i]; engineAt(G, i, t, e.out ? "out" : e.fire > 0.25 ? "sputter" : "run"); }
+        if (s.away) { for (const E of G.eng) if (!E.awayOn) { E.awayOn = true; E.g.gain.cancelScheduledValues(t); E.g.gain.setTargetAtTime(0.0001, t, 0.35); } } // 1.7.4: not in a B-17 -> no own-ship drone
+        else for (const E of G.eng) if (E.awayOn) { E.awayOn = false; if (E.state !== "out") { E.g.gain.cancelScheduledValues(t); E.g.gain.setTargetAtTime(E.level, t, 0.35); } }
+        if (s.engines && !s.away) for (let i = 0; i < 4 && i < s.engines.length; i++) { const e = s.engines[i]; engineAt(G, i, t, e.out ? "out" : e.fire > 0.25 ? "sputter" : "run"); }
         // fly-bys: when a 109 passes its closest point within ~220u at speed
         if (s.fighters) for (const f of s.fighters) {
           const dx = f.x - L.cx, dy = f.y - L.cy, dz = f.z - L.cz, d = Math.hypot(dx, dy, dz);
@@ -841,6 +843,7 @@
     bail() { if (!ok()) return; sBail(G, ctx.currentTime); count("bail"); },
     chuteOpen() { if (!ok()) return; sChuteOpen(G, ctx.currentTime); count("chuteOpen"); },
     bombsAway() { if (!ok()) return; sBombsAway(G, ctx.currentTime); count("bombsAway"); },
+    engReset() { if (!ctx || !G) return; const t = ctx.currentTime; for (const E of G.eng) { E.state = "run"; E.awayOn = false; E.saw.frequency.cancelScheduledValues(t); E.buzz.frequency.cancelScheduledValues(t); E.saw.frequency.setValueAtTime(E.f0, t); E.buzz.frequency.setValueAtTime(E.f0 * E.kb, t); E.g.gain.cancelScheduledValues(t); E.g.gain.setTargetAtTime(E.level, t, 0.3); } }, // 1.7.4: re-seated in a fresh B-17
     mute(b) { muted = !!b; if (ctx && G) G.master.gain.setTargetAtTime(b ? 0.0001 : 0.35, ctx.currentTime, 0.05); },
     results() { muted = false; if (ctx && G) { restoreGraph(G, ctx.currentTime); G.master.gain.setTargetAtTime(0.35, ctx.currentTime, 0.6); } count("results"); },
     earRing(depth) { if (!ok()) return false; const r = earRingNow(G, ctx.currentTime + 0.01, depth); if (r) count("earRing"); return r; },

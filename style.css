@@ -440,3 +440,11 @@ body.desktop canvas { cursor: crosshair; }
 
 /* 1.7.3: gamepad active -> on-screen touch controls hidden (a touch brings them back) */
 body.gp #flyFire, body.gp .ridebtn, body.gp #ridePrev, body.gp #rideNext { display: none !important; }
+/* 1.7.4 seat picker */
+#seatPick { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 60; background: rgba(12,16,22,0.86); border: 1px solid rgba(255,220,160,0.35); border-radius: 10px; padding: 14px 18px; text-align: center; color: #f3e9d2; font: 600 14px system-ui, sans-serif; }
+#seatPick.hidden { display: none; }
+#seatPick .sp-t { letter-spacing: 1px; margin-bottom: 4px; }
+#seatPick .sp-s { font-weight: 400; font-size: 12px; opacity: 0.75; margin-bottom: 10px; }
+#seatPick button { margin: 0 5px; min-width: 76px; height: 44px; border-radius: 8px; border: 1px solid rgba(255,220,160,0.5); background: rgba(60,70,80,0.8); color: #fff; font: 700 15px system-ui, sans-serif; }
+#seatPick button:disabled { opacity: 0.35; }
+#seatPick button i { font-style: normal; font-size: 11px; opacity: 0.6; margin-left: 4px; }

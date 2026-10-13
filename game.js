@@ -422,7 +422,9 @@
       s.listTarget = (right - left) * 0.035;
     }
   }
+  function inB17() { return !ride && !fpov && !!bomber && !bomber.dead; } // 1.7.4: the player is sitting in a (living) B-17 right now
   function playerHitFx(gun, id) {
+    if (!inB17()) return; // 1.7.4: hits on the old ship are not felt from a fighter / the flak pit
     const heavy = gun === "mg151" || gun === "mk108" || gun === "wgr21";
     rumble = 1; gunner.shake = Math.max(gunner.shake, heavy ? 1.45 : 0.55);
     bomber.flash = 1.0;
@@ -434,7 +436,7 @@
     if (elapsed - lastHitSnd > (heavy ? 0.09 : 0.06)) { // 1.5.3: rapid strafing hits all sound (voice budget in audio.js caps the pile-up), panned to the side of the airframe that was hit
       lastHitSnd = elapsed;
       const side = /(^|_)(l|port|left|1|2|3)$/.test(id) ? -1 : /(^|_)(r|stbd|right|4|5|6)$/.test(id) ? 1 : 0, pan = side * (0.45 + Math.random() * 0.35) + (Math.random() - 0.5) * 0.2;
-      if (window.FGAudio) { window.FGAudio.hitOwn(id.startsWith("engine_") ? "engine" : heavy ? "cannon" : "mg", pan); if (id.startsWith("engine_") && Math.random() < 0.5) window.FGAudio.structure("engine", pan); else if (/^wing|^tail/.test(id) && Math.random() < 0.18) window.FGAudio.structure("creak", pan); else if (heavy && bomber.health < 55 && Math.random() < 0.2) window.FGAudio.structure(Math.random() < 0.5 ? "wind" : "decomp", pan); else if (id.startsWith("engine_") && bomber.health < 70 && Math.random() < 0.12) window.FGAudio.structure("fire", pan); }
+      if (window.FGAudio && inB17()) { window.FGAudio.hitOwn(id.startsWith("engine_") ? "engine" : heavy ? "cannon" : "mg", pan); if (id.startsWith("engine_") && Math.random() < 0.5) window.FGAudio.structure("engine", pan); else if (/^wing|^tail/.test(id) && Math.random() < 0.18) window.FGAudio.structure("creak", pan); else if (heavy && bomber.health < 55 && Math.random() < 0.2) window.FGAudio.structure(Math.random() < 0.5 ? "wind" : "decomp", pan); else if (id.startsWith("engine_") && bomber.health < 70 && Math.random() < 0.12) window.FGAudio.structure("fire", pan); }
       if (heavy) sfxDamage();
     }
   }
@@ -4361,7 +4363,7 @@
   // ===== 1.6.0 CREW VOICES — game side (voice.js is the director: queue, cooldowns, ducking, radio chain). Everything here is a THIN map from game events to voice requests. =====
   const VX = { rr: {}, last: {}, rc: 0, n: 0 };
   function injuryVoiceOn() { return injury.t0 >= 0 && (!mission || (mission.t - (injury.mt0 || 0)) < INJ_SEC + 0.3); } // sim-clock twin of the 10 s injury (the visual one is wall-clock + rAF)
-  function vOn() { return !!(window.FGVoice && mission && state === "PLAYING"); }
+  function vOn() { return !!(window.FGVoice && mission && state === "PLAYING" && (inB17() || downSeq)); } // 1.7.4: crew intercom only inside your B-17
   function vRot(key, arr) { const k = (VX.rr[key] = ((VX.rr[key] == null ? (Math.random() * arr.length) | 0 : VX.rr[key] + 1)) % arr.length); return arr[k]; }
   function crewDead(spk) { // stations that are shot out / crew that is down do not talk (the player's own ship only)
     if (downSeq) return false;
@@ -4963,8 +4965,19 @@
     const V = window.FGVoice; if (!V || !V.setCtx) return;
     const c = fpov ? "flak" : ride ? rideSide() : "b17"; if (c !== _vctx) { _vctx = c; V.setCtx(c); }
     if (ride && ride.e) { const e = ride.e; if (_rvId !== e.id) { _rvId = e.id; _rvPh = e.phase; _rvHp = e.hp; }
-      if (e.alive && e.phase !== _rvPh) { const p = e.phase; const ev = p === "attack" || p === "intercept" ? "attack" : p === "break" ? "brk" : p === "evade" ? "evade" : p === "rtb" ? "rtb" : (p === "position" && _rvPh === "extend") || p === "cap" ? "reform" : null; if (ev) rideVoice(ev); _rvPh = p; }
-      if (e.alive && e.hp < _rvHp - 0.5) { if (e.hp < (e.maxHp || 10) * 0.6) rideVoice("hurt"); } _rvHp = e.hp; }
+      if (e.alive && e.phase !== _rvPh) { const p = e.phase; const ev = p === "attack" || p === "intercept" ? "attack" : p === "break" ? "brk" : p === "evade" ? "evade" : p === "rtb" ? "rtb" : (p === "position" && _rvPh === "extend") || p === "cap" ? "reform" : null; if (ev && !(ev === "attack" && ride.rt && ride.rt.att >= 1)) rideVoice(ev); _rvPh = p; }
+      if (e.alive && e.hp < _rvHp - 0.5) { if (e.hp < (e.maxHp || 10) * 0.6) rideVoice("hurt"); } _rvHp = e.hp;
+      if (rideSide() === "de" && e.alive && mission) { // 1.7.4: German R/T context (cadence: voice.js cooldowns + the chatter gate)
+        const R = ride.rt || (ride.rt = { t0: mission.t, att: 0, lost: mission.friendliesLost || 0, p51: mission.p51Lost || 0, hits: mission.duelGerHits || 0, esc: -99, gc: mission.t + 14 + Math.random() * 10, close: -99 });
+        if (!R.fu && mission.t - R.t0 > 1.2) { R.fu = true; rideVoice("formup"); }
+        if (e.phase !== R.ph) { if (e.phase === "attack") { R.att++; if (R.att > 1) rideVoice("reattack"); } R.ph = e.phase; }
+        const lost = mission.friendliesLost || 0; if (lost > R.lost) rideVoice("kill"); R.lost = lost;
+        const pl = mission.p51Lost || 0; if (pl > R.p51) rideVoice("killP"); R.p51 = pl;
+        const gh = mission.duelGerHits || 0; if (gh > R.hits) rideVoice("hit"); R.hits = gh;
+        if (mission.t - R.esc > 25) { for (const q of enemies) if (q.alive && q.type === "p51" && Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z) < 1500) { R.esc = mission.t; rideVoice("escort"); break; } }
+        if (e.phase === "attack" && mission.t - R.close > 12) { let dm = 1e9; for (const f of friendlies) if (friendlyOk(f)) dm = Math.min(dm, Math.hypot(f.x - e.x, f.y - e.y, f.z - e.z)); if (dm < 450) { R.close = mission.t; rideVoice("close"); } }
+        if (mission.t > R.gc) { R.gc = mission.t + 35 + Math.random() * 25; rideVoice("gc"); }
+      } }
     if (fpov && World3D && World3D.fpovStats) { const S = World3D.fpovStats; const L = S && S.lastImpact; if (L && L !== _fpImp && _fpImp !== undefined) { if (L.dM < 3000 && V.flakCrew) V.flakCrew("bombs"); } _fpImp = L;
       const lost = mission ? mission.friendliesLost || 0 : 0; if (_fpLost != null && lost > _fpLost && V.flakCrew) V.flakCrew("burn"); _fpLost = lost; } else { _fpLost = null; }
   }
@@ -5840,20 +5853,20 @@
       // 1.7.2 JITTER FIX: the 1.7.0 box barrage (8-14 bursts/s) put a burst inside 90 u every few frames; each one restarted the 15 Hz camera shake
       // and stacked another flak kick, so the whole 3D view buzzed vertically non-stop. Now: a jolt only for a really close burst, inside 65 u, at most ~1 per 2.5 s
       // (a closer burst may still override), and the shake falls off with the square of the miss distance.
-      const q = 1 - d / 90, kOk = d < 65 && (elapsed - (fx154.lastFlakKick || -9) > 2.5 || q > (fx154.lastFlakQ || 0) + 0.3);
+      const q = 1 - d / 90, kOk = inB17() && d < 65 && (elapsed - (fx154.lastFlakKick || -9) > 2.5 || q > (fx154.lastFlakQ || 0) + 0.3);
       if (kOk) { fx154.lastFlakKick = elapsed; fx154.lastFlakQ = q; }
       if (d < 90 && !kOk) rumble = Math.max(rumble, q * 0.6);
       if (kOk) { gunner.shake = Math.max(gunner.shake, 1.2 * q * q); rumble = Math.max(rumble, q); addKick('flak', 0.06 + 0.4 * Math.pow(q, 1.2)); if (d < 55) cabinHit(0.9 * (1 - d / 55) + 0.1, 'flak'); }
       if (d <= FLAK.radiusU) {
         F.hitsP++;
-        if (window.FGAudio) window.FGAudio.hitOwn("flak");
+        const inB = inB17(); if (window.FGAudio && inB) window.FGAudio.hitOwn("flak");
         bomber.flash = Math.max(bomber.flash || 0, 0.8);
-        if (d <= FLAK.blowU && Math.random() < FLAK.playerLethal) { if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); injuredGunner(); playerShotDown("flak"); return; }
+        if (d <= FLAK.blowU && Math.random() < FLAK.playerLethal) { if (inB && window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); if (inB) injuredGunner(); playerShotDown("flak"); return; }
         const k = flakFalloff(d);
-        pushCallout("FLAK — WE'RE HIT!", 1.2, true);
+        if (inB) pushCallout("FLAK — WE'RE HIT!", 1.2, true);
         const dealt = flakDamage(bomber, k, FLAK.playerMul, b.x, b.y, b.z);
         F.dmgP = (F.dmgP || 0) + dealt;
-        injuredGunner(); if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); // once per run
+        if (inB) { injuredGunner(); if (window.FGAudio && window.FGAudio.earRing) window.FGAudio.earRing(1); } // once per run; 1.7.4: only when you are in that B-17
       } else if (d < 70) F.closeP++;
     }
   }
@@ -5869,6 +5882,7 @@
     bomber.health = 0;
     input.fire = false;
     mission.friendliesLost++;
+    if (ride || fpov) { pushCallout("YOUR FORTRESS IS GOING DOWN", 2.0, true); return; } // 1.7.4: you're elsewhere — no bail-out cinematic, the seat picker appears when you come back
     const side = Math.random() < 0.5 ? -1 : 1;
     const order = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
     downSeq = {
@@ -5990,7 +6004,7 @@
     if (endBtn) endBtn.classList.add("hidden"); if (tryBtn) tryBtn.classList.add("hidden");
     const A = window.FGAudio;
     if (mission.evaluated && mission.pendingWon != null) { if (A && A.results) A.results(); endMission(mission.pendingWon); return; }
-    // the battle goes on without us: finish the mission silently to get the real outcome
+    return; // 1.7.4: the mission runs on — the seat picker is up (TOP/TAIL on another B-17, RIDE, FLAK)
     if (A && A.mute) A.mute(true);
     const was = update._inAdvance; update._inAdvance = true;
     let guard = 0;
@@ -6037,7 +6051,7 @@
   function update(dt) {
     window.__FG_SIMT = (window.__FG_SIMT || 0) + dt; // 1.3.9: sim clock for the tracer persistence smear
     elapsed += dt;
-    if (window.FGAudio && !update._inAdvance) { const b = viewBasis(), LE = viewEye(); window.FGAudio.frame({ playing: state === "PLAYING", firing: !!(input.fire && !guns.overheated && !ride), listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: LE.x, cy: LE.y, cz: LE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20), holes: bomber ? Math.max(bomber.holes.length, bomber.holeN || 0) : 0 }); }
+    if (window.FGAudio && !update._inAdvance) { const b = viewBasis(), LE = viewEye(); window.FGAudio.frame({ playing: state === "PLAYING", firing: !!(input.fire && !guns.overheated && !ride), listener: { fx: b.fx, fy: b.fy, fz: b.fz, rx: b.rx, ry: b.ry, rz: b.rz, cx: LE.x, cy: LE.y, cz: LE.z }, engines: bomber ? bomber.engines : null, fighters: enemies.filter((q) => q.alive), down: downSeq ? downSeq.phase : null, chuteT: downSeq && downSeq.chute ? downSeq.chute.t : 0, boxDist: Math.hypot(EYE.x - BOX_C.x, EYE.y, EYE.z - 20), holes: bomber && inB17() ? Math.max(bomber.holes.length, bomber.holeN || 0) : 0, away: !inB17() && !downSeq }); }
     if (state === "TITLE") {
       gunner.yaw = 0.25 + Math.sin(elapsed * 0.18) * 0.35;
       gunner.pitch = 0.10 + Math.sin(elapsed * 0.11) * 0.05;
@@ -6091,7 +6105,7 @@
 
     if (bomber && bomber.health < 30 && Math.floor(timeAlive * 2) % 4 === 0) {
       if (!callouts.some((c) => c.text.indexOf("CRITICAL") >= 0))
-        if (!bomber.dead) pushCallout("FORTRESS CRITICAL", 0.8);
+        if (inB17()) pushCallout("FORTRESS CRITICAL", 0.8);
     }
     if (wavePause > 0) {
       wavePause -= dt;
@@ -8193,6 +8207,41 @@
     ctx.restore();
   }
 
+  // ----- 1.7.4 CHOOSE YOUR SEAT: your vehicle is gone, the mission goes on -----
+  function seatShips() { return friendlies.filter((f) => friendlyOk(f) && !f.out && !f.spiraling && !f.jett).sort((a, b) => (b.health || 0) - (a.health || 0)); }
+  function seatNeeded() { return state === "PLAYING" && !!mission && !mission.evaluated && !!bomber && bomber.dead && !ride && !fpov; }
+  function reseatB17(f, st) {
+    if (!f || !friendlyOk(f)) return false;
+    downSeq = null; setDownHud(false); VX.bailed = false; chutesKeep();
+    const i = friendlies.indexOf(f); if (i >= 0) friendlies.splice(i, 1); f.reseated = true; // he IS our ship now (not a loss: the B-17 count is unchanged)
+    Object.assign(bomber, { dead: false, health: f.health || 100, flash: 0, list: 0, engines: (f.engines || makeEngineSet()).map((e, k) => Object.assign({ x: [-36, -18, 18, 36][k], y: 3.5, z: 3.4, fire: 0, out: false }, { fire: e.fire || 0, out: !!e.out })),
+      sd: f.sd || FC.newShip(), crewHp: 100, wounded: false, out: false, jett: false, jettNo: false, tail: { fire: 0 }, holes: [], holeN: 0, ownHits: 0, deathKind: null, deathSide: 0 });
+    if (mission) { mission.playerOutT = null; mission.seats = (mission.seats || 0) + 1; }
+    injuryReset(); gunner.shake = 0; input.fire = false;
+    if (window.FGAudio && window.FGAudio.engReset) window.FGAudio.engReset();
+    setStation(st === "tail" ? "tail" : "top"); setStationUI();
+    pushCallout("YOU'RE IN " + (f.name || "ANOTHER FORTRESS") + " — " + (st === "tail" ? "TAIL" : "TOP") + " TURRET", 2.2, true);
+    return true;
+  }
+  function chutesKeep() {}
+  function seatPick(kind) {
+    if (!seatNeeded()) return false;
+    if (kind === "top" || kind === "tail") { const S = seatShips(); if (!S.length) { pushCallout("NO FORTRESS LEFT TO JOIN", 1.2); return false; } return reseatB17(S[0], kind); }
+    downSeq = null; setDownHud(false);
+    if (kind === "ride") { const e = rideDefault(); if (e && startRide(e)) return true; pushCallout("NO FIGHTERS TO RIDE WITH", 1.0); return false; }
+    if (kind === "flak") return startFlakPov() !== false;
+    return false;
+  }
+  const seatEl = (() => { const d = document.createElement("div"); d.id = "seatPick"; d.className = "hidden";
+    d.innerHTML = '<div class="sp-t">YOUR SEAT IS GONE — CHOOSE YOUR SEAT</div><div class="sp-s"></div><div class="sp-b"><button data-k="top">TOP <i>A</i></button><button data-k="tail">TAIL <i>B</i></button><button data-k="ride">RIDE <i>X</i></button><button data-k="flak">FLAK <i>Y</i></button></div>';
+    d.addEventListener("pointerdown", (ev) => { ev.stopPropagation(); const b = ev.target.closest("button"); if (b) { ev.preventDefault(); seatPick(b.dataset.k); } });
+    document.body.appendChild(d); return d; })();
+  function seatUi() {
+    const on = seatNeeded() && (!downSeq || downSeq.T > 2.5); seatEl.classList.toggle("hidden", !on); if (!on) return;
+    const S = seatShips(); const sub = S.length ? "TOP / TAIL: " + (S[0].name || "a Fortress") + " (" + Math.round(S[0].health || 0) + "%) · " + S.length + " B-17s flying" : "no Fortress left to join";
+    const q = seatEl.querySelector(".sp-s"); if (q.textContent !== sub) q.textContent = sub;
+    for (const b of seatEl.querySelectorAll("button")) b.disabled = (b.dataset.k === "top" || b.dataset.k === "tail") && !S.length;
+  }
   // ----- 1.7.3 GAMEPAD (Gamepad API, standard mapping, polled every frame) -----
   // Fighter: LS roll/pitch (back = nose up), LB/RB rudder, RT fire, RS head look. Turret / flak 88: RS or LS aim (curve + fine zone), RT fire.
   // A/B/X/Y = TOP/TAIL/RIDE/FLAK, Start = pause, View/Back = back to the B-17. Touch hides nothing permanently: a touch restores the on-screen zones.
@@ -8210,7 +8259,12 @@
     let act = rt > 0.3 || lx || ly || rx || ry; for (let i = 0; i < pad.buttons.length; i++) if (B(i)) act = true;
     if (act && !GP.hide) gpHide(true);
     if (E(9)) { GP.paused = !GP.paused; pushCallout(GP.paused ? "PAUSED — START TO RESUME" : "RESUMED", 1.4, true); }
+    if (seatNeeded() && !GP.paused) { if (E(0)) seatPick("top"); else if (E(1)) seatPick("tail"); else if (E(2)) seatPick("ride"); else if (E(3)) seatPick("flak"); for (let i = 0; i < pad.buttons.length; i++) GP.prev[i] = B(i); return; } // 1.7.4
     const play = state === "PLAYING" && !downSeq && !GP.paused;
+    if (play && E(11)) { // 1.7.4: right-stick click = recenter the view
+      if (fpov) { fpov.yaw = 0; fpov.pitch = 0.55; } else if (ride) rideRecenter();
+      else { if (gunner.station === "tail") { gunner.yaw = TAIL_BASE_YAW; gunner.pitch = clamp(0.10, TAIL_PITCH_MIN, TAIL_PITCH_MAX); } else { gunner.yaw = 0.12; gunner.pitch = 0.1; } clampStationAim(); }
+      pushCallout("VIEW CENTRED", 0.6); }
     if (play) {
       if (E(0) || E(1)) { if (fpov) endFlakPov(); if (ride) endRide(); setStation(E(0) ? "top" : "tail"); setStationUI(); }
       if (E(2)) { if (ride) rideCycle(1); else rideToggle(); }
@@ -8231,7 +8285,7 @@
     const dt = Math.min(0.033, (t - lastT) / 1000 || 0.016);
     lastT = t;
     if (fpsEl) { if (!fpsT0) fpsT0 = t; fpsN++; if (t - fpsT0 >= 500) { fpsEl.textContent = String(Math.round(fpsN * 1000 / (t - fpsT0))); fpsN = 0; fpsT0 = t; } }
-    gpPoll(dt); // 1.7.3 Xbox / standard gamepad
+    gpPoll(dt); seatUi(); // 1.7.3 Xbox / standard gamepad; 1.7.4 seat picker
     if (!window.__FG_FREEZE && !GP.paused) update(dt); // debug: headless stills render an exact sim state
     draw();
     if (mouse.desktop) { // 1.4.0-web: free the cursor for DOM buttons (END MISSION, results)
@@ -8646,6 +8700,7 @@
     // Deterministic time advance for headless playtests (rAF+dt-cap runs slow under SwiftShader)
     tgtPts: () => mission && mission.tgt ? { pts: mission.tgt.pts || [], G: mission.tgt.G && { X: mission.tgt.G.X, Z: mission.tgt.G.Z, S: mission.tgt.G.S, K: mission.tgt.G.K } } : null,
     fireState: () => ({ fire: !!input.fire, fz: !!(ride && ride.fireId != null), roll: !!(ride && ride.rollId != null) }), // 1.7.2 test hook
+    seat: (k) => k ? seatPick(k) : { need: seatNeeded(), shown: !seatEl.classList.contains("hidden"), ships: seatShips().length, dead: !!(bomber && bomber.dead), downSeq: !!downSeq, ride: !!ride, fpov: !!fpov, station: gunner.station, state, t: mission ? mission.t : null, evaluated: !!(mission && mission.evaluated), friendlies: friendlies.filter(friendlyOk).length, lost: mission ? mission.friendliesLost : 0 },
     gp: () => ({ on: GP.on, hide: GP.hide, paused: GP.paused, fire: !!input.fire, station: gunner.station, ride: !!ride, fly: !!(ride && ride.fly), fpov: !!fpov, yaw: fpov ? fpov.yaw : ride ? ride.yaw : gunner.yaw, pitch: fpov ? fpov.pitch : ride ? ride.pitch : gunner.pitch, r: ride ? ride.gpR || 0 : 0, p: ride ? ride.gpP || 0 : 0, y: ride ? ride.gpY || 0 : 0 }),
     fvM: () => mission && Object.assign({ p51Kills: mission.p51Kills || 0, p51Lost: mission.p51Lost || 0 }, mission.fvM), drawNow: () => draw(), // 1.7.2 test hook: one real frame render (jitter harness)
     advance: (sec) => {
