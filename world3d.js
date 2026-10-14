@@ -92,7 +92,7 @@ export function createWorld3D(canvas) {
   scene.add(fill);
   const key2 = new THREE.DirectionalLight(0xffd8a8, 0.0);
   key2.position.set(30, 50, -20);
-  scene.fog = new THREE.Fog(0x7fa9da, 3500, 52000); // 1.5.1: no milky air — a faint blue aerial perspective only
+  scene.fog = new THREE.Fog(0x7fa9da, 2600, 44000); // 1.8.0: haze thickens with range; // 1.5.1: no milky air — a faint blue aerial perspective only
 
   // 1.3.6: procedural high-altitude sky — deep blue zenith, paler band, milky haze at the horizon,
   // hard sun with a tight glow. Rotates with the box's heading (the sun stays put in the world).
@@ -2536,6 +2536,7 @@ export function createWorld3D(canvas) {
         townCol *= 1.0 - 0.30 * smoothstep(0.35, 0.75, shd); // the same drifting cloud shadows as the fields
         townCol = mix(townCol, vec3(0.45, 0.58, 0.76), 0.04);
 #ifdef USE_FOG
+        { float tfar = smoothstep(fogFar * 0.22, fogFar * 0.75, vFogDepth); townCol = mix(townCol, mix(vec3(0.40, 0.40, 0.43), fogColor, 0.55), tfar * 0.9); } // 1.8.0: a grey horizon smudge that resolves into the city as you close
         townCol = mix(townCol, fogColor, fogFactor * 0.6); // post-fog: only a light haze, never erased
 #endif
         gl_FragColor.rgb = mix(gl_FragColor.rgb, townCol, tw.a);

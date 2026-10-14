@@ -18,7 +18,8 @@
       <div id="scorebox">SCORE <span id="score">0</span></div>
       <div id="wavebox"><span id="tgtlabel">TGT</span> <span id="wave">2:00</span></div>
       <div id="fpsbox"><span id="fps">--</span> FPS</div>
-      <div id="boxbox">B-17s <span id="boxcount">19/19</span></div>
+      <div id="boxbox">B-17s <span id="boxcount">18/18</span></div>
+      <div id="f109box">109s <span id="f109">--</span></div>
       <div id="killbox">AXIS <span id="bandits">36/36</span><span id="youk"> · YOU <span id="kills">0</span></span></div>
     </div>
     <div id="missionbar">
@@ -28,6 +29,7 @@
     </div>
     <div id="healthwrap">
       <div id="healthlabel">FORTRESS</div>
+      <svg id="dmgfig" viewBox="0 0 140 100" style="display:none" aria-label="fighter damage"><path d="M66 6 Q70 2 74 6 L75 30 L73 88 L67 88 L65 30 Z" fill="#6fbf4a"/><path d="M65 32 L10 44 L10 52 L65 50 Z M75 32 L130 44 L130 52 L75 50 Z" fill="#6fbf4a"/><path d="M67 78 L48 84 L48 90 L67 89 Z M73 78 L92 84 L92 90 L73 89 Z" fill="#6fbf4a"/><ellipse cx="70" cy="26" rx="3.5" ry="6" fill="#6fbf4a"/></svg>
       <svg id="dmgsil" viewBox="0 0 140 100" aria-label="B-17 damage">
         <!-- 1.6.8: top-down B-17 planform, nose up: fuselage, tapered wings, 4 nacelles (#1 port outboard … #4 starboard outboard), stabilisers, nose/cockpit -->
         <path data-part="wingL" d="M64 35 L8 41.5 Q5 42 5 44.5 L5.5 46.5 Q6 48 9 48 L64 53 Z" fill="#6fbf4a"/>
@@ -63,7 +65,7 @@
       <div class="eyebrow">8TH AIR FORCE · 1943</div>
       <h1>FORTRESS<br>GUNNER</h1>
       <p class="sub">B-17G Flying Fortress · Sperry Upper Turret</p>
-      <p class="blurb">Top turret, combat box of 19. Defend the formation to the target — bombs away wins the mission.</p>
+      <p class="blurb">Top turret, combat box of 18. Defend the formation to the target — bombs away wins the mission.</p>
       <ul class="controls">
         <li><b>FIRE</b> &nbsp; hold <em>anywhere</em> on the left half (Space)</li>
         <li><b>AIM</b> &nbsp; drag <em>anywhere</em> on the right half to aim</li>
@@ -148,5 +150,6 @@
   <script src="voice.js"></script>
   <script src="combat.js"></script>
   <script src="game.js"></script>
+  <script src="menu.js"></script>
 </body>
 </html>

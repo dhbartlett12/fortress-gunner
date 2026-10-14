@@ -144,11 +144,11 @@
   const MISSION_EVAL_DELAY = 150; // 1.6.9d: the fight goes on through the rally and the turn home (was 60 s)
   const TURN_BANK = 0.36;             // 1.3.6: ~21° bank in the turn for home
   const TURN_TOTAL = Math.PI / 2;     // ~90° wheel in the 60 s after bombs away      // 1.3.5: ~60 s after release (the box turns for home) → debrief
-  const MISSION_BOMBERS = 19;         // including player
+  const MISSION_BOMBERS = 18; // 1.8.0: 18-plane combat wing box         // including player
   const MISSION_N109 = 20, MISSION_N190 = 16, MISSION_NP51 = 20; // 1.5.0: three doctrines — 109 slash, 190 hammer, P-51 sheriff
   const MISSION_FIGHTERS = MISSION_N109 + MISSION_N190; // Axis only (Mustangs are not on the HUD count)
   const FIGHTERS_OUT_WIN = 8;         // 1.5.0: 8+ B-17s out of the box = Luftwaffe victory (reported on the results screen)
-  const MISSION_WIN_DROPS = 15;
+  const MISSION_WIN_DROPS = 14; // 1.8.0: of 18
   const BF109_FLAT_MAX_MPH = 350;     // brief: flat max 350 mph
   const MISSION_MODE = true;          // default play mode
   // Tuning (1.3.1): engine loss rare & meaningful; box attrition ~2–6 on a good run
@@ -215,36 +215,21 @@
    * Returns the 18 friendly offsets relative to the player's ship.
    */
   function combatBoxSlots() {
-    const el = [ // squadron pattern: two 3-ship Vs, 2nd element stepped down & back
-      { x: 0, y: 0, z: 0 }, { x: -22, y: -2, z: -16 }, { x: 22, y: -2, z: -16 },
-      { x: 0, y: -7, z: -38 }, { x: -22, y: -9, z: -54 }, { x: 22, y: -9, z: -54 },
+    // 1.8.0: the April 1943 tucked-in 18-plane combat wing box. Three 6-ship squadrons, each two 3-plane Vees; inside a squadron the
+    // Vees/wingmen are stacked one way (up to starboard = -X), the squadrons the opposite way (high squadron up to PORT, low down to starboard).
+    // ~400 yd wide (≈244 u), ~200 yd deep (≈122 u), ~300 yd top to bottom (≈183 u) at 1 u = 1.5 m.
+    const el = [ // squadron: lead Vee + second Vee behind/below, wingmen stepped up toward starboard
+      { x: 0, y: 0, z: 0 }, { x: -20, y: 9, z: -14 }, { x: 20, y: -9, z: -14 },
+      { x: -14, y: -30, z: -46 }, { x: -34, y: -21, z: -60 }, { x: 6, y: -39, z: -60 },
     ];
-    const sq = {
-      lead: { x: 0, y: 0, z: 0 },
-      // +X is the turret's LEFT (port). Lead squadron ahead-port, high squadron (us) starboard
-      // stepped up & back, low squadron further port stepped down & back.
-      high: { x: -58, y: 16, z: -40 },
-      low: { x: 58, y: -16, z: -40 },
-    };
-    // 1.3.5: the player flies the port wing of the LEAD squadron (#3 slot) — the middle of the
-    // box: the lead ship ahead-right, the high squadron above-right, the low squadron below-left,
-    // the lead's second element below and behind.
-    const player = { x: sq.lead.x + el[2].x, y: sq.lead.y + el[2].y, z: sq.lead.z + el[2].z };
+    const sq = { lead: { x: 0, y: 0, z: 0 }, high: { x: 92, y: 70, z: -30 }, low: { x: -92, y: -70, z: -52 } };
+    const player = { x: sq.lead.x + el[2].x, y: sq.lead.y + el[2].y, z: sq.lead.z + el[2].z }; // port wing of the lead squadron's lead Vee
     const out = [];
-    for (const key of ["lead", "high", "low"]) {
-      for (let i = 0; i < el.length; i++) {
-        if (key === "lead" && i === 2) continue; // that's us
-        out.push({
-          x: sq[key].x + el[i].x - player.x,
-          y: sq[key].y + el[i].y - player.y,
-          z: sq[key].z + el[i].z - player.z,
-          sq: key, el: i,
-        });
-      }
+    for (const key of ["lead", "high", "low"]) for (let i = 0; i < el.length; i++) {
+      if (key === "lead" && i === 2) continue; // that's us
+      out.push({ x: sq[key].x + el[i].x - player.x, y: sq[key].y + el[i].y - player.y, z: sq[key].z + el[i].z - player.z, sq: key, el: i });
     }
-    // 19th ship: "tail-end Charlie" low behind the lead squadron
-    out.push({ x: 0 - player.x, y: -15 - player.y, z: -78 - player.z, sq: "lead", el: 6 });
-    return out; // 5 lead + 6 high + 6 low + 1 tail-end Charlie = 18 friendlies (+ player = 19)
+    return out; // 17 friendlies + the player = 18
   }
 
   function initMissionState() {
@@ -1402,7 +1387,7 @@
     const sv0 = isP ? null : ship, LA = gunLead(e, aw[0], aw[1], aw[2], sv0 ? sv0.vx || 0 : 0, sv0 ? sv0.vy || 0 : 0, sv0 ? sv0.vz || 0 : 0);
     if (leadCos(e, LA) < GUN_COS) { b.gated = (b.gated || 0) + dt; return; }
     const rngA = Math.hypot(aw[0] - e.x, aw[1] - e.y, aw[2] - e.z);
-    e.mf = 0.1; b.snd -= dt; if (b.snd <= 0) { b.snd = 0.14; if (window.FGAudio) window.FGAudio.enemyGun(e.x, e.y, e.z); }
+    e.mf = 0.1; b.snd -= dt; if (b.snd <= 0) { b.snd = 0.14; if (window.FGAudio) window.FGAudio.enemyGun(e.x, e.y, e.z); } if (e.sturm && window.FGAudio && window.FGAudio.cannon30 && Math.random() < 0.35) window.FGAudio.cannon30(e.x, e.y, e.z);
     if (e.br) e.br.ammo -= dt; // 1.6.8: trigger time comes out of the belts
     // 1.6.8: every round leaves its REAL gun (cowl / spinner / wing root / outer wing) toward the harmonisation point on the sight line and flies muzzle speed + the
     // fighter's own velocity; the hit test follows that line in the target's frame. 1 round in 4 per gun glows: dashed streams, not beams.
@@ -1536,7 +1521,7 @@
       if (!q.alive || q.team === "allied" || q.phase === "debug" || q.hold || q.type === "p51") continue;
       if ((q.p51n || 0) >= 2) continue;
       const dB = q.dB17 != null ? q.dB17 : nearB17(q.x, q.y, q.z);
-      if (dB > (surge && q.opening ? 4300 : TUNE.p51Engage)) continue;
+      if (dB > (surge && q.opening ? 4300 : (q.phase === "position" || q.phase === "reform") && q.z > BOX_C.z ? 3800 : TUNE.p51Engage)) continue; // 1.8.0: reach the regroup point ahead
       if (q.y < BOX_C.y - 1500) continue;
       if (e.esc && stragNow && Math.hypot(q.x - stragNow.x, q.y - stragNow.y, q.z - stragNow.z) > TUNE.p51Engage) continue; // an escort pair on duty defends its straggler only
       const de = Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z);
@@ -1544,7 +1529,8 @@
       const ph = q.phase;
       const strag = isStragTgt(q.tgt) && ATTACKING_PH[ph] || (q.hunt && huntOk(q.hunt));
       const sc = ATTACKING_PH[ph] ? 2600 : ph === "rollin" ? 2300 : (ph === "break" || ph === "extend") ? 500 : 0; // 1.6.7: Germans on a run (threatening the box) first, and among them the NEAREST (distance counts 1:1)
-      const s2 = sc - de + (strag ? 1200 : 0) + (q.hp < q.maxHp ? 150 : 0) + (q.p51n ? -300 : 0) - Math.max(0, dB - 1300) * 0.3 + (surge && q.opening ? 900 : 0);
+      const regroup = (ph === "position" || ph === "reform" || ph === "rejoin" || ph === "extend") && q.z > BOX_C.z + 600 ? 1400 : 0; // 1.8.0: catch the Gruppe while it regroups out ahead
+      const s2 = sc + regroup - de + (strag ? 1200 : 0) + (q.hp < q.maxHp ? 150 : 0) + (q.p51n ? -300 : 0) - Math.max(0, dB - 1300) * 0.3 + (surge && q.opening ? 900 : 0);
       if (s2 > bs) { bs = s2; best = q; }
     }
     return best;
@@ -1885,7 +1871,7 @@
     if (rideHolds(e)) return; // 1.6.6
     const dx = f.x - e.x, dy = f.y - e.y, dz = f.z - e.z, dl = Math.hypot(dx, dy, dz) || 1;
     { const SP = BULLET_UPS + Math.max(0, (e.vx * dx + e.vy * dy + e.vz * dz) / dl); for (let i = 0; i < 2; i++) tracers.push({ x: e.x + e.hx * 3, y: e.y + e.hy * 3, z: e.z + e.hz * 3, vx: dx / dl * SP + rand(-6, 6), vy: dy / dl * SP + rand(-6, 6), vz: dz / dl * SP + rand(-6, 6), life: Math.min(1.3, dl / 400 + 0.3), maxLife: 1.3, trav: 0, team: "axis", hid: i === 1, delay: i * 0.05, k190: e.type === "190", ftr: 1, fvf: 1 }); }
-    e.mf = 0.12; if (window.FGAudio && Math.random() < 0.5) window.FGAudio.enemyGun(e.x, e.y, e.z);
+    e.mf = 0.12; if (window.FGAudio && Math.random() < 0.5) window.FGAudio.enemyGun(e.x, e.y, e.z); if (e.sturm && window.FGAudio && window.FGAudio.cannon30 && Math.random() < 0.35) window.FGAudio.cannon30(e.x, e.y, e.z);
     if (mission) mission.duelGerBursts = (mission.duelGerBursts || 0) + 1;
     const rf = FC.rangeFactor(FC.GUNS.mg151, FC.toYd(R));
     const p = 0.55 * rf * DF.hitMul * clamp(1 - Math.abs(f.gLoad || 1) * 0.06, 0.6, 1);
@@ -2129,11 +2115,12 @@
     "190": [{ g: "mg131", rate: 13, p: [0.22, 0.42, 2.1] }, { g: "mg131", rate: 13, p: [-0.22, 0.42, 2.1] }, { g: "mg151", rate: 9.5, p: [1.05, -0.32, 1.0] }, { g: "mg151", rate: 9.5, p: [-1.05, -0.32, 1.0] }, { g: "mg151", rate: 11.7, p: [1.85, -0.26, 0.7] }, { g: "mg151", rate: 11.7, p: [-1.85, -0.26, 0.7] }], // A-8: cowl MG 131s, wing-root MG 151/20s (synchronised), outer MG 151/20s
     p51: [1.65, 1.85, 2.05].flatMap((x) => [{ g: "m2", rate: 13.3, p: [x, -0.3, 0.75] }, { g: "m2", rate: 13.3, p: [-x, -0.3, 0.75] }]), // six .50s in the wings
   };
-  GUNPOS["190S"] = GUNPOS["190"].slice(0, 4).concat([{ g: "mk108", rate: 10.8, p: [1.85, -0.26, 0.7] }, { g: "mk108", rate: 10.8, p: [-1.85, -0.26, 0.7] }]);
+  // 1.8.0 Fw 190 A-8/R2 Sturmjäger (every 190): 2 x MG 151/20 in the wing roots (synchronised) + 2 x MK 108 30 mm in the outer wings
+  GUNPOS["190S"] = [{ g: "mg151", rate: 9.5, p: [1.05, -0.32, 1.0] }, { g: "mg151", rate: 9.5, p: [-1.05, -0.32, 1.0] }, { g: "mk108", rate: 10, p: [1.85, -0.26, 0.7] }, { g: "mk108", rate: 10, p: [-1.85, -0.26, 0.7] }];
   GUNPOS["109R6"] = GUNPOS["109"].concat([{ g: "mg151", rate: 11.7, p: [1.7, -0.35, 0.6] }, { g: "mg151", rate: 11.7, p: [-1.7, -0.35, 0.6] }]);
   const HARM = { "109": 250, "190": 250, p51: 183 }; // u: gun harmonisation range on the sight line (≈375 m Luftwaffe, 300 yd USAAF)
   const ROLLP = { "109": { p: 1.6, a: 6.5 }, "190": { p: 2.3, a: 9.5 }, p51: { p: 1.65, a: 6.5 } }; // max roll rate (rad/s: 92° / 132° / 95°) and roll acceleration
-  function gunsOf(e) { return e.type === "p51" ? GUNPOS.p51 : e.type === "190" ? (e.sturm ? GUNPOS["190S"] : GUNPOS["190"]) : (e.r6 ? GUNPOS["109R6"] : GUNPOS["109"]); }
+  function gunsOf(e) { return e.type === "p51" ? GUNPOS.p51 : e.type === "190" ? GUNPOS["190S"] : GUNPOS["109"]; } // 1.8.0: 190 = Sturmjäger, 109 = G-6 (2 MG 131 + hub MG 151)
   function rightOf(e) { return { x: e.hy * e.uz - e.hz * e.uy, y: e.hz * e.ux - e.hx * e.uz, z: e.hx * e.uy - e.hy * e.ux }; } // F × U = starboard
   function muzzleOf(e, p, r) { return { x: e.x + r.x * p[0] + e.ux * p[1] + e.hx * p[2], y: e.y + r.y * p[0] + e.uy * p[1] + e.hy * p[2], z: e.z + r.z * p[0] + e.uz * p[1] + e.hz * p[2] }; }
   const NOO = {};
@@ -2314,6 +2301,17 @@
     e.phase = "position"; e.phaseT = 0; e.mode = B.plan;
     brStat("plan_" + B.plan);
   }
+  // 1.8.0 GRUPPE MASS ASSAULT: every 109 schwarm leader that has his frontal entry geometry reports ready; the whole Gruppe is released
+  // together when all leaders still forming up are ready (or 25 s after the first was), for a 6 s window -> one simultaneous frontal wave.
+  const GRP = { ready: new Map(), goUntil: -1, first: null, waves: 0, log: [] };
+  function gAssaultGo(e) {
+    const t = mission.t; if (t < GRP.goUntil) return true;
+    GRP.ready.set(e, t); for (const [q, tq] of GRP.ready) if (t - tq > 6 || !q.alive) GRP.ready.delete(q);
+    if (GRP.first == null || t - GRP.first > 90) GRP.first = t;
+    let lead = 0; for (const q of enemies) if (q.alive && q.type === "109" && q.br && !gLeader(q) && (q.phase === "position" || q.phase === "reform" || q.phase === "extend" || q.phase === "rejoin" || q.phase === "inbound" || q.phase === "arrive") && !(ride && ride.e === q)) lead++;
+    if (GRP.ready.size >= Math.max(2, Math.ceil(0.7 * lead)) || (lead <= 1 && GRP.ready.size >= 1) || t - GRP.first > 45) { GRP.goUntil = t + 6; GRP.first = null; GRP.waves++; GRP.log.push([+t.toFixed(1), GRP.ready.size, lead]); GRP.ready.clear(); return true; }
+    return false;
+  }
   function gLeader(e) { const L = e.leader; return L && L.alive && L.br && !L.hold ? L : null; }
   function gStartAttack(e, B, t) {
     if (t) B.tgt = t;
@@ -2431,6 +2429,7 @@
       let n = 0, close = 0; for (const q of enemies) if (q.alive && q.leader === e && q.phase !== "rtb") { n++; if (Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z) < 650) close++; }
       if (n && close < Math.min(n, 2)) { go = false; brStat("lead_wait"); }
     }
+    if (go && e.type === "109" && !gLeader(e) && mission && !gAssaultGo(e)) { go = false; B.posT = Math.min(B.posT, 30); brStat("gruppe_wait"); } // 1.8.0: the Gruppe goes in together
     if (go) { gStartAttack(e, B); return; }
     if (B.posT > (e.type === "109" ? 35 : 55)) { gNewPlan(e, B); B.posT = 0; brStat("replan"); } // it is not working out from here: re-plan from where he is now
   }
@@ -2548,7 +2547,7 @@
       const r = rightOf(e), GP = gunsOf(e), G = GP[(B.gi = ((B.gi || 0) + 1) % GP.length)], m = muzzleOf(e, G.p, r), Hc = HARM[e.type] || 250;
       let dx = e.x + e.hx * Hc - m.x, dy = e.y + e.hy * Hc - m.y, dz = e.z + e.hz * Hc - m.z; const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
       fvMet("G", true); tracers.push({ tgt: F, x: m.x, y: m.y, z: m.z, vx: dx * gunSpeed(e) + e.vx, vy: dy * gunSpeed(e) + e.vy, vz: dz * gunSpeed(e) + e.vz, life: 1.4, maxLife: 1.4, trav: 0, team: "axis", k190: e.type === "190", ftr: 1, fvf: 1 });
-      e.mf = 0.1; if (window.FGAudio && Math.random() < 0.3) window.FGAudio.enemyGun(e.x, e.y, e.z);
+      e.mf = 0.1; if (window.FGAudio && Math.random() < 0.3) window.FGAudio.enemyGun(e.x, e.y, e.z); if (e.sturm && window.FGAudio && window.FGAudio.cannon30 && Math.random() < 0.35) window.FGAudio.cannon30(e.x, e.y, e.z);
       const rf = FC.rangeFactor(FC.GUNS.mg151, FC.toYd(R)), p = 0.16 * rf * clamp(1 - Math.abs(F.gLoad || 1) * 0.06, 0.6, 1);
       if (Math.random() < p) { F.hp -= e.type === "190" ? 5 : 4.2; F.flash = 1; F.smoke = Math.min(1, (F.smoke || 0) + 0.3); spawnHit(F, null); if (mission) mission.duelGerHits = (mission.duelGerHits || 0) + 1; if (F.hp <= 0) { killP51(F, e); return; } }
     }
@@ -3090,7 +3089,7 @@
       passSide: 1, trail: [], burstsLeft: 0, burst: null, burstGap: 0,
       ammo: isP ? 999 : is190 ? TAC.ammo190 : TAC.ammo, breakOffT: rand(22, 48), vT: 0,
       presser: !is190 && !isP && Math.random() < TAC.presserFrac,
-      sturm: is190 && Math.random() < 0.5, r6: false,
+      sturm: is190, r6: false, // 1.8.0: every 190 is a Sturmjäger
       id: Math.random().toString(36).slice(2, 9),
     };
     return e;
@@ -3634,6 +3633,7 @@
   const TGT_T = [48, 26, 10]; // % of depot value: DESTROYED / HEAVILY / LIGHTLY
 
   function endMission(won) {
+    if (state === "PLAYING") recAdd(won); // 1.8.0 service record
     state = "GAMEOVER";
     if (window.FGVoice) window.FGVoice.silence(true);
     input.fire = false;
@@ -3838,7 +3838,7 @@
           station: gunner.station || "top",
           stationEye: gunStation().eye,
           ride: rideOpts(), // 1.6.6: null unless riding in a fighter
-          flakPov: fpov ? { yaw: fpov.yaw, pitch: fpov.pitch, t: fpov.t } : null, // 1.6.9
+          flakPov: fpov ? fpovSmooth() : null, // 1.8.0: render from a smoothed view (no touch-noise shake at 90-120 Hz) // 1.6.9
         });
       },
       render() { api.render(); },
@@ -4004,6 +4004,7 @@
   resize();
 
   function resetRun() {
+    GRP.ready.clear(); GRP.goUntil = -1; GRP.first = null; GRP.waves = 0; GRP.log = []; // 1.8.0
     gunner.yaw = 0.12;
     gunner.pitch = 0.10;
     gunner.yawV = 0;
@@ -4340,11 +4341,15 @@
     calloutEl.classList.toggle("urgent", !!(c && CALL_URGENT.test(c.text)));
   }
   const DOWN_CALLS = /SHE'S GOING DOWN|BAIL OUT|YOU'RE OUT|CANOPY OPEN|BREAKING UP/;
+  const CO_SEEN = new Map(), B17_CALLS = /FORTRESS|PILOT TO|BOMBARDIER|NAVIGATOR|TAIL GUNNER|WAIST|BALL TURRET|TOP TURRET|INTERPHONE|CREW|BAIL OUT|ENGINE \d|BOMB BAY|BOMBS AWAY/;
   function pushCallout(text, life, important) {
     try { voiceFromCallout(text, important); } catch (e) { if (window.FGVoice) window.FGVoice.stats.errors++; }
     if (downSeq && !DOWN_CALLS.test(text)) return; // 1.4.1: once we're going down, only our own story is called
     if (callouts.some((c) => c.text === text)) return;
-    life = Math.max(0.9, Math.min(life || 1, important ? 2.0 : 1.3));
+    if (!inB17() && B17_CALLS.test(text)) return; // 1.8.0: B-17 crew banners only while you sit in a B-17
+    const now = performance.now(); if (CO_SEEN.get(text) > now - 10000) return; CO_SEEN.set(text, now); if (CO_SEEN.size > 200) CO_SEEN.clear(); // shown once
+    const radio = /^[A-Z0-9 .\-]+: /.test(text); // seat-specific radio text: holds ~3 s, then fades
+    life = radio ? 3.0 : Math.max(0.9, Math.min(life || 1, important ? 2.0 : 1.3));
     const c = { text, life, important: !!important, age: 0 };
     if (!callouts.length) { callouts.push(c); showCallout(c); return; }
     if (important) {
@@ -4595,11 +4600,14 @@
       const rtb = mission.bombsAway;
       if (waveEl) waveEl.textContent = rtb ? formatMissionClock(Math.max(0, MISSION_EVAL_DELAY - mission.post)) : formatMissionClock(mission.timeLeft);
       const tl = document.getElementById("tgtlabel");
+      if (!rtb && state === "PLAYING" && !GP.paused) { const mi = mission.timeLeft * VF * 1.5 / 1609; const nx = [40, 30, 20, 10, 5].find((m) => mi <= m && !(mission.nav || (mission.nav = {}))[m]); // 1.8.0 navigator callouts
+        if (nx) { mission.nav[nx] = 1; if (mission.t > 3) pushCallout(inB17() ? "NAVIGATOR: TARGET " + nx + " MILES" : "TARGET " + nx + " MILES", 2.8); } }
       if (tl) { const w = rtb ? "RTB" : "TGT"; if (tl.textContent !== w) { tl.textContent = w; tl.classList.toggle("rtb", rtb); } }
       // 1.3.5 scorecard: still flying / total, ticks down (orange flash) as planes go down
       const nb = countBombCapable(), nf = MISSION_FIGHTERS - mission.fightersKilled;
+      const f9 = document.getElementById("f109"); if (f9) { let n9 = 0; for (const q of enemies) if (q.alive && q.type === "109") n9++; const t9 = String(n9); if (f9.textContent !== t9) f9.textContent = t9; }
       if (boxEl) {
-        const t = nb + "/19";
+        const t = nb + "/" + MISSION_BOMBERS;
         if (boxEl.textContent !== t) { boxEl.textContent = t; boxEl.classList.add("tick"); hudTick.b = elapsed; }
         else if (elapsed - hudTick.b > 1.2) boxEl.classList.remove("tick");
       }
@@ -4709,11 +4717,16 @@
   // Fighter-local axes: x = right, y = up (canopy), z = nose. 1 u = 1.5 m.
   const RIDE_EYE = { x: 0, y: 0.55, z: -0.25 };
   const RIDE_YAW = 150 * Math.PI / 180, RIDE_PMIN = -40 * Math.PI / 180, RIDE_PMAX = 80 * Math.PI / 180;
-  const RIDE_GUNS = { "109": GUNPOS["109"], "190": GUNPOS["190"], p51: GUNPOS.p51 }; // 1.6.8: the same real gun positions the AI uses (cowl MG 131s + spinner MG 151 / cowl + wing-root + outer MG 151s / six wing .50s)
+  const RIDE_GUNS = { "109": GUNPOS["109"], "190": GUNPOS["190S"], p51: GUNPOS.p51 }; // 1.6.8: the same real gun positions the AI uses (cowl MG 131s + spinner MG 151 / cowl + wing-root + outer MG 151s / six wing .50s)
   const RIDE_TRK = { "109": 2, "190": 3, p51: 4 }; // tracer look (world3d TR_KIND): 109 red, 190 bold red, P-51 orange
   const RIDE_SIMR = 15; // simulated rounds/s per gun cap: ≥ every real gun's rate here (MG 131 15/s, MG 151 11.7/s, M2 13.3/s), so every round is flown and hit-tested (dm = 1)
   const RIDE_CONV = 250; // (P-51: HARM.p51) // u (~410 yd) gun harmonisation on the sight line
-  const RIDE_FMUL = { m2: 1, mg131: 1.2, mg151: 3.0 }; // per-round damage on fighters relative to a .50 (13 mm AP ≈ .50; 20 mm mine shell ≈ 3×)
+  const RIDE_FMUL = { m2: 1, mg131: 1.2, mg151: 3.0, mk108: 11 }; // 1.8.0: MK 108 mine shell — 3-4 hits bring down a B-17
+  // 1.8.0 per-weapon ballistics / ammo (rounds per gun) / class (guns vs cannons). v = muzzle m/s, life s (MK 108: slow, drooping, short)
+  const WPN = { m2: { v: 880, life: 2.0, ammo: 310, cls: "guns", nm: ".50 AN/M2" }, mg131: { v: 750, life: 1.9, ammo: 300, cls: "guns", nm: "MG 131" },
+    mg151: { v: 790, life: 1.8, ammo: 200, cls: "cannons", nm: "MG 151/20" }, mk108: { v: 505, life: 1.25, ammo: 55, cls: "cannons", nm: "MK 108" } };
+  const WSEL = ["both", "guns", "cannons"];
+  function rideAmmoInit(e) { const set = RIDE_GUNS[e.type] || []; ride.ammoG = set.map((G) => (WPN[G.g] || WPN.m2).ammo); ride.wsel = e.type === "p51" ? "both" : (ride.wsel || "both"); if (ride.thr == null) ride.thr = 1; } // per-round damage on fighters relative to a .50 (13 mm AP ≈ .50; 20 mm mine shell ≈ 3×)
   const RIDE_AI_HOLD = true; // the ridden fighter's own AI guns are silent while you ride (you are the trigger)
   const RIDE_TYPE = { "109": "Bf 109", "190": "Fw 190", p51: "P-51" };
   const GER_COL = ["Yellow", "White", "Black", "Red", "Blue", "Brown"], P51_COL = ["Red", "White", "Blue", "Yellow", "Green"];
@@ -4790,6 +4803,12 @@
   function viewEye() { return ride && ride.eye ? ride.eye : EYE; }
   // ===== 1.6.9 FLAK POV: stand at an 88 battery by the airfield outside the town and watch the raid come over (drag to look round)
   let fpov = null;
+  function fpovSmooth() { // critically-damped follow of the aim (~45 ms), per real frame time
+    const nw = performance.now(), dt = Math.min(0.1, Math.max(0, (nw - (fpov.smT || nw)) / 1000)); fpov.smT = nw;
+    if (fpov.sy == null) { fpov.sy = fpov.yaw; fpov.sp = fpov.pitch; }
+    const k = 1 - Math.exp(-dt / 0.045); let dy = fpov.yaw - fpov.sy; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); fpov.sy += dy * k; fpov.sp += (fpov.pitch - fpov.sp) * k;
+    return { yaw: fpov.sy, pitch: fpov.sp, t: fpov.t };
+  }
   function startFlakPov() { if (state !== "PLAYING" || downSeq) return false; if (ride) endRide(); fpov = { yaw: 0, pitch: 0.55, t: 0, shoutT: 2, cd: 1.5 }; input.fire = false; setStationUI(); flyBridgeSync(); if (window.FGVoice && window.FGVoice.flakCrew) window.FGVoice.flakCrew("start"); return true; }
   function endFlakPov() { fpov = null; setStationUI(); flyBridgeSync(); }
   // 1.7.1 PLAYER-CREWED 88: one round every ~3.5 s, time-fused by the predictor to the lead point of the B-17 nearest the sight
@@ -4828,6 +4847,17 @@
     fpov.cd = rand(3.2, 3.8); fpov.shots = (fpov.shots || 0) + 1; addKick && addKick("flak", 0.6);
     try { World3D._fpov.fireMine(); } catch (er) {}
   }
+  const WSP = { p: [], t: 0 };
+  function drawWisps() { // 1.8.0: cloud wisps streaming past the canopy - a sense of speed in the fighters
+    const e = ride && ride.e; if (!e || ride.deadT != null) return; const nw = performance.now(), dt = Math.min(0.05, (nw - (WSP.t || nw)) / 1000); WSP.t = nw;
+    const sp = (e.V || Math.hypot(e.vx || 0, e.vy || 0, (e.vz || 0) + VF)) / MPH, k = clamp((sp - 180) / 260, 0, 1); if (k <= 0.02) return;
+    while (WSP.p.length < 18) WSP.p.push({ a: Math.random() * 6.283, r: 0.05 + Math.random() * 0.3, v: 0.6 + Math.random() });
+    ctx.save(); ctx.lineCap = "round"; const cx = W / 2, cy = H / 2, R = Math.hypot(W, H) / 2;
+    for (const q of WSP.p) { const r0 = q.r; q.r *= 1 + dt * q.v * (1.5 + 3 * k); if (q.r > 1.1) { q.a = Math.random() * 6.283; q.r = 0.05 + Math.random() * 0.15; continue; }
+      const al = 0.09 * k * Math.min(1, q.r * 3); ctx.strokeStyle = "rgba(240,244,250," + al.toFixed(3) + ")"; ctx.lineWidth = 1 + 4 * q.r;
+      ctx.beginPath(); ctx.moveTo(cx + Math.cos(q.a) * r0 * R, cy + Math.sin(q.a) * r0 * R); ctx.lineTo(cx + Math.cos(q.a) * q.r * R * 1.06, cy + Math.sin(q.a) * q.r * R * 1.06); ctx.stroke(); }
+    ctx.restore();
+  }
   function drawFlyZones() { // 1.7.2: the top-left hold-to-fire zone (+ the Easy lead pip)
     ctx.save(); const on = ride.fireId != null, w = W * 0.5, h = H * 0.42;
     ctx.fillStyle = on ? "rgba(255,120,60,0.16)" : "rgba(255,255,255,0.035)"; ctx.fillRect(0, 0, w, h);
@@ -4865,6 +4895,7 @@
     const K = input.keys || {};
     if (K["a"] || K["arrowleft"]) r -= 1; if (K["d"] || K["arrowright"]) r += 1;
     if (K["s"] || K["arrowdown"]) p += 1; if (K["w"] || K["arrowup"]) p -= 1; // stick back (S / down) = nose up
+    if (SET.invPilot) p = -p; // 1.8.0
     let y = (ride.tiltY || 0) + (ride.gpY || 0); if (K["q"]) y -= 1; if (K["e"]) y += 1; // 1.7.2: rudder = twist the phone like a steering wheel (right thumb is pitch only) / Q-E on desktop
     return { r: clamp(r, -1, 1), p: clamp(p, -1, 1), y: clamp(y, -1, 1) };
   }
@@ -4901,7 +4932,8 @@
     e.hx = hx; e.hy = hy; e.hz = hz; e.ux = ux / ul; e.uy = uy / ul; e.uz = uz / ul;
     // energy: full throttle; dives gain, climbs and hard turns bleed
     const vLv = e.type === "190" ? FAI.vLev190 : e.type === "p51" ? FAI.vLevP51 : FAI.vLev109, vDv = e.type === "190" ? FAI.vDiv190 : e.type === "p51" ? FAI.vDivP51 : FAI.vDiv109;
-    let dV = -G_U * hy + Math.min(0.32 * G_U, 0.09 * (vLv * 1.1 - V)) - 0.35 * Math.max(0, Math.abs(n) - 2);
+    const thr = ride && ride.e === e && ride.thr != null ? ride.thr : 1; // 1.8.0: D-pad up/down throttle (player-flown only)
+    let dV = -G_U * hy + Math.min(0.32 * G_U * thr, 0.09 * (vLv * (0.55 + 0.55 * thr) - V)) - 0.35 * Math.max(0, Math.abs(n) - 2);
     if (V > vDv) dV -= 1.2 * (V - vDv);
     e.V = Math.max(2, V + dV * dt); stallTick(e, dt); // 1.7.0: no 200 mph floor
     e.gLoad = n;
@@ -4989,7 +5021,7 @@
     const a = Math.atan2(gx, gy); tilt.a = a; if (tilt.n == null) tilt.n = a; let d = a - tilt.n; d = Math.atan2(Math.sin(d), Math.cos(d)); const dg = d * 57.2958, m = Math.max(0, Math.abs(dg) - 4) / 21;
     tilt.tgt = -Math.sign(dg) * Math.min(1, m); tilt.last = performance.now(); });
   function tiltRecenter() { tilt.n = tilt.a; tilt.tgt = 0; if (ride) ride.tiltY = 0; }
-  function tiltTick(dt) { if (!ride) return; const live = performance.now() - tilt.last < 500; const tg = live && ride.fly ? tilt.tgt : 0; ride.tiltY = (ride.tiltY || 0) + (tg - (ride.tiltY || 0)) * Math.min(1, dt * 8); }
+  function tiltTick(dt) { if (!ride) return; const live = performance.now() - tilt.last < 500; const tg = live && ride.fly && SET.gyro && !GP.on ? tilt.tgt : 0; /* 1.8.0: gyro setting; auto-off with a gamepad */ ride.tiltY = (ride.tiltY || 0) + (tg - (ride.tiltY || 0)) * Math.min(1, dt * 8); }
   function tiltPermission() { try { const DM = window.DeviceMotionEvent; if (DM && typeof DM.requestPermission === "function") DM.requestPermission().catch(() => {}); } catch (er) {} }
   function rideFlying() { return !!(ride && ride.fly && ride.deadT == null); }
   let _flyBridge = null;
@@ -5009,6 +5041,7 @@
         if (!e.alive && enemies.indexOf(e) >= 0) { ride.bail = { st: 0 }; e.bailAt = -1; e.wreckT = Math.max(e.wreckT || 0, 13); e.spinW = rand(2.2, 3.4) * (Math.random() < 0.5 ? -1 : 1); } } // 1.6.9: you were in it — bail-out sequence
       ride.deadT += dt;
       if (ride.bail) { rideBailTick(e, dt); if (ride.deadT < 11.5) return; }
+      if (ride.deadT > (ride.bail ? 11.5 : 1.6) && ride.fly && e.team !== "allied" && state === "PLAYING") { endRide(); setPaused(true, "seat-de"); return; } // 1.8.0: a German pilot is down -> offer the German seats
       if (ride.deadT > (ride.bail ? 11.5 : 1.6)) { const n = rideStep(1, e); if (n && n !== e) startRide(n); else { endRide(); pushCallout("NO FIGHTERS LEFT — BACK TO THE B-17", 1.4, true); } return; }
     }
     ride.flash = Math.max(0, ride.flash - dt * 14);
@@ -5022,8 +5055,14 @@
     const P = ride.pf, E = ride.eye;
     const CV = HARM[e.type] || RIDE_CONV, tofC = ownTof(CV), drop = 0.5 * BAL_G * tofC * tofC; // guns are harmonised: the rounds cross the sight line at the harmonisation range, drop included
     const ax = E.x + P.fx * CV, ay = E.y + P.fy * CV + drop, az = E.z + P.fz * CV;
+    if (!ride.ammoG || ride.ammoG.length !== set.length) rideAmmoInit(e);
+    let fired = false;
     for (let gi = 0; gi < set.length; gi++) {
-      const G = set[gi], n = Math.min(G.rate, RIDE_SIMR);
+      const G = set[gi], n = Math.min(G.rate, RIDE_SIMR), W = WPN[G.g] || WPN.m2;
+      if (ride.wsel !== "both" && W.cls !== ride.wsel) continue; // 1.8.0: D-pad left/right selects guns / cannons / both
+      if (ride.ammoG[gi] <= 0) continue;
+      ride.ammoG[gi] = Math.max(0, ride.ammoG[gi] - G.rate * dt); fired = true; if (G.g === "mk108") ride.f30 = true;
+      const MV = W.v * U_PER_M;
       ride.acc[gi] = (ride.acc[gi] || 0) + n * dt;
       while (ride.acc[gi] >= 1) {
         ride.acc[gi] -= 1;
@@ -5033,28 +5072,44 @@
         dx = dx / dl + (Math.random() + Math.random() - 1) * sp; dy = dy / dl + (Math.random() + Math.random() - 1) * sp; dz = dz / dl + (Math.random() + Math.random() - 1) * sp;
         const vl = Math.hypot(dx, dy, dz) || 1;
         bullets.push({ x: mx, y: my, z: mz, px: mx, py: my, pz: mz,
-          vx: dx / vl * BULLET_UPS + (e.vx || 0), vy: dy / vl * BULLET_UPS + (e.vy || 0), vz: dz / vl * BULLET_UPS + (e.vz || 0),
-          life: BULLET_LIFE, tracer: ((ride.tcn || (ride.tcn = []))[gi] = ((ride.tcn[gi] || 0) + 1)) % 3 === 1, side: 0, trav: 0, // 1.6.8: 1 round in 3 per gun glows (dashed streams); every round is still flown and hit-tested
+          vx: dx / vl * MV + (e.vx || 0), vy: dy / vl * MV + (e.vy || 0) + (G.g === "mk108" ? -0.0 : 0), vz: dz / vl * MV + (e.vz || 0),
+          life: W.life, tracer: ((ride.tcn || (ride.tcn = []))[gi] = ((ride.tcn[gi] || 0) + 1)) % 3 === 1, side: 0, trav: 0, // 1.6.8: 1 round in 3 per gun glows (dashed streams); every round is still flown and hit-tested
           ride: true, rideId: e.id, tk: RIDE_TRK[e.type], gun: G.g, dm: G.rate / n, rsrc: e.type });
         guns.rounds++;
         if (mission) mission.rideRounds = (mission.rideRounds || 0) + 1;
       }
     }
+    if (!fired) { if (!ride.dryT || elapsed - ride.dryT > 1.5) { ride.dryT = elapsed; pushCallout(ride.ammoG.some((a) => a > 0) ? "NO AMMO — SELECTED GUNS" : "WINCHESTER — OUT OF AMMO", 0.9); } return; }
     ride.flash = 1;
     ride.snd -= dt;
+    ride.snd30 = (ride.snd30 || 0) - dt; if (ride.f30 && ride.snd30 <= 0 && window.FGAudio && window.FGAudio.cannon30) { ride.snd30 = 0.105; window.FGAudio.cannon30(E.x, E.y, E.z); } ride.f30 = false; // 1.8.0: MK108 "Presslufthammer" thump
     if (ride.snd <= 0 && window.FGAudio) { ride.snd = 0.11; if (e.type === "p51" && window.FGAudio.p51Gun) window.FGAudio.p51Gun(E.x, E.y, E.z); else if (window.FGAudio.enemyGun) window.FGAudio.enemyGun(E.x, E.y, E.z); }
   }
   function rideOpts() {
     if (!ride || !ride.eye) return null;
     return { id: ride.id, type: ride.e.type, eye: ride.eye, pf: ride.pf, cam: ride.basis, flash: ride.flash, dead: ride.deadT != null, bail: !!(ride.bail && ride.deadT >= 0.9), canopy: ride.bail && ride.bail.can ? ride.bail.can : null, eyeL: RIDE_EYE, hd: mission ? (mission.heading || 0) : 0, mph: (ride.e.V || 0) / MPH, ft: 25000 + (ride.e.y - CAM.y) * FT_PER_UNIT, guns: RIDE_GUNS[ride.e.type].map((G) => [G.p[0], G.p[1], G.p[2], G.g === "mg151" ? 0.34 : G.g === "mg131" ? 0.1 : 0.22]) };
   }
+  function figDmg(e) { // 1.8.0: damage diagram for the plane you're in (fighter planform, coloured by its hit points)
+    const sil = document.getElementById("dmgsil"), fig = document.getElementById("dmgfig"), lb = document.getElementById("healthlabel"); if (!fig) return;
+    const on = !!(e && ride); fig.style.display = on ? "" : "none"; if (sil) sil.style.display = on ? "none" : "";
+    if (!on) { if (lb && lb.textContent !== (fpov ? "8.8 FLAK" : "FORTRESS")) lb.textContent = fpov ? "8.8 FLAK" : "FORTRESS"; return; }
+    if (e.hp0 == null) e.hp0 = Math.max(e.hp || 1, e.maxHp || 0, 1); const f = ride.deadT != null ? 0 : clamp((e.hp || 0) / e.hp0, 0, 1);
+    const nm = e.type === "p51" ? "P-51D" : e.type === "190" ? "FW 190" : "BF 109"; if (lb.textContent !== nm) lb.textContent = nm;
+    const c = dmgColor(f); if (fig.dataset.c !== c) { fig.dataset.c = c; fig.querySelectorAll("path,ellipse").forEach((p, i) => p.style.fill = i === 0 ? dmgColor(Math.min(1, f * 1.15)) : c); }
+  }
   function rideHud() {
     const el = document.getElementById("rideLabel"); if (!el) return;
-    if (!ride) { if (!el.classList.contains("hidden")) el.classList.add("hidden"); return; }
+    if (!ride) { figDmg(null); if (!el.classList.contains("hidden")) el.classList.add("hidden"); return; }
     const e = ride.e, ft = Math.round((25000 + (e.y - CAM.y) * FT_PER_UNIT) / 100) * 100, mph = Math.round((e.V || Math.hypot(e.vx, e.vy, e.vz + VF)) / MPH);
-    const t = rideLabel(e) + (ride.deadT != null ? "  ·  DOWN" : "  ·  " + mph + " mph  ·  " + ft.toLocaleString("en-US") + " ft");
+    let t = rideLabel(e) + (ride.deadT != null ? "  ·  DOWN" : "  ·  " + mph + " mph  ·  " + ft.toLocaleString("en-US") + " ft");
+    if (ride.fly && ride.deadT == null) { // 1.8.0 fighter HUD: throttle, selected weapon, ammo per weapon
+      const set = RIDE_GUNS[e.type] || []; if (!ride.ammoG) rideAmmoInit(e); const per = {};
+      set.forEach((G, i) => { const k = WPN[G.g].nm; per[k] = (per[k] || 0) + Math.floor(ride.ammoG[i]); });
+      t += "  ·  THR " + Math.round((ride.thr == null ? 1 : ride.thr) * 100) + "%  ·  " + (ride.wsel || "both").toUpperCase() + "  ·  " + Object.entries(per).map(([k, v]) => k + " " + v).join(" / ");
+    }
     if (el.textContent !== t) el.textContent = t;
     el.classList.remove("hidden");
+    figDmg(e);
     el.classList.toggle("allied", e.team === "allied");
   }
 
@@ -6180,7 +6235,8 @@
     return (2.2 * hfov) / Math.max(320, W);
   }
   function applyLookDelta(dxPx, dyPx) {
-    const k = lookRadPerPx();
+    const k = lookRadPerPx() * (SET.sens || 1); // 1.8.0 sensitivity + per-mode invert
+    if ((fpov && SET.invFlak) || (!fpov && !ride && SET.invTurret)) dyPx = -dyPx;
     if (fpov) { fpovLook(dxPx, dyPx, k); return; } // 1.6.9: flak POV
     if (ride) { rideLook(dxPx, dyPx, k); return; } // 1.6.6: head movement inside the fighter cockpit
     // lookXSign = -1: drag right → look right (3D camera-right = world -X)
@@ -6412,7 +6468,7 @@
     if (!inChute && !(ride || fpov)) drawCabinFx();
     if (!downSeq && !(ride || fpov)) drawCrosshair(models3d && !inChute);
     if (fpov && !downSeq) drawFlakSight();
-    if (rideFlying() && !GP.hide) drawFlyZones();
+    if (rideFlying()) { drawWisps(); if (!GP.hide) drawFlyZones(); }
     if (!inChute) drawHitMarks();
     if (!models3d) drawFarFighters(); // 1.3.6: 3D mode draws far 109s as depth-tested GL specks
     if (!downSeq) { if (!ride) drawIncoming(); if (!mouse.desktop) drawControls(); } // 1.4.0-web: no touch hints on desktop
@@ -8226,7 +8282,7 @@
   function chutesKeep() {}
   function seatPick(kind) {
     if (!seatNeeded()) return false;
-    if (kind === "top" || kind === "tail") { const S = seatShips(); if (!S.length) { pushCallout("NO FORTRESS LEFT TO JOIN", 1.2); return false; } return reseatB17(S[0], kind); }
+    if (kind === "top" || kind === "tail") { const S = seatShips(); if (!S.length) { pushCallout("NO B-17 LEFT TO JOIN", 1.2); return false; } return reseatB17(S[0], kind); }
     downSeq = null; setDownHud(false);
     if (kind === "ride") { const e = rideDefault(); if (e && startRide(e)) return true; pushCallout("NO FIGHTERS TO RIDE WITH", 1.0); return false; }
     if (kind === "flak") return startFlakPov() !== false;
@@ -8258,7 +8314,10 @@
     const A = pad.axes || [], lx = gpDz(A[0]), ly = gpDz(A[1]), rx = gpDz(A[2]), ry = gpDz(A[3]), rt = pad.buttons[7] ? pad.buttons[7].value || (pad.buttons[7].pressed ? 1 : 0) : 0;
     let act = rt > 0.3 || lx || ly || rx || ry; for (let i = 0; i < pad.buttons.length; i++) if (B(i)) act = true;
     if (act && !GP.hide) gpHide(true);
-    if (E(9)) { GP.paused = !GP.paused; pushCallout(GP.paused ? "PAUSED — START TO RESUME" : "RESUMED", 1.4, true); }
+    if (E(9)) setPaused(!GP.paused, "pad"); // 1.8.0: true pause (menu)
+    if (ride && ride.fly && state === "PLAYING") { // 1.8.0 D-pad: up/down throttle, left/right cycles guns / cannons / both
+      if (B(12)) ride.thr = Math.min(1, (ride.thr == null ? 1 : ride.thr) + dt * 0.6); if (B(13)) ride.thr = Math.max(0.25, (ride.thr == null ? 1 : ride.thr) - dt * 0.6);
+      if ((E(14) || E(15)) && ride.e.type !== "p51") { const i = WSEL.indexOf(ride.wsel || "both"); ride.wsel = WSEL[(i + (E(15) ? 1 : 2)) % 3]; pushCallout(ride.wsel === "both" ? "GUNS + CANNONS" : ride.wsel.toUpperCase(), 0.8); } }
     if (seatNeeded() && !GP.paused) { if (E(0)) seatPick("top"); else if (E(1)) seatPick("tail"); else if (E(2)) seatPick("ride"); else if (E(3)) seatPick("flak"); for (let i = 0; i < pad.buttons.length; i++) GP.prev[i] = B(i); return; } // 1.7.4
     const play = state === "PLAYING" && !downSeq && !GP.paused;
     if (play && E(11)) { // 1.7.4: right-stick click = recenter the view
@@ -8279,14 +8338,64 @@
     }
     for (let i = 0; i < pad.buttons.length; i++) GP.prev[i] = B(i);
   }
+  // ----- 1.8.0 PAUSE / SETTINGS / SEATS / SERVICE RECORD (driven by menu.js through window.FG_API) -----
+  const PZ = { loopOff: false, iv: 0 };
+  const SET = { invTurret: false, invFlak: false, invPilot: false, gyro: true, sens: 1, fps: false, quality: "medium" };
+  try { Object.assign(SET, JSON.parse(localStorage.getItem("fg_settings") || "{}")); } catch (er) {}
+  function applySettings() {
+    const fb = document.getElementById("fpsbox"); if (fb) fb.style.display = SET.fps ? "" : "none";
+    const pr = SET.quality === "ultra" ? undefined : Math.min(window.devicePixelRatio || 1, 1.25); if (window.__FG_PR !== pr) { window.__FG_PR = pr; try { World3D && World3D.resize && World3D.resize(); } catch (er) {} }
+  }
+  function setPaused(on, why) {
+    on = !!on; if (on === GP.paused) return; if (on && state !== "PLAYING") return;
+    GP.paused = on; input.fire = false;
+    try { if (on) { window.FGAudio && window.FGAudio.suspend && window.FGAudio.suspend(); audioCtx && audioCtx.suspend && audioCtx.suspend(); } else { window.FGAudio && window.FGAudio.resume && window.FGAudio.resume(); audioCtx && audioCtx.resume && audioCtx.resume(); } } catch (er) {}
+    if (on) { clearInterval(PZ.iv); PZ.iv = setInterval(() => { // the render loop is off: poll only the pad's Start (cheap) to resume
+        try { const L = navigator.getGamepads ? navigator.getGamepads() : []; for (const q of L || []) if (q && q.buttons && q.buttons[9]) { const d = q.buttons[9].pressed; if (d && !PZ.st) setPaused(false, "pad"); PZ.st = d; } } catch (er) {} }, 150); }
+    else { clearInterval(PZ.iv); if (PZ.loopOff) { PZ.loopOff = false; lastT = performance.now(); requestAnimationFrame(frame); } }
+    window.dispatchEvent(new CustomEvent("fg-pause", { detail: { on, why: why || "" } }));
+  }
+  document.addEventListener("visibilitychange", () => { if (document.hidden && state === "PLAYING") setPaused(true, "background"); });
+  window.addEventListener("blur", () => { if (state === "PLAYING" && document.hidden) setPaused(true, "background"); });
+  // menu flyby: the camera drifts slowly round the formation while the menu is up
+  function titleFlyby(dt) { gunner.yaw = wrapYaw(gunner.yaw + dt * 0.05); gunner.pitch = 0.05 + Math.sin(elapsed * 0.07) * 0.06; }
+  const SEAT = { want: null, tries: 0 };
+  function applySeat(seat) {
+    SEAT.want = seat; SEAT.tries = 0;
+    if (seat === "top" || seat === "tail") { if (fpov) endFlakPov(); if (ride) endRide(); if (bomber && bomber.dead) { if (!seatPick(seat)) return false; } else { setStation(seat); setStationUI(); } SEAT.want = null; return true; }
+    if (seat === "flak") { if (ride) endRide(); downSeq = bomber && bomber.dead ? null : downSeq; SEAT.want = null; return startFlakPov() !== false; }
+    return seatFighter(seat);
+  }
+  function seatFighter(type) {
+    if (fpov) endFlakPov();
+    const L = rideList().filter((q) => q.alive && q.type === type && rideOk(q)); if (!L.length) return false;
+    L.sort((a, b) => Math.hypot(a.x - CAM.x, a.y - CAM.y, a.z - CAM.z) - Math.hypot(b.x - CAM.x, b.y - CAM.y, b.z - CAM.z));
+    if (bomber && bomber.dead) downSeq = null;
+    if (!startRide(L[0])) return false; ride.fly = true; ride.stickR = ride.stickP = ride.stickY = 0; tiltRecenter(); flyBridgeSync(); SEAT.want = null; return true;
+  }
+  function seatTick() { if (SEAT.want && state === "PLAYING" && mission && mission.t > (SEAT.tries + 1) * 1.0) { SEAT.tries++; if (applySeat(SEAT.want)) return; if (SEAT.tries === 1) pushCallout("WAITING FOR A " + (SEAT.want === "p51" ? "MUSTANG" : SEAT.want === "190" ? "FW 190" : "BF 109") + " TO JOIN…", 2.5); } }
+  const REC_KEY = "fg_record";
+  function recGet() { try { return Object.assign({ missions: 0, kills: 0, b17home: 0, won: 0, best: 0 }, JSON.parse(localStorage.getItem(REC_KEY) || "{}")); } catch (er) { return { missions: 0, kills: 0, b17home: 0, won: 0, best: 0 }; } }
+  function recAdd(won) { const r = recGet(); r.missions++; r.kills += kills || 0; r.b17home += countBombCapable(); if (won) r.won++; r.best = Math.max(r.best, score || 0); try { localStorage.setItem(REC_KEY, JSON.stringify(r)); } catch (er) {} return r; }
+  window.FG_API = {
+    start(o) { o = o || {}; const mn = document.getElementById("fgMenu"); if (mn) mn.style.display = "none"; document.body.classList.remove("fgmenu"); if (o.diff) setDifficulty(o.diff === "easy" ? "easy" : "medium"); startGame(); if (o.seat && o.seat !== "top") { if (!applySeat(o.seat)) SEAT.want = o.seat; } },
+    pause: (on) => setPaused(on, "menu"), get paused() { return GP.paused; }, get state() { return state; },
+    seat: (s) => applySeat(s), get settings() { return Object.assign({}, SET); },
+    set(o) { Object.assign(SET, o || {}); try { localStorage.setItem("fg_settings", JSON.stringify(SET)); } catch (er) {} applySettings(); },
+    record: recGet, quit() { try { sessionStorage.setItem("fg_quit", "1"); } catch (er) {} location.reload(); },
+    get gamepad() { return GP.on; },
+  };
+  applySettings();
   // ----- loop -----
   const fpsEl = document.getElementById("fps"); let fpsN = 0, fpsT0 = 0; // 1.5.8: FPS counter, averaged over ~0.5 s
   function frame(t) {
     const dt = Math.min(0.033, (t - lastT) / 1000 || 0.016);
     lastT = t;
     if (fpsEl) { if (!fpsT0) fpsT0 = t; fpsN++; if (t - fpsT0 >= 500) { fpsEl.textContent = String(Math.round(fpsN * 1000 / (t - fpsT0))); fpsN = 0; fpsT0 = t; } }
-    gpPoll(dt); seatUi(); // 1.7.3 Xbox / standard gamepad; 1.7.4 seat picker
-    if (!window.__FG_FREEZE && !GP.paused) update(dt); // debug: headless stills render an exact sim state
+    gpPoll(dt); seatUi(); seatTick(); // 1.7.3 Xbox / standard gamepad; 1.7.4 seat picker
+    if (GP.paused && !window.__FG_FREEZE) { PZ.loopOff = true; return; } // 1.8.0 TRUE PAUSE: sim, render loop and audio all stop (battery)
+    if (!window.__FG_FREEZE) update(dt); // debug: headless stills render an exact sim state
+    if (state === "TITLE") titleFlyby(dt);
     draw();
     if (mouse.desktop) { // 1.4.0-web: free the cursor for DOM buttons (END MISSION, results)
       const endShown = (endBtn && !endBtn.classList.contains("hidden")) || (tryBtn && !tryBtn.classList.contains("hidden"));
@@ -8524,7 +8633,7 @@
     resetRun();
     state = "PLAYING";
     setStationUI();
-    pushCallout(mouse.desktop ? "BOX OF 19 — MOUSE AIMS · HOLD LEFT BUTTON TO FIRE" : MISSION_MODE ? "BOX OF 19 — LEFT FIRE · RIGHT AIM" : "LEFT FIRE · RIGHT LOOK", 1.4); // 1.4.0-web
+    pushCallout(mouse.desktop ? "BOX OF 18 — MOUSE AIMS · HOLD LEFT BUTTON TO FIRE" : MISSION_MODE ? "BOX OF 18 — LEFT FIRE · RIGHT AIM" : "LEFT FIRE · RIGHT LOOK", 1.4); // 1.4.0-web
   }
   function restartGame() {
     gameoverEl.classList.add("hidden"); if (endBtn) endBtn.classList.add("hidden"); if (tryBtn) tryBtn.classList.add("hidden");
@@ -8699,6 +8808,7 @@
     ownEngine: (i, fire, out) => { if (!bomber) return; const e = bomber.engines[i]; e.fire = fire; e.out = !!out; },
     // Deterministic time advance for headless playtests (rAF+dt-cap runs slow under SwiftShader)
     tgtPts: () => mission && mission.tgt ? { pts: mission.tgt.pts || [], G: mission.tgt.G && { X: mission.tgt.G.X, Z: mission.tgt.G.Z, S: mission.tgt.G.S, K: mission.tgt.G.K } } : null,
+    gruppe: () => ({ waves: GRP.waves, log: GRP.log.slice(-20) }),
     fireState: () => ({ fire: !!input.fire, fz: !!(ride && ride.fireId != null), roll: !!(ride && ride.rollId != null) }), // 1.7.2 test hook
     seat: (k) => k ? seatPick(k) : { need: seatNeeded(), shown: !seatEl.classList.contains("hidden"), ships: seatShips().length, dead: !!(bomber && bomber.dead), downSeq: !!downSeq, ride: !!ride, fpov: !!fpov, station: gunner.station, state, t: mission ? mission.t : null, evaluated: !!(mission && mission.evaluated), friendlies: friendlies.filter(friendlyOk).length, lost: mission ? mission.friendliesLost : 0 },
     gp: () => ({ on: GP.on, hide: GP.hide, paused: GP.paused, fire: !!input.fire, station: gunner.station, ride: !!ride, fly: !!(ride && ride.fly), fpov: !!fpov, yaw: fpov ? fpov.yaw : ride ? ride.yaw : gunner.yaw, pitch: fpov ? fpov.pitch : ride ? ride.pitch : gunner.pitch, r: ride ? ride.gpR || 0 : 0, p: ride ? ride.gpP || 0 : 0, y: ride ? ride.gpY || 0 : 0 }),

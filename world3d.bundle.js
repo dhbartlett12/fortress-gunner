@@ -35443,7 +35443,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
     scene.add(fill);
     const key2 = new DirectionalLight(16767144, 0);
     key2.position.set(30, 50, -20);
-    scene.fog = new Fog(8366554, 3500, 52e3);
+    scene.fog = new Fog(8366554, 2600, 44e3);
     const SKY_HORIZON = new Color(8366554);
     const sunDir0 = new Vector3(45, 90, 30).normalize();
     const skyU = { uSun: { value: sunDir0.clone() } };
@@ -39611,6 +39611,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
         townCol *= 1.0 - 0.30 * smoothstep(0.35, 0.75, shd); // the same drifting cloud shadows as the fields
         townCol = mix(townCol, vec3(0.45, 0.58, 0.76), 0.04);
 #ifdef USE_FOG
+        { float tfar = smoothstep(fogFar * 0.22, fogFar * 0.75, vFogDepth); townCol = mix(townCol, mix(vec3(0.40, 0.40, 0.43), fogColor, 0.55), tfar * 0.9); } // 1.8.0: a grey horizon smudge that resolves into the city as you close
         townCol = mix(townCol, fogColor, fogFactor * 0.6); // post-fog: only a light haze, never erased
 #endif
         gl_FragColor.rgb = mix(gl_FragColor.rgb, townCol, tw.a);

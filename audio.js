@@ -51,7 +51,7 @@
     const eq4 = ctx.createBiquadFilter(); eq4.type = "peaking"; eq4.frequency.value = 2300; eq4.Q.value = 0.9; eq4.gain.value = 0.8;
     const sat = ctx.createWaveShaper(); { const n = 2048, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.tanh(1.5 * x) / Math.tanh(1.5) * 0.94; } sat.curve = c; } // 1.5.3: soft ceiling at -0.5 dBFS, never hard-clips
     // 1.6.0: duck bus — engines/guns/everything dips ~6 dB under a crew voice (voice.js)
-    G.duckG = ctx.createGain(); G.duckG.gain.value = 1; G.master.connect(G.duckG); G.duckG.connect(eq0); eq0.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4); eq4.connect(tame); tame.connect(comp); G.comp = comp; comp.connect(sat); sat.connect(ctx.destination); G.sat = sat; G.tame = tame; G.vox = []; G.eq = [eq1, eq2, eq3, eq4];
+    G.duckG = ctx.createGain(); G.duckG.gain.value = 1; G.mixM = ctx.createGain(); G.mixM.gain.value = MIX.master; G.master.connect(G.mixM); G.mixM.connect(G.duckG); /* 1.8.0 user master */ G.duckG.connect(eq0); eq0.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4); eq4.connect(tame); tame.connect(comp); G.comp = comp; comp.connect(sat); sat.connect(ctx.destination); G.sat = sat; G.tame = tame; G.vox = []; G.eq = [eq1, eq2, eq3, eq4];
     G.noise = makeNoise(ctx, 2.0);
     G.sfx = ctx.createGain(); G.sfx.gain.value = 1.5; G.sfx.connect(G.master);
     // --- 1.5.4 engines: 4 R-1820 radials as NOISE (no tonal drone). Each = a low rumble band chopped at the prop's blade-passing rate (~66 Hz, 4 engines slowly beating)
@@ -88,7 +88,7 @@
     const wlfo = ctx.createOscillator(); wlfo.frequency.value = 0.13; const wlg = ctx.createGain(); wlg.gain.value = 0.015; wlfo.connect(wlg); wlg.connect(wg.gain); wlfo.start();
     const rlp = ctx.createBiquadFilter(); rlp.type = "lowpass"; rlp.frequency.value = 110; const rg = ctx.createGain(); rg.gain.value = 0.16;
     wn.connect(wbp); wbp.connect(wg); wg.connect(G.master); wn.connect(rlp); rlp.connect(rg); rg.connect(G.master); wn.start();
-    G.wind = wg; G.windBP = wbp; G.rumble = rg; G.busE = busE;
+    G.wind = wg; G.windBP = wbp; G.rumble = rg; G.busE = busE; applyMix(); // 1.8.0
     // 1.5.4 wind through the holes: a continuous whistling/roaring bed (noise, 600–2.8 kHz) whose level, pitch and flutter grow with the number of holes shot through the skin
     { const hn = ctx.createBufferSource(); hn.buffer = G.noise; hn.loop = true; hn.playbackRate.value = 1.15;
       const hb = ctx.createBiquadFilter(); hb.type = "bandpass"; hb.frequency.value = 900; hb.Q.value = 0.9;
@@ -719,6 +719,9 @@
 
   // ---------- live instance ----------
   let ctx = null, G = null;
+  const MIX = { master: 1, engines: 1, guns: 1, radio: 1, music: 0.6 }; // 1.8.0 settings sliders (0..1)
+  function applyMix() { if (!ctx || !G) return; const t = ctx.currentTime, set = (n, v) => { if (n) n.gain.setTargetAtTime(v, t, 0.05); };
+    set(G.mixM, MIX.master); set(G.busE, 0.24 * MIX.engines); set(G.sfx, 1.5 * MIX.guns); set(G.vbus, 1.4 * MIX.radio * MIX.master); }
   const L = { fx: 0, fy: 0, fz: 1, rx: -1, ry: 0, rz: 0, cx: 0, cy: 0, cz: 0 }; // listener basis (view)
   const budget = { t: 0, n: 0 };
   const shotClock = { t: 0, real: 0, last: 0, n: 0, fired: 0, P: 0.05 }; // own-gun belt clock + rounds since the last end sound
@@ -786,7 +789,7 @@
     },
     // 1.6.0: crew voices ride on their own bus straight to the destination (post master/EQ/compressor, so they are never ducked or squashed by the battle); duck(on) dips everything else 6 dB (50 ms attack, ~150 ms release)
     voiceBus() { if (!ctx || !G || ctx.state !== "running" || muted) return null; if (!G.vbus) { // the battle mix (soft-clipped to −0.5 dBFS) and the voices share ONE final limiter, so a line landing on a full-scale gun burst cannot clip (measured: 136 clipped samples / 110 s without it, 0 with)
-        G.vbus = ctx.createGain(); G.vbus.gain.value = 1.4; // +3 dB: a line must stay readable over the player's own guns (the limiter below catches the peaks)
+        G.vbus = ctx.createGain(); G.vbus.gain.value = 1.4 * MIX.radio * MIX.master; // +3 dB: a line must stay readable over the player's own guns (the limiter below catches the peaks)
         const fin = ctx.createGain(), lim = ctx.createDynamicsCompressor(); lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.1;
         try { G.sat.disconnect(); } catch (e) {} G.sat.connect(fin); G.vbus.connect(fin); fin.connect(lim); lim.connect(ctx.destination); G.vlim = lim;
       } return { ctx, bus: G.vbus }; },
@@ -825,6 +828,14 @@
       else if (kind === "wingOff") sBreakOff(G, t, "wing"); else if (kind === "tailOff") sBreakOff(G, t, "tail");
       count("struct_" + kind);
     },
+    cannon30(x, y, z) { // 1.8.0 MK108 30 mm: slow, deep "pom" with a short blast, distinct from the MG chatter
+      if (!ok()) return; const q = panOf(x, y, z); if (q.d >= AI_CUTOFF * 1.3) return; const t = ctx.currentTime + q.d / 340 * 0.15, v = Math.min(1, 900 / Math.max(120, q.d));
+      const o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter(); o.type = "triangle"; o.frequency.setValueAtTime(115, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.16);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.55 * v, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22); lp.type = "lowpass"; lp.frequency.value = 700;
+      const nb = ctx.createBuffer(1, 2400, ctx.sampleRate), d = nb.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+      const ns = ctx.createBufferSource(), ng = ctx.createGain(); ns.buffer = nb; ng.gain.value = 0.35 * v; ns.connect(ng); ng.connect(lp);
+      const pn = ctx.createStereoPanner ? ctx.createStereoPanner() : null; o.connect(g); g.connect(lp); if (pn) { pn.pan.value = Math.max(-1, Math.min(1, q.pan || 0)); lp.connect(pn); pn.connect(G.sfx); } else lp.connect(G.sfx);
+      o.start(t); o.stop(t + 0.25); ns.start(t); count("cannon30"); },
     enemyGun(x, y, z) { if (!ok()) return; const q = panOf(x, y, z); if (q.d >= AI_CUTOFF) return; sEnemyGun(G, ctx.currentTime + distModel(q.d, 320).delay, q.d, q.pan, true); count("enemyGun"); },
     // 1.5.8: a B-17 (or a piece of one) hits the ground thousands of units below: a low, muffled thump + long rumble, delayed by the distance (d / 228.7 u/s, capped at 7 s), quiet but never lost
     crash(x, y, z, size) {
@@ -844,6 +855,10 @@
     chuteOpen() { if (!ok()) return; sChuteOpen(G, ctx.currentTime); count("chuteOpen"); },
     bombsAway() { if (!ok()) return; sBombsAway(G, ctx.currentTime); count("bombsAway"); },
     engReset() { if (!ctx || !G) return; const t = ctx.currentTime; for (const E of G.eng) { E.state = "run"; E.awayOn = false; E.saw.frequency.cancelScheduledValues(t); E.buzz.frequency.cancelScheduledValues(t); E.saw.frequency.setValueAtTime(E.f0, t); E.buzz.frequency.setValueAtTime(E.f0 * E.kb, t); E.g.gain.cancelScheduledValues(t); E.g.gain.setTargetAtTime(E.level, t, 0.3); } }, // 1.7.4: re-seated in a fresh B-17
+    setMix(m) { Object.assign(MIX, m || {}); applyMix(); },
+    get mix() { return Object.assign({}, MIX); },
+    suspend() { try { if (ctx && ctx.state === "running") ctx.suspend(); } catch (e) {} }, resume() { try { if (ctx && ctx.state === "suspended") ctx.resume(); } catch (e) {} },
+    get ctx() { return ctx; },
     mute(b) { muted = !!b; if (ctx && G) G.master.gain.setTargetAtTime(b ? 0.0001 : 0.35, ctx.currentTime, 0.05); },
     results() { muted = false; if (ctx && G) { restoreGraph(G, ctx.currentTime); G.master.gain.setTargetAtTime(0.35, ctx.currentTime, 0.6); } count("results"); },
     earRing(depth) { if (!ok()) return false; const r = earRingNow(G, ctx.currentTime + 0.01, depth); if (r) count("earRing"); return r; },
