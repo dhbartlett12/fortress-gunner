@@ -7,6 +7,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#1a2433" />
   <link rel="icon" href="favicon.ico" />
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#141c28">
   <title>Fortress Gunner — B-17 Top Turret</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -151,5 +153,6 @@
   <script src="combat.js"></script>
   <script src="game.js"></script>
   <script src="menu.js"></script>
+<script>if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js");</script>
 </body>
 </html>

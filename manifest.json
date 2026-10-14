@@ -1,0 +1,26 @@
+{
+ "name": "Fortress Gunner",
+ "short_name": "Fortress Gunner",
+ "description": "WWII B-17 air combat: man the turrets, fly the fighters, work the flak.",
+ "start_url": "./",
+ "scope": "./",
+ "id": "./",
+ "display": "fullscreen",
+ "orientation": "landscape",
+ "background_color": "#141c28",
+ "theme_color": "#141c28",
+ "icons": [
+  {
+   "src": "icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any"
+  }
+ ]
+}
