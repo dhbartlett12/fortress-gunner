@@ -34851,6 +34851,13 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       g.add(h);
       return { g, legs, x, z, tx: x, tz: z, sp: RR(2.4, 4.2) * M, ph: R() * 6, wait: RR(0, 2) };
     }
+    const GRL = 5, grounds = [];
+    function gLay(m) {
+      m.userData.grl = true;
+      m.layers.set(GRL);
+      m.frustumCulled = false;
+      grounds.push(m);
+    }
     function groundPatch(cx, cz) {
       const N = 2048, c = document.createElement("canvas");
       c.width = c.height = N;
@@ -34896,13 +34903,11 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       const tex = new CanvasTexture(c);
       tex.anisotropy = 8;
       if (SRGBColorSpace) tex.colorSpace = SRGBColorSpace;
-      const m = new Mesh(new CircleGeometry(Rm * M, 64), new MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false }));
+      const m = new Mesh(new CircleGeometry(Rm * M, 64), new MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
       m.rotation.x = -Math.PI / 2;
       m.position.set(cx, 0.05 * M, cz);
-      m.renderOrder = 30;
-      m.material.polygonOffset = true;
-      m.material.polygonOffsetFactor = -4;
-      m.material.polygonOffsetUnits = -4;
+      m.renderOrder = 2;
+      gLay(m);
       root.add(m);
     }
     function farFields(cx, cz) {
@@ -34929,13 +34934,11 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       tex.repeat.set(70, 70);
       tex.anisotropy = 8;
       if (SRGBColorSpace) tex.colorSpace = SRGBColorSpace;
-      const m = new Mesh(new CircleGeometry(3e4 * M, 96), new MeshLambertMaterial({ map: tex }));
+      const m = new Mesh(new CircleGeometry(3e4 * M, 96), new MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
       m.rotation.x = -Math.PI / 2;
       m.position.set(cx, 0.03 * M, cz);
-      m.renderOrder = 29;
-      m.material.polygonOffset = true;
-      m.material.polygonOffsetFactor = -2;
-      m.material.polygonOffsetUnits = -2;
+      m.renderOrder = 1;
+      gLay(m);
       root.add(m);
       return m;
     }
@@ -34974,13 +34977,11 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       gr.addColorStop(1, "#000");
       y.fillStyle = gr;
       y.fillRect(0, 0, 256, 256);
-      const m = new Mesh(new CircleGeometry(900 * M, 64), new MeshLambertMaterial({ map: tex, alphaMap: new CanvasTexture(ac), transparent: true, depthWrite: false }));
+      const m = new Mesh(new CircleGeometry(900 * M, 64), new MeshLambertMaterial({ map: tex, alphaMap: new CanvasTexture(ac), transparent: true, depthWrite: false, depthTest: false }));
       m.rotation.x = -Math.PI / 2;
       m.position.set(cx, 0.07 * M, cz);
-      m.renderOrder = 31;
-      m.material.polygonOffset = true;
-      m.material.polygonOffsetFactor = -4;
-      m.material.polygonOffsetUnits = -4;
+      m.renderOrder = 3;
+      gLay(m);
       root.add(m);
     }
     function bocage(cx, cz, af) {
@@ -35346,7 +35347,7 @@ void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = proj
       _pj.set(x, y, z).project(camera);
       return { x: _pj.x, y: _pj.y, ok: _pj.z < 1 && Math.abs(_pj.x) < 1.2 && Math.abs(_pj.y) < 1.2 };
     }
-    return { pose, off, update, impact, stats, fireMine, project, get on() {
+    return { GRL, grounds, pose, off, update, impact, stats, fireMine, project, get on() {
       return on;
     }, get me() {
       return me;
@@ -43235,8 +43236,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     function dotFor(d, base, e) {
       const ppr = devPxPerRad();
       const trueDev = (e ? eqDiam(e, base, d) : DOT_EQ * base / 1.3) / d * ppr;
-      const D = Math.max(DOT_FLOOR, trueDev);
-      const a = Math.min(1, (trueDev / DOT_FLOOR) ** 2);
+      const vis = trueDev * 2.5;
+      const D = Math.max(DOT_FLOOR, vis);
+      const a = Math.min(1, (vis / DOT_FLOOR) ** 2);
       return { trueDev, D, a };
     }
     function updateSpecks(opts) {
@@ -44224,7 +44226,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         }
         const dist = Math.max(1, mesh.position.distanceTo(camera.position));
         const base = e.type === "190" ? 1.4 : e.type === "110" ? 1.6 : 1.3;
-        const wMesh = e.alive ? lodMeshW(dist) : 1;
+        const span0 = SPAN * (base / 1.3) / dist * devPxPerRad();
+        const wMesh = e.alive ? ((t) => t * t * (3 - 2 * t))(Math.min(1, Math.max(0, (span0 - 1.6) / 1.4))) : 1;
+        const boost = e.alive ? Math.min(2.5, Math.max(1, 4 / Math.max(0.01, span0))) : 1;
         if (wMesh <= 1e-3) {
           mesh.visible = false;
           if (slot.trail) slot.trail.line.visible = false;
@@ -44232,11 +44236,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
           continue;
         }
         if (wMesh < 0.999) speckList.push(e, dist, 1 - wMesh);
-        const spanDev = SPAN * (base / 1.3) / dist * devPxPerRad();
+        const spanDev = span0 * boost;
         const sizeK = Math.min(1, Math.max(0, (25 - spanDev) / 13));
         applyFighterLook(mesh, wMesh, sizeK, dist);
         slot.lod = { d: Math.round(dist), wMesh: +wMesh.toFixed(3), spanDev: +spanDev.toFixed(1), sizeK: +sizeK.toFixed(2) };
-        mesh.scale.setScalar(base);
+        mesh.scale.setScalar(base * boost);
         if (e.alive && e.ux != null) {
           _fw.set(e.hx, e.hy, e.hz).normalize();
           _up.set(e.ux, e.uy, e.uz);
@@ -44515,10 +44519,13 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     let _farTag = 0, _frameN = 0;
     function tagFar() {
       earth.traverse((o) => {
-        o.layers.set(FARL);
+        if (!o.userData.grl) o.layers.set(FARL);
       });
       skyMesh.layers.set(FARL);
-      for (const L of [hemi, sun, fill, key2]) L.layers.enable(FARL);
+      for (const L of [hemi, sun, fill, key2]) {
+        L.layers.enable(FARL);
+        L.layers.enable(5);
+      }
     }
     const _fpBox = new Vector3();
     function render() {
@@ -44530,8 +44537,17 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
         camera.near = POV ? 1 : 30;
         camera.far = POV ? 12e4 : 32e4;
         camera.updateProjectionMatrix();
+        if (POV) {
+          skyMesh.layers.enable(FPOV.GRL);
+          camera.layers.set(FPOV.GRL);
+          renderer.render(scene, camera);
+          renderer.autoClear = false;
+          renderer.clearDepth();
+          skyMesh.visible = false;
+        }
         camera.layers.set(FARL);
         renderer.render(scene, camera);
+        if (POV) skyMesh.visible = true;
         renderer.autoClear = false;
         renderer.clearDepth();
         camera.near = POV ? 0.3 : 0.05;
@@ -44696,6 +44712,10 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       townLayout: () => TL,
       townStrike,
       townReset,
+      get lodAll() {
+        return fighterPool.filter((s) => s.lod && s.mesh && s.mesh.visible).map((s) => s.lod);
+      },
+      // 1.8.1 test hook
       get fpovStats() {
         return Object.assign({}, FPOV.stats, { me: FPOV.me });
       },

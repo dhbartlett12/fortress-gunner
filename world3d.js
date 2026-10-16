@@ -5045,8 +5045,9 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   function dotFor(d, base, e) {
     const ppr = devPxPerRad();
     const trueDev = (e ? eqDiam(e, base, d) : DOT_EQ * base / 1.3) / d * ppr;
-    const D = Math.max(DOT_FLOOR, trueDev);
-    const a = Math.min(1, (trueDev / DOT_FLOOR) ** 2);
+    const vis = trueDev * 2.5; // 1.8.1: the same 2.5x minimum-size boost the model gets at range, so model -> speck has no size/ink jump
+    const D = Math.max(DOT_FLOOR, vis);
+    const a = Math.min(1, (vis / DOT_FLOOR) ** 2);
     return { trueDev, D, a };
   }
   function updateSpecks(opts) {
@@ -5567,14 +5568,16 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       // 1.3.6: true scale at every range (9.9 m span) — no far boost. Beyond ~1.5 km a live 109 is a
       // depth-tested speck (see updateSpecks), so it hides behind our own ship, other B-17s and clouds.
       const base = e.type === "190" ? 1.4 : e.type === "110" ? 1.6 : 1.3;
-      const wMesh = e.alive ? lodMeshW(dist) : 1;
+      const span0 = SPAN * (base / 1.3) / dist * devPxPerRad(); // 1.8.1 LOD by on-screen size, not distance: the model stays drawn down to ~1.6 px of true span,
+      const wMesh = e.alive ? (t => t * t * (3 - 2 * t))(Math.min(1, Math.max(0, (span0 - 1.6) / 1.4))) : 1; // held at a 4 px minimum silhouette (below), crossfading into the speck only there
+      const boost = e.alive ? Math.min(2.5, Math.max(1, 4 / Math.max(0.01, span0))) : 1;
       if (wMesh <= 0.001) { mesh.visible = false; if (slot.trail) slot.trail.line.visible = false; speckList.push(e, dist, 1); continue; }
       if (wMesh < 0.999) speckList.push(e, dist, 1 - wMesh);
-      const spanDev = SPAN * (base / 1.3) / dist * devPxPerRad();
+      const spanDev = span0 * boost;
       const sizeK = Math.min(1, Math.max(0, (25 - spanDev) / 13));
       applyFighterLook(mesh, wMesh, sizeK, dist);
       slot.lod = { d: Math.round(dist), wMesh: +wMesh.toFixed(3), spanDev: +spanDev.toFixed(1), sizeK: +sizeK.toFixed(2) };
-      mesh.scale.setScalar(base);
+      mesh.scale.setScalar(base * boost);
       // Attitude straight from the flight model: nose = h (the air/ground velocity direction),
       // canopy = u (the lift vector, so the bank is the real coordinated bank). No smoothing lag.
       if (e.alive && e.ux != null) {
@@ -5792,7 +5795,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
   // frame to frame). The sky + Earth (ground, town, bomb smoke) now draw first in their own pass with near 30 / far 80,000
   // (≈400× finer at the ground), then depth is cleared and the aircraft/clouds/flak draw with near 0.05 / far 14,000.
   const FARL = 2; let _farTag = 0, _frameN = 0;
-  function tagFar() { earth.traverse((o) => { o.layers.set(FARL); }); skyMesh.layers.set(FARL); for (const L of [hemi, sun, fill, key2]) L.layers.enable(FARL); }
+  function tagFar() { earth.traverse((o) => { if (!o.userData.grl) o.layers.set(FARL); }); skyMesh.layers.set(FARL); for (const L of [hemi, sun, fill, key2]) { L.layers.enable(FARL); L.layers.enable(5); } } // 1.8.1: + the flak-pit ground layer (GRL 5)
 
   const _fpBox = new THREE.Vector3();
   function render() {
@@ -5802,8 +5805,11 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
       if (_frameN++ % 30 === 0) tagFar();
       const POV = FPOV.on; // 1.6.9: standing on the ground — a near plane for the guns 5 m away
       camera.near = POV ? 1.0 : 30; camera.far = POV ? 120000 : 320000; camera.updateProjectionMatrix();
+      if (POV) { // 1.8.1: sky, then the ground sheets painted in order with no depth (see flakpov.js FLAK FLICKER), then the rest
+        skyMesh.layers.enable(FPOV.GRL); camera.layers.set(FPOV.GRL); renderer.render(scene, camera); renderer.autoClear = false; renderer.clearDepth(); skyMesh.visible = false;
+      }
       camera.layers.set(FARL);
-      renderer.render(scene, camera);
+      renderer.render(scene, camera); if (POV) skyMesh.visible = true;
       renderer.autoClear = false;
       renderer.clearDepth();
       camera.near = POV ? 0.3 : 0.05; camera.far = POV ? 60000 : 30000; camera.updateProjectionMatrix();
@@ -5874,6 +5880,7 @@ totalEmissiveRadiance += vec3(0.35, 0.08, 0.02) * smoothstep(0.92, 1.0, uHeat) *
     townLayout: () => TL,
     townStrike,
     townReset,
+    get lodAll() { return fighterPool.filter((s) => s.lod && s.mesh && s.mesh.visible).map((s) => s.lod); }, // 1.8.1 test hook
     get fpovStats() { return Object.assign({}, FPOV.stats, { me: FPOV.me }); },
     get _fpov() { return FPOV; }, // 1.7.0 test hook
     get rideStats() { const g = rideStats.type && RIDE_CP[rideStats.type]; let n = 0; if (g) g.traverse((o) => { if (o.isMesh) n++; }); return Object.assign({ meshes: n, built: Object.keys(RIDE_CP), cam: camera.position.toArray().map((v) => +v.toFixed(2)), ownVis: !!(ownShip && ownShip.visible), turretVis: turretAnchor.visible }, rideStats); }, // 1.6.6

@@ -62,6 +62,12 @@ export function createFlakPov(env) {
     const h = new THREE.Mesh(new THREE.SphereGeometry(0.15 * M, 8, 5, 0, 6.29, 0, 1.4), helm); h.position.y = 1.72 * M; g.add(h);
     return { g, legs, x, z, tx: x, tz: z, sp: RR(2.4, 4.2) * M, ph: R() * 6, wait: RR(0, 2) };
   }
+  // 1.8.1 FLAK FLICKER ROOT CAUSE: the three ground sheets (field ring 30 km, farmland patch 1.6 km, grass 450 m) were coplanar
+  // circles 2 cm apart, separated only by depth + polygonOffset. From a 2.35 m eye at grazing angles the depth step at a few hundred
+  // metres is larger than 2 cm, and polygonOffset "units" are GPU-defined (Mali/Adreno differ from desktop), so on the phone they
+  // z-fought and shimmered every frame. Fix: they never touch the depth buffer — painted in order (ring, patch, grass) in their own
+  // pre-pass (layer GRL) right after the sky; everything else (guns, hedges, town, bursts) draws over them with a fresh depth buffer.
+  const GRL = 5, grounds = []; function gLay(m) { m.userData.grl = true; m.layers.set(GRL); m.frustumCulled = false; grounds.push(m); }
   function groundPatch(cx, cz) { // close-range farmland detail round the battery (the Earth bake is ~10 m a texel): fields, furrows, tracks, fading out at 1.6 km
     const N = 2048, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d"), Rm = 4200, k = N / (2 * Rm);
     x.fillStyle = "#5d6b3a"; x.fillRect(0, 0, N, N);
@@ -73,7 +79,7 @@ export function createFlakPov(env) {
     const g2 = x.createRadialGradient(N / 2, N / 2, N * 0.25, N / 2, N / 2, N / 2); g2.addColorStop(0, "rgba(0,0,0,1)"); g2.addColorStop(1, "rgba(0,0,0,0)");
     x.globalCompositeOperation = "destination-in"; x.fillStyle = g2; x.fillRect(0, 0, N, N);
     const tex = new THREE.CanvasTexture(c); tex.anisotropy = 8; if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-    const m = new THREE.Mesh(new THREE.CircleGeometry(Rm * M, 64), new THREE.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.05 * M, cz); m.renderOrder = 30; m.material.polygonOffset = true; m.material.polygonOffsetFactor = -4; m.material.polygonOffsetUnits = -4; root.add(m);
+    const m = new THREE.Mesh(new THREE.CircleGeometry(Rm * M, 64), new THREE.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false })); m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.05 * M, cz); m.renderOrder = 2; gLay(m); root.add(m);
   }
   function farFields(cx, cz) { // 1.6.9d: seen from the ground the Earth bake reads as a flat grey sheet at grazing angles — a tiled field ring to 30 km under the near patch
     const N = 512, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
@@ -82,8 +88,8 @@ export function createFlakPov(env) {
     for (let i = 0; i < 70; i++) { x.fillStyle = cols[(R() * cols.length) | 0]; x.fillRect(R() * N, R() * N, RR(30, 140), RR(20, 110)); }
     x.strokeStyle = "rgba(60,70,40,0.6)"; x.lineWidth = 3; for (let i = 0; i < 5; i++) { x.beginPath(); x.moveTo(R() * N, 0); x.lineTo(R() * N, N); x.stroke(); }
     const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(70, 70); tex.anisotropy = 8; if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-    const m = new THREE.Mesh(new THREE.CircleGeometry(30000 * M, 96), new THREE.MeshLambertMaterial({ map: tex })); m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.03 * M, cz); m.renderOrder = 29;
-    m.material.polygonOffset = true; m.material.polygonOffsetFactor = -2; m.material.polygonOffsetUnits = -2; root.add(m); return m;
+    const m = new THREE.Mesh(new THREE.CircleGeometry(30000 * M, 96), new THREE.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false })); m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.03 * M, cz); m.renderOrder = 1;
+    gLay(m); root.add(m); return m;
   }
   function grassNear(cx, cz) { // 1.7.2: a real grass texture up close (blades + tufts + clover), tiled ~every 6 m, fading out by ~450 m
     const N = 512, c = document.createElement("canvas"); c.width = c.height = N; const x = c.getContext("2d");
@@ -93,8 +99,8 @@ export function createFlakPov(env) {
     for (let i = 0; i < 90; i++) { x.fillStyle = R() < 0.5 ? "rgba(40,58,22,0.35)" : "rgba(120,130,60,0.25)"; x.beginPath(); x.arc(R() * N, R() * N, RR(6, 22), 0, 6.29); x.fill(); }
     const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(150, 150); tex.anisotropy = 8; if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
     const ac = document.createElement("canvas"); ac.width = ac.height = 256; const y = ac.getContext("2d"); const gr = y.createRadialGradient(128, 128, 30, 128, 128, 128); gr.addColorStop(0, "#fff"); gr.addColorStop(0.55, "#bbb"); gr.addColorStop(1, "#000"); y.fillStyle = gr; y.fillRect(0, 0, 256, 256);
-    const m = new THREE.Mesh(new THREE.CircleGeometry(900 * M, 64), new THREE.MeshLambertMaterial({ map: tex, alphaMap: new THREE.CanvasTexture(ac), transparent: true, depthWrite: false }));
-    m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.07 * M, cz); m.renderOrder = 31; m.material.polygonOffset = true; m.material.polygonOffsetFactor = -4; m.material.polygonOffsetUnits = -4; root.add(m);
+    const m = new THREE.Mesh(new THREE.CircleGeometry(900 * M, 64), new THREE.MeshLambertMaterial({ map: tex, alphaMap: new THREE.CanvasTexture(ac), transparent: true, depthWrite: false, depthTest: false }));
+    m.rotation.x = -Math.PI / 2; m.position.set(cx, 0.07 * M, cz); m.renderOrder = 3; gLay(m); root.add(m);
   }
   function bocage(cx, cz, af) { // 1.7.2: Normandy bocage — dark 3D hedgerows (2.5-4 m, on banks) along an irregular field grid round the battery, out to ~3 km
     const segs = [], cell = 190, Rm = 3000, keep = (x, z) => Math.hypot(x - cx, z - cz) > 140 * M && Math.hypot((x - af[0]) / (AF.rx * TOWN_S * 1.15), (z - af[1]) / (AF.rz * TOWN_S * 1.15)) > 1;
@@ -210,5 +216,5 @@ export function createFlakPov(env) {
   }
   function fireMine() { if (!myGun) return; const G = myGun; G.rec = 1; const F = flashes.find((f) => f.t > 0.4) || flashes[0]; F.t = 0; F.g = G; const P = puffs.find((p) => p.t > p.life) || puffs[0]; P.t = -0.05; P.life = RR(8, 12); P.g = G; P.vx = RR(1.5, 3) * M; P.vz = RR(-0.5, 0.5) * M; stats.mine = (stats.mine || 0) + 1; const A = audio || window.FGAudio; if (A && A.gun88) A.gun88(4); }
   function project(x, y, z) { _pj.set(x, y, z).project(camera); return { x: _pj.x, y: _pj.y, ok: _pj.z < 1 && Math.abs(_pj.x) < 1.2 && Math.abs(_pj.y) < 1.2 }; }
-  return { pose, off, update, impact, stats, fireMine, project, get on() { return on; }, get me() { return me; }, get _root() { return root; }, get _camera() { return camera; } };
+  return { GRL, grounds, pose, off, update, impact, stats, fireMine, project, get on() { return on; }, get me() { return me; }, get _root() { return root; }, get _camera() { return camera; } };
 }

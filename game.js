@@ -175,7 +175,8 @@
     open1Km: 4.0, open1Up: 1400,  // 1.3.5 opening: Staffel 1 start (km ahead, m above), diving
     open2Km: 5.5,
     dmgMul109: 1.05, dmgMul190: 1.4, dmgMulSturm: 2.1, // 1.6.8: retuned for real-gun-position rounds + the brain // 1.5.6: md constants — German damage multiplier vs a B-17 by type (on top of gerDmg)
-    fighterHp: 26, fighterHp190: 34, fighterHpP51: 12, quiet: 18, // 1.5.1: tougher fighters (a 109 takes ~6 hull hits), 18 s quiet opening
+    fighterHp: 65, fighterHp190: 85, fighterHpP51: 12, // 1.8.1: Germans ~2.5x tougher (were 26 / 34)
+    quiet: 18, // 1.5.1: tougher fighters (a 109 takes ~6 hull hits), 18 s quiet opening
      // 1.5.0 (spec §5 phone shortcut): single pool per fighter
     p51Leash: 2300, p51Engage: 2150, p51Abort: 4300, p51TickHit: 0.036, p51HitDmg: 18, // 1.5.0: Mustang leash (u from the box centre), .50 damage per connecting Mustang burst
     aim109: [6.5, 4.5], aim190: [30, 13], p51Jit: 1, p190Player: 0.06, // aim error (mrad): per-burst bias σ, per-round σ
@@ -2306,10 +2307,10 @@
   const GRP = { ready: new Map(), goUntil: -1, first: null, waves: 0, log: [] };
   function gAssaultGo(e) {
     const t = mission.t; if (t < GRP.goUntil) return true;
-    GRP.ready.set(e, t); for (const [q, tq] of GRP.ready) if (t - tq > 6 || !q.alive) GRP.ready.delete(q);
-    if (GRP.first == null || t - GRP.first > 90) GRP.first = t;
+    if (e && !GRP.ready.has(e)) GRP.ready.set(e, t); if (!GRP.ready.size) return false; for (const [q, tq] of GRP.ready) if (t - tq > 50 || !q.alive || (q.phase !== "position" && q.phase !== "inbound")) GRP.ready.delete(q); // 1.8.1: a leader stays ready while he holds out ahead (was 6 s)
+    if (!GRP.ready.size) { GRP.first = null; return false; } if (GRP.first == null) GRP.first = t;
     let lead = 0; for (const q of enemies) if (q.alive && q.type === "109" && q.br && !gLeader(q) && (q.phase === "position" || q.phase === "reform" || q.phase === "extend" || q.phase === "rejoin" || q.phase === "inbound" || q.phase === "arrive") && !(ride && ride.e === q)) lead++;
-    if (GRP.ready.size >= Math.max(2, Math.ceil(0.7 * lead)) || (lead <= 1 && GRP.ready.size >= 1) || t - GRP.first > 45) { GRP.goUntil = t + 6; GRP.first = null; GRP.waves++; GRP.log.push([+t.toFixed(1), GRP.ready.size, lead]); GRP.ready.clear(); return true; }
+    if (GRP.ready.size >= Math.max(1, lead) || t - GRP.first > 60) { GRP.goUntil = t + 10; GRP.first = null; GRP.waves++; GRP.log.push([+t.toFixed(1), GRP.ready.size, lead]); for (const q of GRP.ready.keys()) q.grpGo = t + 10; for (const q of enemies) if (q.alive && q.type === "109" && q.br && !gLeader(q) && !(ride && ride.e === q) && (q.phase === "position" || q.phase === "reform" || q.phase === "extend" || q.phase === "rejoin" || q.phase === "arrive")) { q.grpGo = t + 25; q.holdS = null; if (q.phase !== "position") { q.phase = "position"; q.phaseT = 0; q.br.posT = 0; if (q.br.plan !== "headon" && q.br.plan !== "fq") q.br.plan = "headon"; q.br.tgt = gPickTarget(q, q.br.plan); } } GRP.goUntil = t + 25; for (const q of GRP.ready.keys()) if (q.alive && (q.phase === "position" || q.phase === "inbound") && q.z - BOX_C.z > 450) { if (q.br.plan !== "headon" && q.br.plan !== "fq") q.br.plan = "headon"; gStartAttack(q, q.br); } /* the holders go in at once */ GRP.ready.clear(); return true; } // 1.8.1: the WHOLE Gruppe (every leader) goes in together; all holding leaders are released at once
     return false;
   }
   function gLeader(e) { const L = e.leader; return L && L.alive && L.br && !L.hold ? L : null; }
@@ -2319,7 +2320,7 @@
     if (!B.tgt) { e.phase = "rtb"; e.phaseT = 0; return; }
     if (e.type === "109") { const Tf = targetPoint(B.tgt), fx = e.x - Tf.x, fz = e.z - Tf.z; if (fz < 0.5 * Math.hypot(fx, fz)) { e.phase = "position"; e.phaseT = 0; B.posT = 0; if (B.plan !== "headon" && B.plan !== "fq") gNewPlan(e, B); brStat("refuse_nonfrontal"); return; } } // 1.6.9: a 109 only goes in from 10 to 2 o'clock
     e.tgt = B.tgt; e.mode = B.plan || "headon";
-    e.phase = "attack"; e.phaseT = 0; e.invert = false; e.burst = null; B.lf = null; // 1.6.9c: no stale LOS-rate memory from the last pass
+    e.phase = "attack"; e.phaseT = 0; e.invert = false; e.burst = null; B.lf = null; if (e.type === "109" && mission && mission.t < GRP.goUntil && GRP.log.length) { const L = GRP.log[GRP.log.length - 1]; L[3] = (L[3] || 0) + 1; } e.grpGo = 0; B.shot = false; // 1.6.9c: no stale LOS-rate memory from the last pass
     const brave = Math.random() < 0.18 * B.brave * 1.8;
     const fwdPlan = B.plan === "headon" || B.plan === "fq";
     B.openR = e.type === "190" ? rand(230, 300) : fwdPlan ? rand(390, 470) : rand(250, 330); // 1.6.9: head-on closure is ~300 u/s: a 109 opening at 250-330 u broke away before it ever fired
@@ -2401,6 +2402,10 @@
     if (!B.tgt) { gGoHome(e, B, "none"); return; }
     const T = targetPoint(B.tgt), E = gEntry(e, B.plan, B.tgt, B.k);
     let W = E;
+    let grpHold = false;
+    if (e.type === "109" && !gLeader(e) && mission && !(ride && ride.e === e) && mission.t >= GRP.goUntil) { // 1.8.1: every leader goes to the Gruppe's rally point out ahead and HOLDS until the whole Gruppe is there
+      const hs = e.holdS != null ? e.holdS : (e.holdS = ((enemies.indexOf(e) % 5) - 2) * 520); W = { x: BOX_C.x + hs, y: T.y + 380, z: BOX_C.z + 2700 };
+      grpHold = true; B.posT = Math.min(B.posT, 20); if (Math.hypot(W.x - e.x, W.z - e.z) < 1500) gAssaultGo(e); else gAssaultGo(null); }
     { // stay out of the box's guns (~1,650 m) while getting there: a high-speed overtake around it, never through it
       const C = BOX_C, sx = E.x - e.x, sz = E.z - e.z, sl = Math.hypot(sx, sz) || 1, t0 = clamp(((C.x - e.x) * sx + (C.z - e.z) * sz) / (sl * sl), 0, 1);
       const px = e.x + sx * t0 - C.x, pz = e.z + sz * t0 - C.z, pd = Math.hypot(px, pz);
@@ -2424,12 +2429,13 @@
     else if (B.plan === "fq") go = e.type === "109" ? dz > 700 && dz < 3000 && dl > 250 && dl < 2000 && up > -250 && up < 1000 && nose > 0.05 : dz > 800 && dz < 2400 && dl > 300 && dl < 1700 && up > 80 && up < 850 && nose > 0.3;
     else if (B.plan === "rear") go = dz < -650 && R < 1800 && dl < 900 && nose > 0.4;
     else go = dl > 1000 && R < 2300 && up > 60 && nose > 0.2;
+    if (!go && e.type === "109" && !gLeader(e) && e.grpGo && mission && mission.t < e.grpGo && (B.plan === "headon" || B.plan === "fq") && dz > 450 && up > -300 && nose > -0.1) go = true; // 1.8.1: released with the Gruppe — commit from wherever he is in front
     if (go && e.type === "109" && L && L.phase !== "rtb" && dL < 3000) { go = false; } // 1.6.9: a 109 wingman with his leader in reach never starts his own attack: he goes in with the schwarm
-    if (go && e.type === "109" && !gLeader(e) && B.posT < 15) { // 1.6.9: the schwarm leader commits only with his flight closed up (or after 30 s of waiting)
+    if (go && e.type === "109" && !gLeader(e) && B.posT < 15 && !e.grpGo) { // 1.6.9: the schwarm leader commits only with his flight closed up (or after 30 s of waiting)
       let n = 0, close = 0; for (const q of enemies) if (q.alive && q.leader === e && q.phase !== "rtb") { n++; if (Math.hypot(q.x - e.x, q.y - e.y, q.z - e.z) < 650) close++; }
       if (n && close < Math.min(n, 2)) { go = false; brStat("lead_wait"); }
     }
-    if (go && e.type === "109" && !gLeader(e) && mission && !gAssaultGo(e)) { go = false; B.posT = Math.min(B.posT, 30); brStat("gruppe_wait"); } // 1.8.0: the Gruppe goes in together
+    if (go && grpHold && mission.t >= GRP.goUntil) { go = false; brStat("gruppe_wait"); } // 1.8.0: the Gruppe goes in together
     if (go) { gStartAttack(e, B); return; }
     if (B.posT > (e.type === "109" ? 35 : 55)) { gNewPlan(e, B); B.posT = 0; brStat("replan"); } // it is not working out from here: re-plan from where he is now
   }
@@ -2451,15 +2457,17 @@
     B.gap -= dt;
     if (B.lastBurst && !e.burst) B.gap = rand(0.35, 0.9); // the burst just ended: a short pause before the next
     if (e.burst) { if (R < B.breakR * 0.7 || cosA < Math.cos(6 / 57.3)) { e.burst = null; B.gap = rand(0.3, 0.7); } }
-    else if (B.gap <= 0 && B.ammo > 0 && R < B.openR && R > B.breakR * 0.8 && cosA > GUN_COS) {
-      startBurst(e, ship); if (e.burst) e.burst.dur = rand(0.5, R > 200 ? 1.2 : 2.0); B.gap = 0;
+    else if (B.gap <= 0 && B.ammo > 0 && R < B.openR * (B.shot ? 1 : 1.15) && R > B.breakR * 0.8 && (cosA > GUN_COS || (!B.shot && e.type === "109" && cosA > Math.cos(14 / 57.3)))) { // 1.8.1: a 109 that has not fired yet this pass takes the shot from a looser solution
+      startBurst(e, ship); if (e.burst) { e.burst.dur = rand(0.5, R > 200 ? 1.2 : 2.0); B.shot = true; if (e.type === "109") GRP.shot = (GRP.shot || 0) + 1; } B.gap = 0;
       if (mission) { mission.bursts = (mission.bursts || 0) + 1; if (mission.firstShotT == null) mission.firstShotT = mission.t; }
     }
     B.lastBurst = !!e.burst;
     const along = (rx * e.hx + ry * e.hy + rz * e.hz);
     const tca = closing > 1 ? R / closing : 99;
     e.dbg = { range: Math.round(R), cosA: +cosA.toFixed(3), closing: Math.round(closing), m: e.mode };
-    if (R < B.breakR || (closing > 100 && tca < B.tB) || along < -10 || e.phaseT > 30) gStartBreak(e, B, "pass");
+    const brk = R < B.breakR || (closing > 100 && tca < B.tB) || along < -10 || e.phaseT > 30;
+    if (brk && e.type === "109") { if (B.shot) GRP.passShot = (GRP.passShot || 0) + 1; else GRP.passDry = (GRP.passDry || 0) + 1; }
+    if (brk) { const owe = !B.shot && e.type === "109" && B.ammo > 0 && R < 2500; gStartBreak(e, B, "pass"); if (owe) { startBurst(e, ship); if (e.burst) { e.burst.dur = rand(0.35, 0.6); B.shot = true; if (mission) { mission.bursts = (mission.bursts || 0) + 1; mission.oweShots = (mission.oweShots || 0) + 1; GRP.owe = (GRP.owe || 0) + 1; } } } } // 1.8.1: no wasted pass — he gets his burst off as he breaks
   }
   function gBreak(e, B, dt) {
     if (!B.brk) gStartBreak(e, B, "rattled");
@@ -4862,7 +4870,7 @@
     ctx.save(); const on = ride.fireId != null, w = W * 0.5, h = H * 0.42;
     ctx.fillStyle = on ? "rgba(255,120,60,0.16)" : "rgba(255,255,255,0.035)"; ctx.fillRect(0, 0, w, h);
     ctx.strokeStyle = on ? "rgba(255,140,80,0.55)" : "rgba(255,255,255,0.12)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, h); ctx.lineTo(w, h); ctx.stroke();
-    ctx.fillStyle = on ? "rgba(255,190,140,0.9)" : "rgba(255,255,255,0.32)"; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "center"; ctx.fillText("FIRE", w * 0.5, h * 0.55);
+    ctx.fillStyle = on ? "rgba(255,190,140,0.9)" : "rgba(255,255,255,0.32)"; /* 1.8.1: stray FIRE label removed */
     ride.pipW = null; { const T = ride.easyT, e = ride.e; if (T && T.alive !== false && e && localStorage.getItem("fg_difficulty") === "easy") { const R = Math.hypot(T.x - e.x, T.y - e.y, T.z - e.z); if (R < 700) { const L = gunLead(e, T.x, T.y, T.z, T.vx || 0, T.vy || 0, T.vz || 0, T); if (L) { const D = L.t * gunSpeed(e); ride.pipW = { x: e.x + L.x * D, y: e.y + L.y * D, z: e.z + L.z * D }; } } } }
     if (ride.pipW) { const pe = projectStable(ride.pipW.x, ride.pipW.y, ride.pipW.z); if (pe) { ctx.strokeStyle = "rgba(255,80,60,0.9)"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(pe.sx, pe.sy, 6, 0, 6.29); ctx.stroke(); ctx.beginPath(); ctx.arc(pe.sx, pe.sy, 1.2, 0, 6.29); ctx.stroke(); } }
     ctx.restore();
@@ -5017,11 +5025,11 @@
   // the angle relative to a neutral (captured at fly start / double-tap left) -> rudder, 4 deg deadzone, full at 25 deg, smoothed.
   // Angle DIFFERENCES are independent of landscape-left/right (a constant rotation) and of the iOS/Android sign convention.
   const tilt = { a: null, n: null, tgt: 0, last: 0 };
-  window.addEventListener("devicemotion", (ev) => { const g = ev.accelerationIncludingGravity; if (!g || g.x == null) return; const gx = g.x, gy = g.y; if (Math.hypot(gx, gy) < 3) return; // phone too flat: no twist reading
+  if (false) window.addEventListener("devicemotion", (ev) => /* 1.8.1: gyro disabled */ { const g = ev.accelerationIncludingGravity; if (!g || g.x == null) return; const gx = g.x, gy = g.y; if (Math.hypot(gx, gy) < 3) return; // phone too flat: no twist reading
     const a = Math.atan2(gx, gy); tilt.a = a; if (tilt.n == null) tilt.n = a; let d = a - tilt.n; d = Math.atan2(Math.sin(d), Math.cos(d)); const dg = d * 57.2958, m = Math.max(0, Math.abs(dg) - 4) / 21;
     tilt.tgt = -Math.sign(dg) * Math.min(1, m); tilt.last = performance.now(); });
   function tiltRecenter() { tilt.n = tilt.a; tilt.tgt = 0; if (ride) ride.tiltY = 0; }
-  function tiltTick(dt) { if (!ride) return; const live = performance.now() - tilt.last < 500; const tg = live && ride.fly && SET.gyro && !GP.on ? tilt.tgt : 0; /* 1.8.0: gyro setting; auto-off with a gamepad */ ride.tiltY = (ride.tiltY || 0) + (tg - (ride.tiltY || 0)) * Math.min(1, dt * 8); }
+  function tiltTick(dt) { if (!ride) return; const live = performance.now() - tilt.last < 500; const tg = 0; void live; /* 1.8.1: gyro fully disabled */ /* 1.8.0: gyro setting; auto-off with a gamepad */ ride.tiltY = (ride.tiltY || 0) + (tg - (ride.tiltY || 0)) * Math.min(1, dt * 8); }
   function tiltPermission() { try { const DM = window.DeviceMotionEvent; if (DM && typeof DM.requestPermission === "function") DM.requestPermission().catch(() => {}); } catch (er) {} }
   function rideFlying() { return !!(ride && ride.fly && ride.deadT == null); }
   let _flyBridge = null;
@@ -7435,17 +7443,17 @@
     // sight window sill→bottom ~11% solid band, ring low-centre; 3D twin .50s in window.
     ctx.save();
     const u = Math.min(W, H) / 412;
-    const topY = H * 0.208, botY = H * 0.888;
-    const topL = W * 0.337, topR = W * 0.661;
-    const botL = W * 0.107, botR = W * 0.889;
-    const barT = W * 0.022;
+    const topY = H * 0.05, botY = H * 0.94; // 1.8.1
+    const topL = W * 0.30, topR = W * 0.70; // 1.8.1: wider, slimmer frame — clear view aft
+    const botL = W * 0.02, botR = W * 0.98;
+    const barT = W * 0.013;
     const lerp = (a, b, t) => a + (b - a) * t;
     const edgeX = (side, t) => side < 0 ? lerp(topL, botL, t) : lerp(topR, botR, t);
     const edgeY = (t) => lerp(topY, botY, t);
     const tCross = 0.352;
     // 1.6.3: REMOVE the sill bar (was tSill≈0.57 / ~60% H) — second horizontal from top that bisected the sight window
     const crossY = edgeY(tCross), crossL = edgeX(-1, tCross), crossR = edgeX(1, tCross);
-    const winL = W * 0.220, winR = W * 0.780, winT = crossY, winB = H * 0.888;
+    const winL = W * 0.020, winR = W * 0.980, winT = topY, winB = H * 0.94; // 1.8.1: lower sill band
 
     // Open sky outside the frame — no vignette / side panes
 
@@ -7480,10 +7488,7 @@
     solidBar(topL, topY, botL, botY, barT);
     solidBar(topR, topY, botR, botY, barT);
     solidBar(topL, topY, topR, topY, barT);
-    solidBar(crossL, crossY, crossR, crossY, barT); // upper cross-bar kept
-    // sill REMOVED (1.6.3) — posts run from cross-bar down to bottom bar
-    solidBar(winL, winT, winL, winB, barT);
-    solidBar(winR, winT, winR, winB, barT);
+    // 1.8.1: cross-bar and the two inner window posts removed (they boxed in the view aft)
     solidBar(winL, winB, winR, winB, barT);
 
     const pg = ctx.createLinearGradient(0, winB, 0, H);
@@ -8225,7 +8230,7 @@
   }
 
   function drawControls() {
-    if (state !== "PLAYING") return;
+    if (state !== "PLAYING" || ride) return; // 1.8.1: no turret FIRE pad hint in a fighter (it has its own FIRE button)
     // Tiny optional hints only — hit targets are FULL half-screens, not these marks
     const fade = clamp(1 - (timeAlive - 0.7) * 1.1, 0.0, 0.16);
     const L = pad("left"), R = pad("right");
@@ -8340,7 +8345,7 @@
   }
   // ----- 1.8.0 PAUSE / SETTINGS / SEATS / SERVICE RECORD (driven by menu.js through window.FG_API) -----
   const PZ = { loopOff: false, iv: 0 };
-  const SET = { invTurret: false, invFlak: false, invPilot: false, gyro: true, sens: 1, fps: false, quality: "medium" };
+  const SET = { invTurret: false, invFlak: false, invPilot: false, gyro: false, sens: 1, fps: false, quality: "medium" };
   try { Object.assign(SET, JSON.parse(localStorage.getItem("fg_settings") || "{}")); } catch (er) {}
   function applySettings() {
     const fb = document.getElementById("fpsbox"); if (fb) fb.style.display = SET.fps ? "" : "none";
@@ -8373,12 +8378,14 @@
     if (bomber && bomber.dead) downSeq = null;
     if (!startRide(L[0])) return false; ride.fly = true; ride.stickR = ride.stickP = ride.stickY = 0; tiltRecenter(); flyBridgeSync(); SEAT.want = null; return true;
   }
-  function seatTick() { if (SEAT.want && state === "PLAYING" && mission && mission.t > (SEAT.tries + 1) * 1.0) { SEAT.tries++; if (applySeat(SEAT.want)) return; if (SEAT.tries === 1) pushCallout("WAITING FOR A " + (SEAT.want === "p51" ? "MUSTANG" : SEAT.want === "190" ? "FW 190" : "BF 109") + " TO JOIN…", 2.5); } }
+  function seatCover(on) { let c = document.getElementById("seatCover"); if (!c && on) { c = document.createElement("div"); c.id = "seatCover"; c.style.cssText = "position:fixed;inset:0;z-index:40;background:#05070a;color:#c9b27a;font:700 15px sans-serif;letter-spacing:.12em;display:flex;align-items:center;justify-content:center;pointer-events:none"; c.textContent = "TAKING YOUR SEAT…"; document.body.appendChild(c); } if (c) c.style.display = on ? "flex" : "none"; } // 1.8.1: no flash of the turret view before a fighter seat
+  function seatTick() { if (SEAT.cover && (!SEAT.want || state !== "PLAYING" || (mission && mission.t > 25))) { SEAT.cover = false; seatCover(false); }
+    if (SEAT.want && state === "PLAYING" && mission && mission.t > (SEAT.tries + 1) * 0.15) { SEAT.tries++; if (applySeat(SEAT.want)) { if (SEAT.cover) { SEAT.cover = false; seatCover(false); } return; } if (SEAT.tries === 8) pushCallout("WAITING FOR A " + (SEAT.want === "p51" ? "MUSTANG" : SEAT.want === "190" ? "FW 190" : "BF 109") + " TO JOIN…", 2.5); } }
   const REC_KEY = "fg_record";
   function recGet() { try { return Object.assign({ missions: 0, kills: 0, b17home: 0, won: 0, best: 0 }, JSON.parse(localStorage.getItem(REC_KEY) || "{}")); } catch (er) { return { missions: 0, kills: 0, b17home: 0, won: 0, best: 0 }; } }
   function recAdd(won) { const r = recGet(); r.missions++; r.kills += kills || 0; r.b17home += countBombCapable(); if (won) r.won++; r.best = Math.max(r.best, score || 0); try { localStorage.setItem(REC_KEY, JSON.stringify(r)); } catch (er) {} return r; }
   window.FG_API = {
-    start(o) { o = o || {}; const mn = document.getElementById("fgMenu"); if (mn) mn.style.display = "none"; document.body.classList.remove("fgmenu"); if (o.diff) setDifficulty(o.diff === "easy" ? "easy" : "medium"); startGame(); if (o.seat && o.seat !== "top") { if (!applySeat(o.seat)) SEAT.want = o.seat; } },
+    start(o) { o = o || {}; const mn = document.getElementById("fgMenu"); if (mn) mn.style.display = "none"; document.body.classList.remove("fgmenu"); if (o.diff) setDifficulty(o.diff === "easy" ? "easy" : "medium"); startGame(); if (o.seat && o.seat !== "top") { if (!applySeat(o.seat)) { SEAT.want = o.seat; SEAT.cover = true; seatCover(true); } } },
     pause: (on) => setPaused(on, "menu"), get paused() { return GP.paused; }, get state() { return state; },
     seat: (s) => applySeat(s), get settings() { return Object.assign({}, SET); },
     set(o) { Object.assign(SET, o || {}); try { localStorage.setItem("fg_settings", JSON.stringify(SET)); } catch (er) {} applySettings(); },
@@ -8441,7 +8448,7 @@
   function updateLockHint() {
     if (!lockHint) return;
     const endShown = (endBtn && !endBtn.classList.contains("hidden")) || (tryBtn && !tryBtn.classList.contains("hidden"));
-    const show = mouse.desktop && mouse.lockOK && !mouse.locked && state === "PLAYING" && !endShown;
+    const show = mouse.desktop && mouse.lockOK && !mouse.locked && state === "PLAYING" && !endShown && !ride && !fpov && !GP.paused && !(navigator.maxTouchPoints > 0 && window.matchMedia && matchMedia("(pointer: coarse)").matches); // 1.8.1: never in a fighter / the flak pit / on a phone
     if (show === lockHint.classList.contains("hidden")) lockHint.classList.toggle("hidden", !show);
   }
   window.__FG_MOUSE = mouse;
@@ -8808,7 +8815,7 @@
     ownEngine: (i, fire, out) => { if (!bomber) return; const e = bomber.engines[i]; e.fire = fire; e.out = !!out; },
     // Deterministic time advance for headless playtests (rAF+dt-cap runs slow under SwiftShader)
     tgtPts: () => mission && mission.tgt ? { pts: mission.tgt.pts || [], G: mission.tgt.G && { X: mission.tgt.G.X, Z: mission.tgt.G.Z, S: mission.tgt.G.S, K: mission.tgt.G.K } } : null,
-    gruppe: () => ({ waves: GRP.waves, log: GRP.log.slice(-20) }),
+    gruppe: () => ({ waves: GRP.waves, log: GRP.log.slice(-20), passShot: GRP.passShot || 0, passDry: GRP.passDry || 0, owe: GRP.owe || 0, ready: GRP.ready.size, first: GRP.first, L: enemies.filter((q) => q.alive && q.type === "109" && q.br && !gLeader(q)).map((q) => [q.phase, q.holdS, Math.round(q.x - BOX_C.x), Math.round(q.y - BOX_C.y), Math.round(q.z - BOX_C.z)]) }),
     fireState: () => ({ fire: !!input.fire, fz: !!(ride && ride.fireId != null), roll: !!(ride && ride.rollId != null) }), // 1.7.2 test hook
     seat: (k) => k ? seatPick(k) : { need: seatNeeded(), shown: !seatEl.classList.contains("hidden"), ships: seatShips().length, dead: !!(bomber && bomber.dead), downSeq: !!downSeq, ride: !!ride, fpov: !!fpov, station: gunner.station, state, t: mission ? mission.t : null, evaluated: !!(mission && mission.evaluated), friendlies: friendlies.filter(friendlyOk).length, lost: mission ? mission.friendliesLost : 0 },
     gp: () => ({ on: GP.on, hide: GP.hide, paused: GP.paused, fire: !!input.fire, station: gunner.station, ride: !!ride, fly: !!(ride && ride.fly), fpov: !!fpov, yaw: fpov ? fpov.yaw : ride ? ride.yaw : gunner.yaw, pitch: fpov ? fpov.pitch : ride ? ride.pitch : gunner.pitch, r: ride ? ride.gpR || 0 : 0, p: ride ? ride.gpP || 0 : 0, y: ride ? ride.gpY || 0 : 0 }),

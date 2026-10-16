@@ -1,4 +1,4 @@
-// Fortress Gunner 1.8.0 — main menu, briefing, seat/difficulty pick, settings, service record, pause menu.
+// Fortress Gunner 1.8.1 — main menu, briefing, seat/difficulty pick, settings, service record, pause menu.
 (function () {
   "use strict";
   const A = () => window.FG_API, $ = (h) => { const d = document.createElement("div"); d.innerHTML = h.trim(); return d.firstChild; };
@@ -34,7 +34,7 @@
   let back = null;
   function main() {
     back = null; if (title) title.style.display = "none"; document.body.classList.add("fgmenu");
-    show(`<div class="fgp"><h1>FORTRESS GUNNER</h1><div class="fgs">8TH AIR FORCE · 1943</div>
+    show(`<div class="fgp"><h1>FORTRESS GUNNER</h1><div class="fgs">8TH AIR FORCE · 1943 · v1.8.1</div>
       ${btn("fly", "FLY MISSION")}${btn("select", "MISSION SELECT")}${btn("settings", "SETTINGS")}${btn("record", "SERVICE RECORD")}</div>`, "fgmain");
   }
   function select() { back = main; show(`<div class="fgp"><h2>MISSION SELECT</h2><div class="fgcard" data-a="brief"><b>MISSION 1 — BREMEN</b><span>17 April 1943 · 18 B-17Fs of the combat wing box · Focke-Wulf works</span><em>SELECT ▸</em></div>${btn("back", "BACK")}</div>`); }
@@ -56,7 +56,7 @@
     back = from || back || main; const S = (A() && A().settings) || {};
     const ck = (k, t) => `<label class="fgck"><input type="checkbox" data-set="${k}" ${S[k] ? "checked" : ""}> ${t}</label>`;
     const sl = (k, t) => `<label class="fgsl">${t}<input type="range" min="0" max="1" step="0.05" data-mix="${k}" value="${mix[k]}"></label>`;
-    const body = tab === "controls" ? `${ck("invTurret", "Invert turret look")}${ck("invFlak", "Invert flak aim")}${ck("invPilot", "Invert pilot pitch")}${ck("gyro", "Gyro steering (auto-off with a controller)")}<label class="fgsl">Sensitivity<input type="range" min="0.4" max="2" step="0.05" data-set="sens" value="${S.sens || 1}"></label>
+    const body = tab === "controls" ? `${ck("invTurret", "Invert turret look")}${ck("invFlak", "Invert flak aim")}${ck("invPilot", "Invert pilot pitch")}<label class="fgsl">Sensitivity<input type="range" min="0.4" max="2" step="0.05" data-set="sens" value="${S.sens || 1}"></label>
       <svg viewBox="0 0 320 130" class="fgpad"><rect x="40" y="20" width="240" height="90" rx="40" fill="#333" stroke="#888"/><circle cx="95" cy="55" r="14" fill="#555"/><circle cx="200" cy="85" r="14" fill="#555"/><rect x="108" y="74" width="26" height="8" fill="#666"/><rect x="117" y="65" width="8" height="26" fill="#666"/><g font-size="9" fill="#ddd"><circle cx="240" cy="45" r="7" fill="#c90"/><circle cx="225" cy="58" r="7" fill="#24a"/><circle cx="255" cy="58" r="7" fill="#a22"/><circle cx="240" cy="71" r="7" fill="#2a4"/><text x="4" y="12">LT zoom / RT fire</text><text x="210" y="12">Y A B X: seat / view</text><text x="40" y="126">L-stick fly/aim · R-stick look (click = recenter)</text><text x="126" y="104">D-pad ↑↓ throttle · ←→ weapons</text><text x="150" y="40">START pause</text></g></svg>`
       : tab === "audio" ? `${sl("master", "Master")}${sl("engines", "Engines")}${sl("guns", "Guns")}${sl("radio", "Radio")}${sl("music", "Music (menu)")}`
       : `<div class="fgrow">${["medium", "ultra"].map((q) => `<button class="fgb fgsm${S.quality === q ? " on" : ""}" data-q="${q}">${q.toUpperCase()}</button>`).join("")}</div>${ck("fps", "Show FPS counter")}`;
